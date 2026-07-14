@@ -120,6 +120,35 @@ describe('RECURSIVE-REF-STRUCT: self / mutual reference through a P[] / mapping 
     expect(codes(`${P} class C { p: P; h(): P { return this.p; } g(): External<u256> { return this.h().x; } }`).length).toBeGreaterThan(0);
   });
 
+  it('REC-STRUCT-MEMLOCAL: a recursive struct memory local stays a clean over-rejection (JETH200/JETH074)', () => {
+    // WITNESS (differential, populated 3-level tree): solc lowers `P memory m = p` to an UNBOUNDED
+    // RUNTIME-RECURSIVE DEEP COPY of the whole tree (a pointer-headed memory image whose size depends on
+    // every level's runtime array length; mutating m leaves storage untouched). JETH represents the
+    // recursive back-edge as a `recursiveRef` EMPTY-FIELDS sentinel, deliberately engineered so no finite
+    // compile-time codec walks it (isStaticType forced false, isDynStructLeaf / isDynStructElemArrayField /
+    // isSupportedDynStructLocal all reject it). JETH has no runtime-recursive struct-copy codegen, so the
+    // memory-local materialization is UNREPRODUCIBLE: admitting it would either drop the nested payload
+    // (the sentinel stub lays out zero/one word per kids element - the exact silent miscompile that reverted
+    // REC-STRUCT-CONSUMERS) or build a wrong image. A clean reject beats a miscompile; KEEP the reject.
+    const P = 'type P = { x: u256; kids: P[] };';
+    // (a) the exact item shape - storage-initialized memory local + static-value-leaf read (solc ACCEPTS).
+    expect(codes(`${P} class C { p: P; get g(): External<u256> { let m: P = this.p; return m.x; } }`)).toEqual(['JETH200', 'JETH074']);
+    // (b) uninitialized memory local; (c) deep recursive read - all reject.
+    expect(codes(`${P} class C { get g(): External<u256> { let m: P; return m.x; } }`)).toEqual(['JETH200', 'JETH074']);
+    expect(codes(`${P} class C { p: P; get g(): External<u256> { let m: P = this.p; return m.kids[0n].x; } }`)).toEqual(['JETH200', 'JETH074']);
+    // (d) internal function returning P memory (solc ACCEPTS).
+    expect(codes(`${P} class C { p: P; h(): P { return this.p; } get g(): External<u256> { return this.h().x; } }`)).toContain('JETH074');
+    // NON-VACUITY: solc genuinely ACCEPTS the read shapes above (so these are real over-rejections, not
+    // shapes solc also rejects) - proves the reject is a deliberate soundness choice, not a parser gap.
+    const solcOk = (s: string) => { try { compileSolidity(SPDX + s, 'C'); return true; } catch { return false; } };
+    expect(solcOk(`struct P { uint256 x; P[] kids; } contract C { P p; function g() external view returns (uint256) { P memory m = p; return m.x; } }`)).toBe(true);
+    expect(solcOk(`struct P { uint256 x; P[] kids; } contract C { P p; function h() internal view returns (P memory) { return p; } function g() external view returns (uint256) { return h().x; } }`)).toBe(true);
+    // REJECT-PARITY: the one memory->storage direction solc ALSO rejects (legacy: "Copying of type struct
+    // P memory[] memory to storage is not supported") - JETH rejects it too, so no divergence there.
+    expect(codes(`${P} class C { p: P; set(): External<void> { let m: P; this.p = m; } }`).length).toBeGreaterThan(0);
+    expect(solcOk(`struct P { uint256 x; P[] kids; } contract C { P p; function set() external { P memory m; p = m; } }`)).toBe(false);
+  });
+
   it('recursive kids field: push()/pop()/length + whole-struct storage copy are byte-identical', async () => {
     const J = `type P = { x: u256; kids: P[] };\nclass C { p: P; q: P; puq(): External<void> { this.q.kids.push(); } setqx(v: u256): External<void> { this.q.x = v; } po(): External<void> { this.q.kids.pop(); } cp(): External<void> { this.p = this.q; } get gl(): External<u256> { return this.q.kids.length; } get gpx(): External<u256> { return this.p.x; } }`;
     const S = `contract C { struct P { uint256 x; P[] kids; } P p; P q; function puq() external { q.kids.push(); } function setqx(uint256 v) external { q.x = v; } function po() external { q.kids.pop(); } function cp() external { p = q; } function gl() external view returns(uint256){ return q.kids.length; } function gpx() external view returns(uint256){ return p.x; } }`;
