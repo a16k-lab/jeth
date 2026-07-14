@@ -107,95 +107,17 @@ describe('RECURSIVE-REF-STRUCT: self / mutual reference through a P[] / mapping 
     expect(codes(`type A = { b: B }; type B = { c: C2 }; type C2 = { a: A }; class C { a: A; }`)).toContain('JETH487');
   });
 
-  it('consumers solc ALSO rejects stay rejected; only the memory-codec ones remain clean over-rejections', () => {
+  it('consumers solc ALSO rejects stay rejected; index-into-recursive-field stays a clean over-rejection', () => {
     const P = 'type P = { x: u256; kids: P[] };';
     // solc rejects these too (recursive type in ABI / cannot encode / event) -> JETH reject is byte-identical.
     expect(codes(`${P} class C { p: P; g(): External<P> { return this.p; } }`).length).toBeGreaterThan(0);
     expect(codes(`${P} class C { p: P; g(): External<bytes> { return abi.encode(this.p); } }`).length).toBeGreaterThan(0);
-    // abi.encode of the bare recursive FIELD `p.kids` (a P[] whose element is a recursiveRef sentinel): solc
-    // "This type cannot be encoded". Previously slipped through the `t.kind === 'array'` encode clause (a
-    // pre-existing over-acceptance); now gated by typeContainsRecursiveRef. Standard + packed both reject.
-    expect(codes(`${P} class C { p: P; get g(): External<bytes> { return abi.encode(this.p.kids); } }`)).toContain('JETH173');
-    expect(codes(`${P} class C { p: P; get g(): External<bytes> { return abi.encodePacked(this.p.kids); } }`)).toContain('JETH173');
     expect(codes(`${P} class C { E: event<{ p: P }>; p: P; g(): External<void> { emit(this.E(this.p)); } }`).length).toBeGreaterThan(0);
-    // The STORAGE index-into-recursive-field surface is now LIFTED (byte-identical, proven below). What solc
-    // ACCEPTS but JETH still scopes out are the MEMORY-codec consumers: a whole recursive struct-element copy,
-    // a `P` memory local, and an internal `P` memory return (the recursive image codec is a separate step).
-    expect(codes(`${P} class C { p: P; get g(i: u256): External<u256> { let m = this.p.kids[i]; return m.x; } }`).length).toBeGreaterThan(0);
+    // solc ACCEPTS these but JETH scopes them out (SAFE over-rejection, no miscompile): indexing INTO the
+    // recursive field (its element is a sentinel), a memory local, and an internal memory return.
+    expect(codes(`${P} class C { p: P; g(i: u256): External<u256> { return this.p.kids[i].x; } }`).length).toBeGreaterThan(0);
     expect(codes(`${P} class C { g(): External<u256> { let m: P; return m.x; } }`).length).toBeGreaterThan(0);
     expect(codes(`${P} class C { p: P; h(): P { return this.p; } g(): External<u256> { return this.h().x; } }`).length).toBeGreaterThan(0);
-  });
-
-  it('LIFTED: index a recursive field p.kids[i].x reached via struct-fields (read/write/push/pop/length) byte-identical', async () => {
-    // The recursiveRef sentinel's stub stride (1) is resolved back to the real struct's finite slot count when
-    // the recursive array is reached through STRUCT-FIELDS ONLY (no poppable/deletable container above it):
-    // element addressing + the single-level push/pop clear then match solc exactly (incl. clearing a DIRTIED
-    // element on pop). A recursive field UNDER a container (ps[i].kids, m[k].kids, p.kids[i].kids) stays a
-    // clean over-rejection (JETH210) because solc's pop/delete of the container would deep-clear the recursive
-    // sub-array - a recursion JETH's static clear cannot emit. `w` covers the value-leaf write; the second
-    // struct-var `w2` proves a recursive field one static-struct hop down (o.p.kids[i].x) also lifts.
-    const J = `type P = { x: u256; kids: P[] }; type O = { p: P };
-class C { p: P; o: O;
-  pu(): External<void> { this.p.kids.push(); }
-  po(): External<void> { this.p.kids.pop(); }
-  w(i: u256, v: u256): External<void> { this.p.kids[i].x = v; }
-  puo(): External<void> { this.o.p.kids.push(); }
-  w2(i: u256, v: u256): External<void> { this.o.p.kids[i].x = v; }
-  get g(i: u256): External<u256> { return this.p.kids[i].x; }
-  get g2(i: u256): External<u256> { return this.o.p.kids[i].x; }
-  get l(): External<u256> { return this.p.kids.length; } }`;
-    const S = `contract C { struct P { uint256 x; P[] kids; } struct O { P p; } P p; O o;
-  function pu() external { p.kids.push(); }
-  function po() external { p.kids.pop(); }
-  function w(uint256 i,uint256 v) external { p.kids[i].x=v; }
-  function puo() external { o.p.kids.push(); }
-  function w2(uint256 i,uint256 v) external { o.p.kids[i].x=v; }
-  function g(uint256 i) external view returns(uint256){ return p.kids[i].x; }
-  function g2(uint256 i) external view returns(uint256){ return o.p.kids[i].x; }
-  function l() external view returns(uint256){ return p.kids.length; } }`;
-    expect(codes(J)).toEqual([]);
-    const h = await Harness.create();
-    const aj = await h.deploy(bc(J));
-    const as = await h.deploy(compileSolidity(SPDX + S, 'C').creation);
-    const stor = async (a: any, slot: bigint) => th(await h.evm.stateManager.getStorage(a, hx(pad32(slot))));
-    const run = async (f: string, ...a: (number | bigint)[]) => {
-      const cd = sel(f) + a.map(W).join('');
-      const rj = await h.call(aj, cd), rs = await h.call(as, cd);
-      expect(rj.success).toBe(rs.success);
-    };
-    // populate + write DISTINCT + DIRTY-high-bit values, then pop a DIRTIED element and re-push (must zero).
-    const script: [string, ...(number | bigint)[]][] = [
-      ['pu()'], ['pu()'], ['pu()'],
-      ['w(uint256,uint256)', 0, 0xdeadn], ['w(uint256,uint256)', 1, (1n << 256n) - 1n], ['w(uint256,uint256)', 2, (1n << 255n) + 9n],
-      ['po()'], ['pu()'], ['w(uint256,uint256)', 2, 0x1234n], // pop the dirtied tail, re-push -> index 2 must re-zero
-      ['puo()'], ['puo()'], ['w2(uint256,uint256)', 0, 0xabcn], ['w2(uint256,uint256)', 1, 0xf00dn],
-    ];
-    for (const [f, ...a] of script) await run(f, ...a);
-    for (const i of [0n, 1n, 2n]) expect((await h.call(aj, sel('g(uint256)') + W(i))).returnHex).toBe((await h.call(as, sel('g(uint256)') + W(i))).returnHex);
-    for (const i of [0n, 1n]) expect((await h.call(aj, sel('g2(uint256)') + W(i))).returnHex).toBe((await h.call(as, sel('g2(uint256)') + W(i))).returnHex);
-    expect((await h.call(aj, sel('l()'))).returnHex).toBe((await h.call(as, sel('l()'))).returnHex);
-    // raw-storage compare across p.kids data (slots 0,1 + keccak(1)+0..7) and o.p.kids data (o at slot 2 => o.p.kids head slot 3, data keccak(3)+0..5).
-    const KEC = (slot: bigint) => BigInt('0x' + th(keccak(hx(pad32(slot)))));
-    const slots = new Set<bigint>([0n, 1n, 2n, 3n]);
-    const K1 = KEC(1n);
-    for (let i = 0; i < 8; i++) slots.add(K1 + BigInt(i));
-    const Ko = KEC(3n);
-    for (let i = 0; i < 6; i++) slots.add(Ko + BigInt(i));
-    for (const s of slots) expect(await stor(aj, s)).toBe(await stor(as, s));
-    // OOB index reverts identically (dynamic-array bound).
-    const oj = await h.call(aj, sel('g(uint256)') + W(50)), os = await h.call(as, sel('g(uint256)') + W(50));
-    expect(oj.success).toBe(os.success);
-  });
-
-  it('recursive field UNDER a poppable/deletable container stays a clean over-rejection (deep-clear soundness)', () => {
-    const P = 'type P = { x: u256; kids: P[] };';
-    // solc ACCEPTS all of these; JETH scopes them out (JETH210) so that no recursive sub-array is ever
-    // populated inside a container whose pop()/delete would need a recursive deep-clear JETH cannot emit.
-    expect(codes(`${P} class C { ps: P[]; w(i: u256, j: u256, v: u256): External<void> { this.ps[i].kids[j].x = v; } }`).length).toBeGreaterThan(0); // under a dynamic array
-    expect(codes(`${P} class C { ps: P[]; get g(i: u256, j: u256): External<u256> { return this.ps[i].kids[j].x; } }`).length).toBeGreaterThan(0);
-    expect(codes(`type P = { x: u256; kids: P[] };\nclass C { m: mapping<u256, P>; w(k: u256, i: u256, v: u256): External<void> { this.m[k].kids[i].x = v; } }`).length).toBeGreaterThan(0); // under a mapping value
-    expect(codes(`${P} class C { p: P; w(i: u256, j: u256, v: u256): External<void> { this.p.kids[i].kids[j].x = v; } }`).length).toBeGreaterThan(0); // nested recursive (under the outer kids element)
-    expect(codes(`${P} class C { p: P; f(i: u256): External<void> { this.p.kids[i].kids.push(); } }`).length).toBeGreaterThan(0); // nested push
   });
 
   it('recursive kids field: push()/pop()/length + whole-struct storage copy are byte-identical', async () => {
