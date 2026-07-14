@@ -814,6 +814,11 @@ export interface ContractIR {
   // function. A `funcRef` value lowers to its id; a `funcRefCall` dispatches on the id via a switch over
   // these targets. Absent when no function's address is taken.
   funcRefIds?: Map<string, number>;
+  // ABSTRACT-ONLY / INTERFACE-ONLY unit: solc type-checks a translation unit whose only top-level
+  // declarations are abstract contracts and/or interfaces, but emits NO deployable bytecode (nothing is
+  // instantiable). When set, the analyzer has ALREADY validated every member/body, and compileUnit skips
+  // Yul emission + the backend and returns empty creation/runtime bytecode. Absent for a normal contract.
+  nonDeployable?: boolean;
 }
 
 /** Phase B: an external (delegatecall) library compiled to its OWN deployable Yul object. `external`

@@ -672,8 +672,7 @@ export class Analyzer {
     this.collectLibraries(); // @library declarations: internal (inlined) functions, collected before contracts
     const classes = this.findContractClasses();
     if (classes.length === 0) {
-      this.diags.error(this.sourceFile, 'JETH040', 'no @contract class found in source');
-      return undefined;
+      return this.analyzeNonDeployableUnit();
     }
     if (classes.length > 1) {
       this.diags.error(classes[1]!, 'JETH041', 'multiple @contract classes per file are not supported in the MVP');
@@ -1617,6 +1616,68 @@ export class Analyzer {
       return ok;
     }
     return true;
+  }
+
+  /** ABSTRACT-ONLY / INTERFACE-ONLY translation unit. solc accepts a file whose only top-level
+   *  declarations are abstract contracts and/or interfaces: it type-checks every member but emits NO
+   *  deployable bytecode (neither is instantiable). JETH previously rejected the whole file with JETH040
+   *  ("no @contract class found"). Here, when findContractClasses found no DEPLOYABLE contract but at
+   *  least one abstract class or interface exists, we still run FULL member validation - each abstract
+   *  class is analyzed exactly as if it were the deployed contract (so a bad body, a bad override, an
+   *  illegal member still rejects, matching solc; interfaces were already validated by
+   *  collectInterfaces/collectNativeInterfaces) - and return a `nonDeployable` IR. compileUnit emits
+   *  empty creation/runtime bytecode for it. A file with NO contract-like declaration at all still
+   *  rejects with JETH040. This path never runs for a normal single-contract file (classes.length > 0). */
+  private analyzeNonDeployableUnit(): ContractIR | undefined {
+    const abstractClasses: ts.ClassDeclaration[] = [];
+    const collect = (n: ts.Node): void => {
+      if (ts.isClassDeclaration(n) && n.name && this.isAbstractClass(n)) abstractClasses.push(n);
+      ts.forEachChild(n, collect);
+    };
+    ts.forEachChild(this.sourceFile, collect);
+    const hasInterface = this.interfacesByName.size > 0;
+    if (abstractClasses.length === 0 && !hasInterface) {
+      this.diags.error(this.sourceFile, 'JETH040', 'no @contract class found in source');
+      return undefined;
+    }
+    // The LEAF abstract classes: those not extended by another class in the file. An abstract base that a
+    // more-derived abstract extends is flattened into that leaf by the C3 linearization (exactly the
+    // normal path), so analyzing the leaf validates the whole chain; analyzing the base again would be
+    // redundant. A single leaf is analyzed EXACTLY ONCE - identical state-safety to the normal
+    // single-contract path (which likewise calls analyzeContract once).
+    const extended = this.extendedClassNames();
+    const leaves = abstractClasses.filter((ac) => ac.name && !extended.has(ac.name.text));
+    // MVP scope (mirrors JETH041): two or more INDEPENDENT abstract contracts in one file would require
+    // running analyzeContract more than once, which accumulates shared selector/registry state. solc
+    // accepts such a file, so this is a SAFE over-rejection - a clean reject, never a wrong accept.
+    if (leaves.length > 1) {
+      this.diags.error(leaves[1]!, 'JETH041', 'multiple contract classes per file are not supported in the MVP');
+      return undefined;
+    }
+    // Register the abstract classes (and any bases they reference) so `extends` resolution and C3
+    // linearization work exactly as on the normal path.
+    this.registerContractClasses();
+    // Validate the leaf abstract class's members/bodies as if it were the deployed contract. The emitted
+    // IR is discarded (nothing deploys); it names the artifact and supplies an ABI. Analyzing a standalone
+    // abstract class fires the same member/override/body diagnostics the normal path fires - an abstract
+    // class is exempt only from the "must be marked abstract" obligation, which is keyed off the
+    // deployed-contract check, so a genuinely-invalid abstract body still rejects.
+    let repIr: ContractIR | undefined;
+    const leaf = leaves[0];
+    if (leaf) {
+      const lin = this.linearize(leaf);
+      if (lin) repIr = this.analyzeContract(leaf, lin);
+    }
+    // LAST (as on the normal path): reject a source silently error-recovered by TS despite a non-1011
+    // parse diagnostic (BYTE-SLICE-MC), unless the analyzer already rejected.
+    this.rejectSilentlyAcceptedSyntaxErrors();
+    if (this.diags.hasErrors) return undefined;
+    if (repIr) return { ...repIr, nonDeployable: true };
+    // Interface-only file (no abstract leaf): no class was analyzed. Name the artifact after the first
+    // interface; it carries no state/functions of its own (interface methods are declarations validated
+    // in collectInterfaces/collectNativeInterfaces, exposed via the ABI layer).
+    const name = [...this.interfacesByName.keys()][0] ?? 'Contract';
+    return { name, stateVars: [], functions: [], errors: [], events: [], slotCount: 0, immutables: [], nonDeployable: true };
   }
 
   private findContractClasses(): ts.ClassDeclaration[] {
@@ -3183,11 +3244,14 @@ export class Analyzer {
         // (known only after the fixpoint, since mutability is inferred). A virtual reader chain is
         // `@virtual get f()`; override HEADROOM (a base whose override may write) is a BODYLESS
         // `@virtual f(): External<T>;` - a bodyless declaration skips inference and stays nonpayable,
-        // exactly solc's abstract-virtual idiom. Note bodyless declarations never enter this loop.
+        // exactly solc's abstract-virtual idiom. A bodyless declaration is exempt: it has no body to
+        // infer read-only from, and it IS the abstract obligation solc accepts as a plain External<T>
+        // (this reaches the loop only when the deployed class is itself abstract - the non-deployable
+        // unit path; on the normal concrete path a surviving bodyless winner already errored JETH380).
         // A VOID read-only external (assert-style: the body only checks/reverts) is exempt - a value-less
         // `get` is not a getter; solc likewise allows an external pure assert function.
         const returnsValue = e.rf.returnType.kind !== 'void' || (e.rf.returnTypes?.length ?? 0) > 0;
-        if (e.rf.fromExternalMarker && !e.rf.isGetter && !e.writes && returnsValue)
+        if (e.rf.fromExternalMarker && !e.rf.isGetter && !e.writes && returnsValue && !e.rf.bodyless)
           this.diags.error(
             e.rf.node,
             'JETH352',

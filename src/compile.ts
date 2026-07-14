@@ -648,6 +648,22 @@ function compileUnit(source: string, opts: CompileOptions): CompileResult {
   diags.throwIfErrors();
   if (!ir) throw new CompileError(diags.items);
 
+  // ABSTRACT-ONLY / INTERFACE-ONLY unit: the analyzer type-checked every member but nothing is
+  // deployable (an abstract contract / interface is not instantiable). Match solc, which accepts such a
+  // file and emits EMPTY creation bytecode: skip Yul emission + the backend and return the empty artifact.
+  if (ir.nonDeployable) {
+    return {
+      contractName: ir.name,
+      abi: emitAbi(ir),
+      creationBytecode: '',
+      runtimeBytecode: '',
+      yul: '',
+      storageLayout: [],
+      ir,
+      diagnostics: diags.items,
+    };
+  }
+
   // Lowering -> Yul.
   let yul: string;
   try {
