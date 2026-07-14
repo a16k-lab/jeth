@@ -982,3 +982,24 @@ constant EXPRESSION (`N + 1`) is not a valid TS type argument (grammar-phase rej
 does not fold a type-position expression (a divergent fold would miscompile the storage layout). SAFE RESIDUAL
 over-rejections kept (all match nothing solc-accepts or are simply not lifted here): a struct-member const dim
 (structs are collected before constants) and a file-level `const N` (not in constantsByName).
+
+### 2026-07-14 RESIDUAL LIFTS (4 hard-lift residuals; 1 reverted for an MC, 3 lifted; +4 OAs closed)
+
+The safe-over-rejection residuals from the hard-lift campaign, via worktree fan-out -> sequential integrate ->
+merged-tree cross-verify. LIFTED byte-identical: **IFACE-STRUCT-FIELD** (an interface name as a STRUCT FIELD
+type -> branded address; a name-only interface pre-scan before collectStructs), **CONST-DIM-RESIDUALS** (a
+file-level `const N` and a struct-member const dim as an `Arr<T,N>` length; collectFileLevelIntConsts, gated to
+GLOBALLY-shadow-free bare integer names), **CONCRETE-CONTRACT-VALUE** (a concrete/abstract contract name as a
+field/param/return/local/immutable value -> `__ctref:` branded address, with fail-closed gates on the raw
+address surface). REVERTED: **REC-STRUCT-CONSUMERS** (storage `p.kids[i].x`) - its isolated check only tested
+EMPTY kids; the merged-tree cross-verify proved that with a POPULATED kids array, `this.p=this.q` DROPS the
+element payload and `delete this.p` LEAVES stale storage (the aggregate copy/delete paths use the recursiveRef
+sentinel's stub layout). Keeping it a clean JETH210 reject is the bar-respecting outcome (lifting it needs
+runtime-recursive copy/delete codegen or gating every consumer). CLOSED 4 over-acceptances (reject-only gates):
+the nominal contract/interface value CAST surface (payable/uN/iN/bytesN - the cast gates matched only the
+`__ctref:` brand, missing interface brands; now isNominalAddressValue), the raw-address MEMBER surface on an
+interface value (.balance/.code/.codehash, JETH352), and a RECURSIVE struct in an external/public signature
+(JETH488) or abi.encode/encodePacked (JETH173) - the latter two PRE-EXISTING since the base recursive-ref-struct
+lift. Suite 467/4333, flake green. LESSON (reinforced): an isolated lift verification can miss a consumer that
+only miscompiles under state the lift newly enables (populated recursive field); the merged-tree adversarial
+cross-verify is what caught the 2 MCs + 4 OAs, and reverting the un-fixable-cheaply lift beats shipping an MC.
