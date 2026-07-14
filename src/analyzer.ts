@@ -354,6 +354,12 @@ export class Analyzer {
   private events: EventIR[] = [];
   // Phase 6: @interface declarations (name -> {methods}); emits no bytecode, names a type + ABI shape.
   private interfacesByName = new Map<string, InterfaceDecl>();
+  // IFACE-STRUCT-FIELD: interface NAME membership, pre-scanned before collectStructs (which runs before the
+  // full interface registries are built). Struct fields are resolved during collectStructs, so the complete
+  // `interfacesByName` map is not yet populated; this name-only set lets an interface name resolve to a
+  // branded `address` struct field exactly as an interface state var / param does (IFACE-VALUE-TYPE), while
+  // the ordering that lets an interface method reference a struct type stays intact.
+  private interfaceNamesEarly = new Set<string>();
   // Phase 6: the @interface's class node (`@interface class I extends J {..}`), kept so C3 linearization
   // can include interfaces as ORDERING nodes exactly as solc does (an interface is a base in the graph),
   // while flattening skips them (no storage/ctor/functions). name -> the `@interface class` declaration.
@@ -981,6 +987,19 @@ export class Analyzer {
   }
 
   private collectStructs(): void {
+    // IFACE-STRUCT-FIELD: pre-scan every interface NAME (native `interface I {..}` and `@interface class I`)
+    // so a struct field typed with an interface name resolves to a branded `address` during this pass. Name
+    // membership only - the full interface method registries are still built later (collectInterfaces /
+    // collectNativeInterfaces), which is what lets an interface method reference a struct type. A name that
+    // collides with a struct/primitive is left for those passes to report (JETH340/JETH220); here it is
+    // harmlessly a member of the set (resolveType checks structs first, so a real struct name wins).
+    const scanIfaceNames = (n: ts.Node): void => {
+      if (ts.isInterfaceDeclaration(n)) this.interfaceNamesEarly.add(n.name.text);
+      else if (ts.isClassDeclaration(n) && n.name && decoratorNames(n).includes('interface'))
+        this.interfaceNamesEarly.add(n.name.text);
+      ts.forEachChild(n, scanIfaceNames);
+    };
+    ts.forEachChild(this.sourceFile, scanIfaceNames);
     // Phase 1: register every struct/type-struct NAME as an empty shell (source order, so a name
     // collision reports against the FIRST declaration exactly as before).
     const decls: {
@@ -1219,7 +1238,10 @@ export class Analyzer {
         this.diags.error(member.node, 'JETH221', `duplicate struct field name '${fname}'`);
         continue;
       }
-      const t = resolveType(member.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
+      // IFACE-STRUCT-FIELD: pass the pre-scanned interface NAME set (not the still-empty interfacesByName
+      // map) so an interface-typed field lowers THROUGH `address` (branded), byte-identical to a plain
+      // address field and to an interface state var / param (IFACE-VALUE-TYPE).
+      const t = resolveType(member.type, this.diags, this.structsByName, this.namedDim, this.interfaceNamesEarly);
       if (!t) continue;
       // A mapping field (G7) is allowed: it makes the struct STORAGE-ONLY (the storage-only
       // gates below reject using it as a memory local / param / return / construction / copy,
