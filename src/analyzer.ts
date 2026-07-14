@@ -760,7 +760,7 @@ export class Analyzer {
       this.diags.error(decl, 'JETH015', `Brand<...> takes exactly one base type, e.g. 'type ${name} = Brand<u256>'`);
       return;
     }
-    const base = resolveType(args[0], this.diags, this.structsByName, this.namedDim);
+    const base = resolveType(args[0], this.diags, this.structsByName, this.namedDim, this.interfacesByName);
     if (!base) return;
     if (!isStaticValueType(base) || (base as { brand?: string }).brand) {
       this.diags.error(
@@ -873,7 +873,7 @@ export class Analyzer {
         (node.expression as ts.Identifier).text,
         (node as ts.ExpressionWithTypeArguments).typeArguments,
       );
-      return resolveType(typeNode, this.diags, this.structsByName, this.namedDim);
+      return resolveType(typeNode, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
     }
     return undefined;
   }
@@ -1106,7 +1106,7 @@ export class Analyzer {
         this.diags.error(member.node, 'JETH221', `duplicate struct field name '${fname}'`);
         continue;
       }
-      const t = resolveType(member.type, this.diags, this.structsByName, this.namedDim);
+      const t = resolveType(member.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
       if (!t) continue;
       // A mapping field (G7) is allowed: it makes the struct STORAGE-ONLY (the storage-only
       // gates below reject using it as a memory local / param / return / construction / copy,
@@ -1270,7 +1270,7 @@ export class Analyzer {
           `@interface method '${ifaceName}.${mname}' parameter '${p.name.text}' cannot have a default value`,
         );
       }
-      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim);
+      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
       if (!t) continue;
       if (this.typeHasMapping(t)) {
         this.diags.error(
@@ -1298,7 +1298,7 @@ export class Analyzer {
     if (member.type && ts.isTupleTypeNode(member.type)) {
       const rts: JethType[] = [];
       for (const el of member.type.elements) {
-        const t = resolveType(el, this.diags, this.structsByName, this.namedDim);
+        const t = resolveType(el, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
         if (!t) continue;
         if (!this.decodeSupported(t)) {
           this.diags.error(
@@ -1313,7 +1313,7 @@ export class Analyzer {
       if (rts.length >= 2) returnTypes = rts;
       else if (rts.length === 1) returnType = rts[0]!;
     } else if (member.type) {
-      const t = resolveType(member.type, this.diags, this.structsByName, this.namedDim);
+      const t = resolveType(member.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
       if (t && t.kind !== 'void') {
         if (!this.decodeSupported(t)) {
           this.diags.error(
@@ -1647,7 +1647,7 @@ export class Analyzer {
       if (p.initializer) {
         this.diags.error(p, 'JETH346', `interface method '${ifaceName}.${mname}' parameter '${p.name.text}' cannot have a default value`);
       }
-      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim);
+      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
       if (!t) continue;
       if (this.typeHasMapping(t)) {
         this.diags.error(p, 'JETH247', `parameter '${p.name.text}' of type ${displayName(t)} contains a mapping and cannot be passed (mappings are storage-only)`);
@@ -1681,7 +1681,7 @@ export class Analyzer {
     if (retNode && ts.isTupleTypeNode(retNode)) {
       const rts: JethType[] = [];
       for (const el of retNode.elements) {
-        const t = resolveType(el, this.diags, this.structsByName, this.namedDim);
+        const t = resolveType(el, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
         if (!t) continue;
         if (!this.decodeSupported(t)) {
           this.diags.error(el, 'JETH348', `interface method '${ifaceName}.${mname}' return component ${displayName(t)} is not supported yet (supported: value types, bytes/string, value arrays, and structs of those)`);
@@ -1692,7 +1692,7 @@ export class Analyzer {
       if (rts.length >= 2) returnTypes = rts;
       else if (rts.length === 1) returnType = rts[0]!;
     } else if (retNode) {
-      const t = resolveType(retNode, this.diags, this.structsByName, this.namedDim);
+      const t = resolveType(retNode, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
       if (t && t.kind !== 'void') {
         if (!this.decodeSupported(t)) {
           this.diags.error(retNode, 'JETH348', `interface method '${ifaceName}.${mname}' return type ${displayName(t)} is not supported yet (supported: value types, bytes/string, value arrays, and structs of those)`);
@@ -3864,7 +3864,7 @@ export class Analyzer {
       const ok =
         ps.length === 1 &&
         ts.isIdentifier(ps[0]!.name) &&
-        resolveType(ps[0]!.type, this.diags, this.structsByName, this.namedDim)?.kind === 'address';
+        resolveType(ps[0]!.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName)?.kind === 'address';
       if (!ok)
         this.diags.error(ctorNode, 'JETH407', "a @beacon constructor must take exactly one parameter 'impl: address'");
       const bodyStmts = ctorNode.body?.statements ?? ts.factory.createNodeArray();
@@ -5604,7 +5604,7 @@ export class Analyzer {
         this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier');
         continue;
       }
-      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim);
+      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
       if (!t) continue;
       if (p.initializer)
         this.diags.error(p, 'JETH304', `a constructor parameter ('${p.name.text}') cannot have a default value`);
@@ -5891,7 +5891,7 @@ export class Analyzer {
         );
       } else if (member.parameters.length === 1) {
         const p = member.parameters[0]!;
-        const pt = resolveType(p.type, this.diags, this.structsByName, this.namedDim);
+        const pt = resolveType(p.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
         if (!ts.isIdentifier(p.name)) {
           this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier');
         } else if (!pt || pt.kind !== 'bytes') {
@@ -5909,7 +5909,7 @@ export class Analyzer {
       // The return type, if present, must be `bytes` (solc: `returns (bytes memory)`).
       const hasReturn = !!member.type && member.type.kind !== ts.SyntaxKind.VoidKeyword;
       if (hasReturn) {
-        const rt = resolveType(member.type, this.diags, this.structsByName, this.namedDim);
+        const rt = resolveType(member.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
         if (!rt || rt.kind !== 'bytes') {
           this.diags.error(
             member.type!,
@@ -6053,7 +6053,7 @@ export class Analyzer {
         this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier');
         continue;
       }
-      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim);
+      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
       if (!t) continue;
       if (p.initializer)
         this.diags.error(p, 'JETH304', `a constructor parameter ('${p.name.text}') cannot have a default value`);
@@ -6736,7 +6736,7 @@ export class Analyzer {
           `@error parameter '${p.name.text}' cannot be @indexed (only event parameters are indexed)`,
         );
       }
-      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim);
+      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
       if (!t) continue;
       // solc bans an internal type as an error parameter type; funcref-bearing types stay
       // internal-only (the same screen the event gate applies, ahead of the shape gate).
@@ -6820,7 +6820,7 @@ export class Analyzer {
         this.diags.error(p, 'JETH053', `duplicate event parameter name '${p.name.text}'`);
         continue;
       }
-      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim);
+      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
       if (!t) continue;
       // L11a keeps funcref-bearing types INTERNAL-only: solc bans an internal type as an event
       // parameter type (indexed or not), so both arms screen here before the shape gates
@@ -7278,7 +7278,7 @@ export class Analyzer {
       this.collectImmutable(member, declaredIn);
       return;
     }
-    const type = resolveType(member.type, this.diags, this.structsByName, this.namedDim);
+    const type = resolveType(member.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
     if (!type) return;
     if (type.kind === 'void') {
       this.diags.error(member, 'JETH047', 'state variable cannot be void');
@@ -7559,7 +7559,7 @@ export class Analyzer {
     isDup: (name: string) => boolean,
   ): { value: bigint | boolean | Uint8Array; type: JethType } | undefined {
     const name = (member.name as ts.Identifier).text;
-    const type = resolveType(member.type, this.diags, this.structsByName, this.namedDim);
+    const type = resolveType(member.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
     if (!type) return undefined;
     // Folding supports integer + bool + address + bytesN + string + bytes constants. Any OTHER
     // aggregate constant (a struct / array) stays a clean over-rejection, not a fold-failure cascade.
@@ -7732,7 +7732,7 @@ export class Analyzer {
       return;
     }
     if (isPublicImm) this.publicImmutableNames.add(name); // @external / Visible<T> @immutable -> auto-generated view getter
-    const type = resolveType(member.type, this.diags, this.structsByName, this.namedDim);
+    const type = resolveType(member.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
     if (!type) return;
     if (!isStaticValueType(type)) {
       this.diags.error(
@@ -8041,7 +8041,7 @@ export class Analyzer {
         this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier');
         continue;
       }
-      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim);
+      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
       if (!t) continue;
       // A type containing a mapping is storage-only: it cannot be a parameter (matches solc).
       if (this.typeHasMapping(t)) {
@@ -8093,7 +8093,7 @@ export class Analyzer {
       const returnTypes: JethType[] = [];
       let ok = true;
       for (const el of member.type.elements) {
-        const t = resolveType(el, this.diags, this.structsByName, this.namedDim);
+        const t = resolveType(el, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
         if (!t) {
           ok = false;
           break;
@@ -8136,7 +8136,7 @@ export class Analyzer {
       };
     }
 
-    const returnType = member.type ? (resolveType(member.type, this.diags, this.structsByName, this.namedDim) ?? VOID) : VOID;
+    const returnType = member.type ? (resolveType(member.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName) ?? VOID) : VOID;
     if (this.typeHasMapping(returnType)) {
       this.diags.error(
         member.type ?? member,
@@ -8333,7 +8333,7 @@ export class Analyzer {
         return undefined;
       }
       for (let i = 0; i < gen.typeParams.length; i++) {
-        const t = resolveType(node.typeArguments[i]!, this.diags, this.structsByName, this.namedDim);
+        const t = resolveType(node.typeArguments[i]!, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
         if (!t) return undefined;
         if (!this.gateGenericTypeArg(t, node.typeArguments[i]!, gen.typeParams[i]!)) return undefined;
         binding.set(gen.typeParams[i]!, t);
@@ -9360,7 +9360,7 @@ export class Analyzer {
         this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier');
         continue;
       }
-      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim);
+      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
       if (!t) continue;
       if (p.initializer)
         this.diags.error(p, 'JETH304', `a @modifier parameter ('${p.name.text}') cannot have a default value`);
@@ -9496,7 +9496,7 @@ export class Analyzer {
         return undefined;
       }
       for (let i = 0; i < gen.typeParams.length; i++) {
-        const t = resolveType(app.typeArgs[i]!, this.diags, this.structsByName, this.namedDim);
+        const t = resolveType(app.typeArgs[i]!, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
         if (!t) return undefined;
         if (!this.gateModifierGenericTypeArg(t, app.typeArgs[i]!, gen.typeParams[i]!)) return undefined;
         binding.set(gen.typeParams[i]!, t);
@@ -10427,7 +10427,7 @@ export class Analyzer {
           return;
         }
         if (decl.type) {
-          const ann = resolveType(decl.type, this.diags, this.structsByName, this.namedDim);
+          const ann = resolveType(decl.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
           if (ann && !typesEqual(ann, ic.returnType)) {
             this.diags.error(
               decl.type,
@@ -10506,7 +10506,7 @@ export class Analyzer {
       }
       // solc's `catch (bytes memory e)`: the binding is always the raw revert returndata (bytes).
       if (vd.type) {
-        const t = resolveType(vd.type, this.diags, this.structsByName, this.namedDim);
+        const t = resolveType(vd.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
         if (t && !isBytesLike(t)) {
           this.diags.error(
             vd.type,
@@ -10559,7 +10559,7 @@ export class Analyzer {
     if (!ts.isTupleTypeNode(typeNode) || typeNode.elements.length !== n) return undefined;
     const out: JethType[] = [];
     for (const el of typeNode.elements) {
-      const t = resolveType(el, this.diags, this.structsByName, this.namedDim);
+      const t = resolveType(el, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
       if (!t) return undefined;
       out.push(t);
     }
@@ -12708,14 +12708,33 @@ export class Analyzer {
     node: ts.Expression,
   ): { call: Expr & { kind: 'extCall' }; returnType: JethType; returnTypes?: JethType[] } | 'handled' | undefined {
     // shape: a CallExpression whose callee is `IFoo(addr [, opts]).method` (a PropertyAccess whose base
-    // is the interface wrapper call). The bare wrapper `IFoo(addr)` (no .method() applied) is rejected
-    // separately by checkExpr (an interface value is not usable on its own).
+    // is the interface wrapper call). The bare wrapper `IFoo(addr)` (no .method() applied) is a first-class
+    // interface VALUE, handled in checkExpr.
     if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return undefined;
     const pa = node.expression;
-    const ifaceName = this.interfaceWrapperName(pa.expression);
-    if (!ifaceName) return undefined;
-    const wrapper = pa.expression as ts.CallExpression;
     const methodName = pa.name.text;
+    const ifaceName = this.interfaceWrapperName(pa.expression);
+
+    // ---- variable dispatch: `<interface-typed value>.method(args)` (IFACE-VALUE-TYPE) ----
+    // When the receiver is NOT the inline `IFoo(addr)` wrapper it may be a VALUE of interface type (a
+    // field / param / local / return / element, resolved to an `address` branded with the interface name).
+    // solc lowers such a call through the SAME external message-call it emits for the inline cast-call, so
+    // it routes to the identical resolveIfaceMethod + buildIfaceExtCall path (same selector / calldata /
+    // return decode). Trial-type the receiver first (peek-rollback) so a non-interface `.m(...)` receiver
+    // falls through to the other handlers untouched. Variable dispatch carries no { value?, gas? } options
+    // (that surface is only on the inline cast wrapper).
+    if (!ifaceName) {
+      const rt = this.trialExprType(pa.expression);
+      const ifn = rt && rt.kind === 'address' ? (rt as { brand?: string }).brand : undefined;
+      if (!ifn || !this.interfacesByName.has(ifn)) return undefined; // not an interface value: not our shape
+      const recvVal = this.checkExpr(pa.expression); // commit the receiver evaluation
+      if (!recvVal) return 'handled';
+      const m = this.resolveIfaceMethod(ifn, methodName, node, pa);
+      if (m === 'handled') return 'handled';
+      return this.buildIfaceExtCall(ifn, methodName, m, recvVal, node, undefined, undefined);
+    }
+
+    const wrapper = pa.expression as ts.CallExpression;
 
     // ---- the wrapper: IFoo(addr) or IFoo(addr, { value?, gas? }) ----
     if (wrapper.arguments.length < 1 || wrapper.arguments.length > 2) {
@@ -12739,49 +12758,8 @@ export class Analyzer {
     const recv = this.coerce(addr, ADDRESS, wrapper.arguments[0]!);
 
     // ---- the method ----
-    // The callable surface of `ifaceName` is the UNION of its extends-chain (solc `interface B is A`):
-    // an inherited method dispatches STATICCALL/CALL per its ORIGINAL declaration's marker, with the
-    // selector of its own canonical signature (lookupInterfaceMethods walks the parent chain). An
-    // OVERLOADED name resolves like solc's argument-dependent lookup (witnessed vs 0.8.35): filter by
-    // arity, then by which overload's parameter types ALL the arguments fit (a side-effect-free trial,
-    // the same idiom as the internal resolveOverload); a call fitting two overloads is ambiguous
-    // ('Member "f" not unique after argument-dependent lookup') and a typed argument that fits exactly
-    // one is accepted. The chosen overload's arguments are re-checked for real below.
-    const overloads = this.lookupInterfaceMethods(ifaceName, methodName);
-    if (overloads.length === 0) {
-      this.diags.error(pa, 'JETH351', `interface '${ifaceName}' has no method '${methodName}'`);
-      return 'handled';
-    }
-    let method: InterfaceMethod;
-    if (overloads.length === 1) {
-      method = overloads[0]!;
-    } else {
-      const applicable = overloads.filter((c) => c.params.length === node.arguments.length);
-      if (applicable.length === 0) {
-        this.diags.error(
-          node,
-          'JETH354',
-          `no overload of '${ifaceName}.${methodName}' takes ${node.arguments.length} argument(s)`,
-        );
-        return 'handled';
-      }
-      const viable = applicable.length === 1 ? applicable : applicable.filter((c) => this.ifaceOverloadArgsMatch(node, c));
-      if (viable.length === 0) {
-        this.diags.error(node, 'JETH355', `no overload of '${ifaceName}.${methodName}' matches the argument types`);
-        return 'handled';
-      }
-      if (viable.length > 1) {
-        this.diags.error(
-          node,
-          'JETH434',
-          `call to '${ifaceName}.${methodName}' is ambiguous (matches ${viable.length} overloads; solc: 'Member "${methodName}" not unique after argument-dependent lookup')`,
-        );
-        return 'handled';
-      }
-      method = viable[0]!;
-    }
-    const op: 'call' | 'staticcall' =
-      method.mutability === 'view' || method.mutability === 'pure' ? 'staticcall' : 'call';
+    const method = this.resolveIfaceMethod(ifaceName, methodName, node, pa);
+    if (method === 'handled') return 'handled';
 
     // ---- wrapper options: { value?, gas? } (value only on a @payable method) ----
     let value: Expr | undefined;
@@ -12851,6 +12829,70 @@ export class Analyzer {
         gas = this.coerce(g, U256, gNode);
       }
     }
+
+    return this.buildIfaceExtCall(ifaceName, methodName, method, recv, node, value, gas);
+  }
+
+  /** Resolve the interface method `ifaceName.methodName` for a call `node` (whether reached through the
+   *  inline `IFoo(addr)` wrapper OR a variable of interface type). The callable surface of `ifaceName` is
+   *  the UNION of its extends-chain (solc `interface B is A`): an inherited method dispatches STATICCALL/CALL
+   *  per its ORIGINAL declaration's marker, with the selector of its own canonical signature. An OVERLOADED
+   *  name resolves like solc's argument-dependent lookup (filter by arity, then by which overload's parameter
+   *  types ALL the arguments fit); two matches are ambiguous, zero matches errors. Returns the chosen method,
+   *  or 'handled' when a precise diagnostic was emitted. `pa` anchors the no-such-method error. */
+  private resolveIfaceMethod(
+    ifaceName: string,
+    methodName: string,
+    node: ts.CallExpression,
+    pa: ts.PropertyAccessExpression,
+  ): InterfaceMethod | 'handled' {
+    const overloads = this.lookupInterfaceMethods(ifaceName, methodName);
+    if (overloads.length === 0) {
+      this.diags.error(pa, 'JETH351', `interface '${ifaceName}' has no method '${methodName}'`);
+      return 'handled';
+    }
+    if (overloads.length === 1) return overloads[0]!;
+    const applicable = overloads.filter((c) => c.params.length === node.arguments.length);
+    if (applicable.length === 0) {
+      this.diags.error(
+        node,
+        'JETH354',
+        `no overload of '${ifaceName}.${methodName}' takes ${node.arguments.length} argument(s)`,
+      );
+      return 'handled';
+    }
+    const viable = applicable.length === 1 ? applicable : applicable.filter((c) => this.ifaceOverloadArgsMatch(node, c));
+    if (viable.length === 0) {
+      this.diags.error(node, 'JETH355', `no overload of '${ifaceName}.${methodName}' matches the argument types`);
+      return 'handled';
+    }
+    if (viable.length > 1) {
+      this.diags.error(
+        node,
+        'JETH434',
+        `call to '${ifaceName}.${methodName}' is ambiguous (matches ${viable.length} overloads; solc: 'Member "${methodName}" not unique after argument-dependent lookup')`,
+      );
+      return 'handled';
+    }
+    return viable[0]!;
+  }
+
+  /** Build the lowered external message-call for a resolved interface method `ifaceName.methodName` at
+   *  receiver `recv` (an address value). Shared VERBATIM by the inline `IFoo(addr).m()` cast-call and the
+   *  IFACE-VALUE-TYPE variable-dispatch `x.m()` path: identical selector, calldata (selector ++ abi.encode
+   *  args), STATICCALL/CALL choice, effect flags, and return decode. Returns the extCall + declared return
+   *  shape, or 'handled' when an arg diagnostic was emitted. */
+  private buildIfaceExtCall(
+    ifaceName: string,
+    methodName: string,
+    method: InterfaceMethod,
+    recv: Expr,
+    node: ts.CallExpression,
+    value: Expr | undefined,
+    gas: Expr | undefined,
+  ): { call: Expr & { kind: 'extCall' }; returnType: JethType; returnTypes?: JethType[] } | 'handled' {
+    const op: 'call' | 'staticcall' =
+      method.mutability === 'view' || method.mutability === 'pure' ? 'staticcall' : 'call';
 
     // ---- the arguments: check + coerce to the method's param types ----
     if (node.arguments.length !== method.params.length) {
@@ -13259,7 +13301,7 @@ export class Analyzer {
       this.diags.error(decl, 'JETH062', 'destructuring is not supported');
       return;
     }
-    const declared = resolveType(decl.type, this.diags, this.structsByName, this.namedDim);
+    const declared = resolveType(decl.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
     if (!decl.type) {
       this.diags.error(decl, 'JETH063', 'local variables require an explicit type annotation');
       return;
@@ -22812,7 +22854,7 @@ export class Analyzer {
         this.diags.error(node, 'JETH363', 'new Array<T>(n) takes exactly one length argument, e.g. new Array<u256>(n)');
         return undefined;
       }
-      const elem = resolveType(node.typeArguments[0]!, this.diags, this.structsByName, this.namedDim);
+      const elem = resolveType(node.typeArguments[0]!, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
       if (!elem) return undefined;
       // The element may be a VALUE type (flat dynamic array), a nested VALUE-leaf array
       // (new Array<u256[]>(n) -> u256[][], new Array<Arr<u256,2>>(n), ...), a STATIC STRUCT
@@ -24868,15 +24910,41 @@ export class Analyzer {
         return this.checkCast(node, callee);
       const st = this.structsByName.get(callee);
       if (st && st.kind === 'struct') return this.checkStructConstruct(node, st);
-      // Phase 6: a bare interface wrapper `IFoo(addr)` used as a VALUE (no .method() applied). An
-      // interface-tagged address is not usable on its own; it must be followed by a method call.
+      // IFACE-VALUE-TYPE: a bare interface conversion `IFoo(addr)` used as a first-class VALUE (no
+      // .method() applied). solc treats it as the interface type, an `address` at the byte level, so it
+      // lowers to the address value branded with the interface name (identical bytes to `addr`; the brand
+      // keeps it nominally an `IFoo`, so it can be stored in an `IFoo` field, passed as an `IFoo` param,
+      // or returned as `IFoo`, and a method call dispatches through it). Exactly one argument is the
+      // conversion; a second `{ value?, gas? }` options object is only meaningful on a method call.
       if (this.interfacesByName.has(callee) && !this.isVisibleLocal(callee)) {
-        this.diags.error(
-          node,
-          'JETH358',
-          `'${callee}(addr)' is an interface handle and cannot be used as a value; call a method on it, e.g. ${callee}(addr).someMethod(...)`,
-        );
-        return undefined;
+        if (node.arguments.length !== 1) {
+          this.diags.error(
+            node,
+            'JETH349',
+            `${callee}(...) takes a single address to make an ${callee} value (options { value?, gas? } are only valid on a method call, e.g. ${callee}(addr, { value }).m(...))`,
+          );
+          return undefined;
+        }
+        const inner = this.checkExpr(node.arguments[0]!, ADDRESS);
+        if (!inner) return undefined;
+        // The operand must be a plain address (or already this same interface). solc rejects a DIRECT
+        // conversion from a different interface / branded-address newtype (`IFoo(iBarValue)` needs an
+        // explicit `IFoo(address(iBarValue))`); mirror that by refusing any other address brand. A
+        // non-address operand (uint160, contract-less value) also needs an explicit `address(...)` first.
+        const innerBrand = (inner.type as { brand?: string }).brand;
+        if (inner.type.kind !== 'address' || (innerBrand !== undefined && innerBrand !== callee)) {
+          this.diags.error(
+            node.arguments[0]!,
+            'JETH350',
+            `${callee}(...) requires an address, got ${displayName(inner.type)}`,
+          );
+          return undefined;
+        }
+        // Retype the (already 160-bit-clean) address to the interface brand: a no-op at the word level,
+        // so the emitted bytes are those of the address operand. A cast node makes the target type explicit.
+        const ifaceType: JethType = { kind: 'address', payable: false, brand: callee };
+        if (typesEqual(inner.type, ifaceType)) return inner; // already this interface (e.g. IFoo(ifooValue))
+        return { kind: 'cast', type: ifaceType, from: inner.type, operand: inner };
       }
       // an internal/private/public contract function called by name -> internal call.
       if (this.funcsByName.has(callee)) return this.checkInternalCall(node, callee, false);

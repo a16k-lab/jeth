@@ -59,7 +59,11 @@ export function resolvePrimitiveName(name: string): JethType | undefined {
 }
 
 /** Resolve a TS type node into a JethType, or undefined (with a diagnostic) if
- *  it is not a valid JETH type. `structs` maps @struct names to their resolved type. */
+ *  it is not a valid JETH type. `structs` maps @struct names to their resolved type.
+ *  `interfaces` (name membership only) lets an @interface name be used as a first-class
+ *  VALUE type: solc treats an interface type as `address` at the ABI/storage/masking level,
+ *  so it lowers THROUGH the `address` kind carrying the interface name as its nominal brand
+ *  (identical bytes to a plain address; the brand only discriminates the type at analysis time). */
 export function resolveType(
   node: ts.TypeNode | undefined,
   diags: DiagnosticBag,
@@ -71,6 +75,9 @@ export function resolveType(
   // this for a plain identifier. A resolved dimension produces the SAME JethType as the bare-literal
   // form `Arr<u256, 3>`, so it is byte-identical to solc's `uint256[N]`.
   constDim?: (name: string) => bigint | undefined,
+  // IFACE-VALUE-TYPE: `interfaces` (name membership) lets an @interface name be a first-class VALUE type,
+  // lowered THROUGH the `address` kind carrying the interface name as a nominal brand (identical bytes).
+  interfaces?: { has(name: string): boolean },
 ): JethType | undefined {
   if (!node) {
     return undefined;
@@ -78,7 +85,7 @@ export function resolveType(
   // A parenthesized type `(T)` -> resolve the inner type. Needed for a dynamic array of an internal
   // function pointer written `((x: T) => R)[]`: the `[]` binds tighter than `=>`, so the element must be
   // parenthesized, giving an ArrayTypeNode whose elementType is a ParenthesizedTypeNode wrapping the arrow.
-  if (ts.isParenthesizedTypeNode(node)) return resolveType(node.type, diags, structs, constDim);
+  if (ts.isParenthesizedTypeNode(node)) return resolveType(node.type, diags, structs, constDim, interfaces);
 
   // void
   if (node.kind === ts.SyntaxKind.VoidKeyword) return { kind: 'void' };
@@ -99,7 +106,7 @@ export function resolveType(
         diags.error(node, 'JETH014', 'a function-pointer type parameter must have a plain type annotation');
         return undefined;
       }
-      const pt = resolveType(p.type, diags, structs, constDim);
+      const pt = resolveType(p.type, diags, structs, constDim, interfaces);
       if (!pt) return undefined;
       params.push(pt);
     }
@@ -111,7 +118,7 @@ export function resolveType(
       for (const el of node.type.elements) {
         // a named tuple member `[x: T]` carries its type on .type; a plain member IS the type node.
         const tn = ts.isNamedTupleMember(el) ? el.type : el;
-        const rt = resolveType(tn, diags, structs, constDim);
+        const rt = resolveType(tn, diags, structs, constDim, interfaces);
         if (!rt) return undefined;
         if (rt.kind === 'void') {
           diags.error(el, 'JETH014', 'void is not a valid tuple-return component in a function-pointer type');
@@ -126,7 +133,7 @@ export function resolveType(
       if (rets.length === 1) return { kind: 'funcref', params, ret: rets[0] };
       return { kind: 'funcref', params, ret: undefined, rets };
     }
-    const ret = resolveType(node.type, diags, structs, constDim);
+    const ret = resolveType(node.type, diags, structs, constDim, interfaces);
     if (!ret) return undefined;
     return { kind: 'funcref', params, ret: ret.kind === 'void' ? undefined : ret };
   }
@@ -134,7 +141,7 @@ export function resolveType(
   // T[] array (fixed-length T[N] is written via a tuple-ish annotation; TS arrays
   // are always dynamic here -> JETH dynamic array).
   if (ts.isArrayTypeNode(node)) {
-    const element = resolveType(node.elementType, diags, structs, constDim);
+    const element = resolveType(node.elementType, diags, structs, constDim, interfaces);
     if (!element) return undefined;
     return { kind: 'array', element };
   }
@@ -149,8 +156,8 @@ export function resolveType(
         diags.error(node, 'JETH010', 'mapping requires exactly two type arguments: mapping<K, V>');
         return undefined;
       }
-      const key = resolveType(args[0], diags, structs, constDim);
-      const value = resolveType(args[1], diags, structs, constDim);
+      const key = resolveType(args[0], diags, structs, constDim, interfaces);
+      const value = resolveType(args[1], diags, structs, constDim, interfaces);
       if (!key || !value) return undefined;
       return { kind: 'mapping', key, value };
     }
@@ -162,7 +169,7 @@ export function resolveType(
         diags.error(node, 'JETH011', 'fixed array requires Arr<T, N>');
         return undefined;
       }
-      const element = resolveType(args[0], diags, structs, constDim);
+      const element = resolveType(args[0], diags, structs, constDim, interfaces);
       if (!element) return undefined;
       const lenNode = args[1];
       let exactLen: bigint | undefined;
@@ -236,6 +243,21 @@ export function resolveType(
         return undefined;
       }
       return resolved;
+    }
+
+    // An @interface name used as a first-class VALUE type (field / param / return / local).
+    // solc lowers an interface-typed value THROUGH `address` (20-byte, 160-bit-masked storage,
+    // ABI, and packing), so it resolves to the `address` kind carrying the interface name as its
+    // nominal brand: bytes are identical to a plain address, and the brand keeps the type nominally
+    // distinct at analysis time (an interface value is not interchangeable with a plain address or a
+    // different interface without an explicit conversion, exactly as in solc). Method dispatch on such
+    // a value routes to the SAME external-call lowering the inline `I(addr).m()` cast-call uses.
+    if (interfaces?.has(name)) {
+      if (node.typeArguments && node.typeArguments.length > 0) {
+        diags.error(node, 'JETH460', `type arguments not allowed on '${name}'`);
+        return undefined;
+      }
+      return { kind: 'address', payable: false, brand: name };
     }
 
     diags.error(node, 'JETH013', `unknown JETH type '${name}'`);
