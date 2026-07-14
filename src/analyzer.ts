@@ -279,11 +279,26 @@ export class Analyzer {
   // identical to solc). The value is READ when the callback fires (during type resolution), by which point
   // the referenced constant (own or base) has been collected in the analyzeContract state pass.
   private currentLinNames = new Set<string>();
+  // CONST-ARRAY-DIM (file-level residual): a FILE-LEVEL `const N = <int literal>` (solc's file-scoped
+  // `uint256 constant N = 3;`) is visible in EVERY position - a struct member `Arr<T, N>` and a contract
+  // field / local `Arr<T, N>` alike. It is registered here (name -> bigint) ONLY when the name is GLOBALLY
+  // SHADOW-FREE: it appears nowhere else as a binding (no contract member / local / param / other top-level
+  // declaration, and no duplicate file-level const). solc resolves `T[N]` at the CLOSEST scope, so a
+  // shadowing state var / local / param (not a compile-time constant) makes solc reject "Invalid array
+  // length"; skipping a shadowed name keeps JETH's dim reject (a clean over-rejection at any non-shadowed
+  // use is SAFE), and a duplicate / type-collision keeps solc's "Identifier already declared" a reject on
+  // both sides. Because a registered name is shadow-free everywhere, namedDim needs no per-site scope check.
+  private fileLevelIntConsts = new Map<string, bigint>();
   private namedDim = (name: string): bigint | undefined => {
     const c = this.constantsByName.get(name);
-    if (!c || typeof c.value !== 'bigint' || !isInteger(c.type)) return undefined;
-    if (c.declaredIn === undefined || !this.currentLinNames.has(c.declaredIn)) return undefined;
-    return c.value;
+    // An in-scope CONTRACT constant (own contract or a linearized base) resolves first and SHADOWS any
+    // file-level const of the same name (solc's inner-scope-wins), matching the bare-name lift already
+    // shipped. Only a whole-integer constant yields a length; a non-integer in-scope const keeps the reject.
+    if (c && c.declaredIn !== undefined && this.currentLinNames.has(c.declaredIn)) {
+      return typeof c.value === 'bigint' && isInteger(c.type) ? c.value : undefined;
+    }
+    // Otherwise a shadow-free file-level integer const (collected before struct/field resolution).
+    return this.fileLevelIntConsts.get(name);
   };
   // @immutable fields (Phase 5): value-type, assigned once in the constructor, baked into runtime
   // code via setimmutable (NO storage slot - never enters rawState/planLayout). immutableOrder keeps
@@ -683,6 +698,7 @@ export class Analyzer {
     this.rejectEmptyHexLiterals(); // lexer-level: `0x`/`0X` with no hex digits is a parse error in any context
     this.collectTypeAliases(); // branded newtypes, before structs (a struct field may use one)
     this.collectEnums(); // enums (branded uint8), before structs (a struct field / param may use one)
+    this.collectFileLevelIntConsts(); // file-level `const N = <int>` usable as an Arr<T, N> length, before structs
     this.collectStructs();
     this.collectInterfaces(); // @interface declarations: a named type + per-method ABI/selector registry
     this.collectFileLevelErrorEvents(); // `type X = error<{...}>` / `event<{...}>` (file-level, solc 0.8.4/0.8.22 parity)
@@ -908,6 +924,62 @@ export class Analyzer {
    *  visibility. Phase 2 resolves field types; phase 3 classifies recursion (a by-value self-cycle is
    *  infinite and rejected, a reference cycle is bounded and its object-graph back-edge is broken with a
    *  sentinel); phase 4 runs the supported-field-kind gate on the completed, acyclic types. */
+  /** CONST-ARRAY-DIM (file-level residual): register every file-level `const N = <whole-integer literal>`
+   *  (solc's file-scoped `uint256 constant N = 3;`) as a usable `Arr<T, N>` length. Runs BEFORE
+   *  collectStructs so a struct member `Arr<T, N>` resolves during field collection. A name is registered
+   *  ONLY when it is GLOBALLY SHADOW-FREE: it must not name any other binding (contract member, local,
+   *  parameter, or top-level class/interface/enum/type) and must be the ONLY file-level const of that name.
+   *  solc resolves `T[N]` at the closest scope, so a shadowing NON-constant (state var / local / param)
+   *  makes solc reject "Invalid array length" and a duplicate / type collision makes it reject "Identifier
+   *  already declared"; skipping such a name keeps JETH's reject on both sides (a clean over-rejection at
+   *  any non-shadowed use is safe, never an over-acceptance). Only a plain integer literal (optionally a
+   *  leading `-`, which JETH445 then rejects like solc) is folded here via asIntLiteral - a constant
+   *  EXPRESSION initializer stays a clean reject. The value is used ONLY as an array length (namedDim); a
+   *  file-level const as a runtime VALUE remains rejected exactly as before. */
+  private collectFileLevelIntConsts(): void {
+    // The top-level const VariableDeclaration nodes (so the deep binding-name walk can EXCLUDE them: only
+    // a DIFFERENT binding of the same name counts as a shadow).
+    const topConstDecls = new Set<ts.VariableDeclaration>();
+    ts.forEachChild(this.sourceFile, (n) => {
+      if (ts.isVariableStatement(n) && (n.declarationList.flags & ts.NodeFlags.Const) !== 0) {
+        for (const d of n.declarationList.declarations) topConstDecls.add(d);
+      }
+    });
+    // Deep walk: every OTHER binding name (a param, a class member, a nested/local variable, a method /
+    // accessor, or a top-level class/interface/enum/type) that could shadow a file-level const.
+    const shadowNames = new Set<string>();
+    const addName = (nm: ts.PropertyName | ts.BindingName | undefined): void => {
+      if (nm && ts.isIdentifier(nm)) shadowNames.add(nm.text);
+    };
+    const walk = (n: ts.Node): void => {
+      if (ts.isParameter(n)) addName(n.name);
+      else if (ts.isPropertyDeclaration(n) || ts.isPropertySignature(n)) addName(n.name);
+      else if (ts.isMethodDeclaration(n) || ts.isGetAccessorDeclaration(n) || ts.isSetAccessorDeclaration(n)) addName(n.name);
+      else if (ts.isVariableDeclaration(n) && !topConstDecls.has(n)) addName(n.name);
+      else if (
+        (ts.isClassDeclaration(n) || ts.isInterfaceDeclaration(n) || ts.isEnumDeclaration(n) || ts.isTypeAliasDeclaration(n)) &&
+        n.name
+      )
+        addName(n.name);
+      ts.forEachChild(n, walk);
+    };
+    ts.forEachChild(this.sourceFile, walk);
+    // Count file-level const names so a duplicate (solc "Identifier already declared") is left unregistered.
+    const constCount = new Map<string, number>();
+    for (const d of topConstDecls) {
+      if (ts.isIdentifier(d.name)) constCount.set(d.name.text, (constCount.get(d.name.text) ?? 0) + 1);
+    }
+    for (const d of topConstDecls) {
+      if (!ts.isIdentifier(d.name) || !d.initializer) continue;
+      const name = d.name.text;
+      if (shadowNames.has(name)) continue; // shadowed by another binding -> keep the dim reject (matches solc)
+      if ((constCount.get(name) ?? 0) > 1) continue; // duplicate file-level const -> solc rejects; keep reject
+      const v = this.asIntLiteral(d.initializer); // plain whole-integer literal only (a const EXPRESSION stays reject)
+      if (v === undefined) continue;
+      this.fileLevelIntConsts.set(name, v);
+    }
+  }
+
   private collectStructs(): void {
     // Phase 1: register every struct/type-struct NAME as an empty shell (source order, so a name
     // collision reports against the FIRST declaration exactly as before).

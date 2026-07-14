@@ -150,6 +150,117 @@ describe('CONST-ARRAY-DIM byte-identity', () => {
     });
   }
 
+  // FILE-LEVEL const dim (residual lift): a file-scoped `const N = 3n` (solc's file-level
+  // `uint256 constant N = 3;`) used as an Arr<T, N> length - in a CONTRACT FIELD and a STRUCT MEMBER.
+  const JF = `const N = 3n;
+  class C {
+    a: Arr<u256, N>;
+    b: Visible<u256>;
+    set(i: u256, v: u256): External<void> { this.a[i] = v; }
+    get g(i: u256): External<u256> { return this.a[i]; }
+  }`;
+  const SF = `uint256 constant N = 3;
+  contract C {
+    uint256[N] a;
+    uint256 public b;
+    function set(uint256 i, uint256 v) external { a[i] = v; }
+    function g(uint256 i) external view returns (uint256) { return a[i]; }
+  }`;
+  it('file-level const N (contract field): seeded read-back + raw storage + OOB Panic', async () => {
+    expect(sAccepts(SF)).toBe(true);
+    expect(jAccepts(JF)).toBe(true);
+    const h = await Harness.create();
+    const aj = await h.deploy(bc(JF));
+    const as = await h.deploy(compileSolidity(SPDX + SF, 'C').creation);
+    const seeds = [(1n << 255n) | 111n, (0xffffn << 240n) | 222n, (0xdeadn << 200n) | 333n];
+    for (let i = 0; i < 3; i++) {
+      const cd = sel('set(uint256,uint256)') + W(i) + W(seeds[i]!);
+      const rj = await h.call(aj, cd); const rs = await h.call(as, cd);
+      expect(rj.success).toBe(rs.success);
+    }
+    for (let i = 0; i < 3; i++) {
+      const cd = sel('g(uint256)') + W(i);
+      const rj = await h.call(aj, cd); const rs = await h.call(as, cd);
+      expect(rj.returnHex).toBe(rs.returnHex);
+      expect(rj.returnHex).toBe('0x' + W(seeds[i]!));
+    }
+    for (let s = 0n; s < 4n; s++) expect(await rawSlot(h, aj, s)).toBe(await rawSlot(h, as, s));
+    // OOB index -> identical Panic
+    const oob = sel('g(uint256)') + W(3);
+    const rj = await h.call(aj, oob); const rs = await h.call(as, oob);
+    expect(rj.success).toBe(false); expect(rj.success).toBe(rs.success);
+    expect(rj.returnHex).toBe(rs.returnHex);
+  });
+
+  const JS = `const K = 4n;
+  type P = { a: Arr<u256, K> };
+  class C {
+    s: P;
+    tail: Visible<u256>;
+    set(i: u256, v: u256): External<void> { this.s.a[i] = v; }
+    settail(v: u256): External<void> { this.tail = v; }
+    get g(i: u256): External<u256> { return this.s.a[i]; }
+  }`;
+  const SS = `uint256 constant K = 4;
+  struct P { uint256[K] a; }
+  contract C {
+    P s;
+    uint256 public tail;
+    function set(uint256 i, uint256 v) external { s.a[i] = v; }
+    function settail(uint256 v) external { tail = v; }
+    function g(uint256 i) external view returns (uint256) { return s.a[i]; }
+  }`;
+  it('file-level const K (struct member): seeded read-back + tail slot + raw storage + OOB', async () => {
+    expect(sAccepts(SS)).toBe(true);
+    expect(jAccepts(JS)).toBe(true);
+    const h = await Harness.create();
+    const aj = await h.deploy(bc(JS));
+    const as = await h.deploy(compileSolidity(SPDX + SS, 'C').creation);
+    const seeds = [(1n << 255n) | 7n, (0xabcdn << 230n) | 8n, (0xffn << 248n) | 9n, 42n];
+    for (let i = 0; i < 4; i++) {
+      const cd = sel('set(uint256,uint256)') + W(i) + W(seeds[i]!);
+      await h.call(aj, cd); await h.call(as, cd);
+    }
+    await h.call(aj, sel('settail(uint256)') + W(999n));
+    await h.call(as, sel('settail(uint256)') + W(999n));
+    for (let i = 0; i < 4; i++) {
+      const cd = sel('g(uint256)') + W(i);
+      expect((await h.call(aj, cd)).returnHex).toBe((await h.call(as, cd)).returnHex);
+    }
+    for (let s = 0n; s < 6n; s++) expect(await rawSlot(h, aj, s)).toBe(await rawSlot(h, as, s));
+    const oob = sel('g(uint256)') + W(4);
+    const rj = await h.call(aj, oob); const rs = await h.call(as, oob);
+    expect(rj.success).toBe(false); expect(rj.success).toBe(rs.success);
+    expect(rj.returnHex).toBe(rs.returnHex);
+  });
+
+  // FILE-LEVEL NEGATIVES - solc rejects; JETH must too (no over-acceptance). Each solc mirror asserted reject.
+  const fileNegs: Array<[string, string, string]> = [
+    // a state var shadows the file-level const -> not a compile-time constant length
+    ['statevar shadows file const',
+      `const N = 3n;\nclass C { N: u256; a: Arr<u256, N>; get f(): External<u256> { return this.a[0n]; } }`,
+      `uint256 constant N = 3;\ncontract C { uint256 N; uint256[N] a; function f() external view returns(uint256){return a[0];} }`],
+    // duplicate file-level const -> "Identifier already declared"
+    ['duplicate file const',
+      `const N = 3n;\nconst N = 4n;\nclass C { a: Arr<u256, N>; get f(): External<u256> { return this.a[0n]; } }`,
+      `uint256 constant N = 3;\nuint256 constant N = 4;\ncontract C { uint256[N] a; function f() external view returns(uint256){return a[0];} }`],
+    // file const name collides with a struct type
+    ['file const collides with type',
+      `const N = 3n;\ntype N = { x: u256 };\nclass C { a: Arr<u256, N>; get f(): External<u256> { return this.a[0n]; } }`,
+      `uint256 constant N = 3;\nstruct N { uint256 x; }\ncontract C { uint256[N] a; function f() external view returns(uint256){return a[0];} }`],
+    // a constant EXPRESSION initializer is NOT folded (solc accepts; JETH keeps a clean over-rejection),
+    // and the zero-valued file const rejects on both.
+    ['zero-valued file const',
+      `const N = 0n;\nclass C { a: Arr<u256, N>; get f(): External<u256> { return this.a[0n]; } }`,
+      `uint256 constant N = 0;\ncontract C { uint256[N] a; function f() external view returns(uint256){return a[0];} }`],
+  ];
+  for (const [label, jsrc, ssrc] of fileNegs) {
+    it(`rejects (file-level): ${label}`, () => {
+      expect(sAccepts(ssrc)).toBe(false);
+      expect(jAccepts(jsrc)).toBe(false);
+    });
+  }
+
   // OVER-ACCEPTANCE guard: a bare N from an UNRELATED contract is out of scope; solc rejects, JETH must too.
   it('rejects: bare N from an unrelated contract (scope leak guard)', () => {
     const src = `class O { static N: u256 = 3n; get o(): External<u256> { return N; } }
