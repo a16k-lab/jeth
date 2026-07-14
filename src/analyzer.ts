@@ -858,7 +858,7 @@ export class Analyzer {
    *  target other than `address` (which is unwrapped via checkAddressCall). solc: "Explicit type conversion
    *  not allowed from contract C to <T>" - a contract value is nominal, not a raw scalar/bytesN/address. */
   private rejectContractRefCast(node: ts.Node, t: JethType & { brand: string }, targetName: string): undefined {
-    const name = t.brand.slice(CTREF_PREFIX.length);
+    const name = t.brand.startsWith(CTREF_PREFIX) ? t.brand.slice(CTREF_PREFIX.length) : t.brand; // contract vs interface brand
     this.diags.error(
       node,
       'JETH170',
@@ -8696,6 +8696,19 @@ export class Analyzer {
     // only @external is externally reachable; an unmarked (internal) function is not. Gates the
     // msg.value/@payable rule.
     this.currentExternallyReachable = rf.visibility === 'external';
+    // solc: "Recursive type not allowed for public or external contract function." A recursive struct
+    // (self/mutual reference through a P[] / mapping field) has no finite ABI tuple expansion, so it may not
+    // appear in an EXTERNAL/PUBLIC function's calldata-decoded params or ABI-encoded return (an INTERNAL
+    // function may use it - solc allows that). Screen the signature here (the recursiveRef sentinel would
+    // otherwise let the calldata decoder / return encoder emit a truncated finite tuple = wrong bytes).
+    if (rf.visibility === 'external' || rf.visibility === 'public') {
+      for (const t of [...rf.params.map((p) => p.type), rf.returnType, ...(rf.returnTypes ?? [])]) {
+        if (this.typeContainsRecursiveRef(t)) {
+          this.diags.error(rf.node, 'JETH488', `a recursive type (${displayName(t)}) is not allowed in a public/external function signature (it has no finite ABI encoding)`);
+          return undefined;
+        }
+      }
+    }
     this.currentWritesState = false;
     this.currentReadsState = false;
     this.currentReadsEnv = false;
@@ -20599,6 +20612,13 @@ export class Analyzer {
         );
         return undefined;
       }
+      // A RECURSIVE type (a struct self/mutual-referencing through a P[] / mapping field) has no finite ABI
+      // tuple expansion, so solc rejects abi.encode of it ("This type cannot be encoded."). Screen it here
+      // (a P[] recursive field would otherwise pass the `t.kind === 'array'` clause and lower to wrong bytes).
+      if (this.typeContainsRecursiveRef(t)) {
+        this.diags.error(a, 'JETH173', `abi.${method} cannot encode ${displayName(t)}: a recursive type is not ABI-encodable`);
+        return undefined;
+      }
       // packed: an UNTYPED integer literal (solc type int_const / rational_const) has no fixed byte width,
       // so solc rejects it outright ("Cannot perform packed encoding for a literal. Please convert it to
       // an explicit type first."). The test is SYNTACTIC on the argument, not the folded type: `42`, `0x2a`,
@@ -21687,7 +21707,7 @@ export class Analyzer {
       // CONTRACT-TYPE-VALUE: a contract/interface reference value is NOT payable-castable directly
       // (solc: "Explicit type conversion not allowed from contract C to address payable"); unwrap with
       // address(...) first. The `__ctref:` brand IS an address kind, so screen it ahead of the kind check.
-      if (this.isContractRefType(inner.type)) return this.rejectContractRefCast(node, inner.type, 'address payable');
+      if (this.isNominalAddressValue(inner.type)) return this.rejectContractRefCast(node, inner.type, 'address payable');
       if (inner.type.kind !== 'address') {
         this.diags.error(node, 'JETH171', `payable(...) requires an address operand, got ${displayName(inner.type)}`);
         return undefined;
@@ -21747,7 +21767,7 @@ export class Analyzer {
     // from contract C to <T>"); only `address(c)` (checkAddressCall, a different path) unwraps it. The
     // `__ctref:` brand is an `address` kind, so a bytesN/u160 cast would otherwise slip through the
     // address-convertible allowance - screen it here.
-    if (this.isContractRefType(inner.type)) return this.rejectContractRefCast(node, inner.type, displayName(target));
+    if (this.isNominalAddressValue(inner.type)) return this.rejectContractRefCast(node, inner.type, displayName(target));
     // An integer-literal cast is range-checked at compile time (uint8(300) is an error
     // in solc, not a runtime truncation): retype the literal to the target directly.
     if (inner.kind === 'literalInt' && isInteger(target)) {
