@@ -1018,6 +1018,24 @@ export class Analyzer {
     return false;
   }
 
+  /** True if `t` IS or TRANSITIVELY CONTAINS a recursive struct (a `recursiveRef` sentinel anywhere in its
+   *  field tree). solc forbids a "recursive type" as an event/error PARAMETER (topic0/data encoding has no
+   *  finite tuple expansion), so this screens the event/error member sites. The object graph is acyclic
+   *  (the sentinel breaks every back-edge), so the walk terminates; the `seen` guard is belt-and-suspenders. */
+  private typeContainsRecursiveRef(t: JethType, seen: Set<string> = new Set()): boolean {
+    if (t.kind === 'struct') {
+      if (t.recursiveRef === true) return true;
+      if (t.name) {
+        if (seen.has(t.name)) return false;
+        seen.add(t.name);
+      }
+      return t.fields.some((f) => this.typeContainsRecursiveRef(f.type, seen));
+    }
+    if (t.kind === 'array') return this.typeContainsRecursiveRef(t.element, seen);
+    if (t.kind === 'mapping') return this.typeContainsRecursiveRef(t.value, seen);
+    return false;
+  }
+
   /** Phase 3: walk every struct's field graph, classify and break recursion cycles.
    *  Edges: a struct-typed field or a FIXED-array element is a BY-VALUE edge; a DYNAMIC-array element or
    *  a mapping value is a REFERENCE edge. A cycle that uses only by-value edges is infinite (reject,
@@ -1816,6 +1834,28 @@ export class Analyzer {
       this.diags.error(leaves[1]!, 'JETH041', 'multiple contract classes per file are not supported in the MVP');
       return undefined;
     }
+    // solc: "Functions without implementation must be marked virtual." A bodyless method/getter in an
+    // abstract class must be @virtual (or the native `abstract` member keyword, JETH's spelling of a
+    // bodyless @virtual). The DEPLOYED path catches this transitively (JETH380 / the override rules); the
+    // non-deployable path (JETH040 previously masked it) validates it explicitly so an abstract-only file
+    // matches solc instead of silently accepting an unmarked bodyless declaration. Interface methods are
+    // implicitly virtual (never scanned here - abstractClasses holds only abstract CLASSES).
+    for (const ac of abstractClasses) {
+      for (const m of ac.members) {
+        if (!((ts.isMethodDeclaration(m) || ts.isGetAccessor(m)) && m.body === undefined)) continue;
+        const isVirtual =
+          decoratorNames(m).includes('virtual') ||
+          (ts.getModifiers(m) ?? []).some((mod) => mod.kind === ts.SyntaxKind.AbstractKeyword);
+        if (!isVirtual) {
+          this.diags.error(
+            m,
+            'JETH489',
+            `'${ts.isIdentifier(m.name) ? m.name.text : '<anon>'}' has no implementation and must be marked @virtual (or use the \`abstract\` member keyword)`,
+          );
+        }
+      }
+    }
+    if (this.diags.hasErrors) return undefined;
     // Register the abstract classes (and any bases they reference) so `extends` resolution and C3
     // linearization work exactly as on the normal path.
     this.registerContractClasses();
@@ -6771,6 +6811,12 @@ export class Analyzer {
         );
         continue;
       }
+      // solc: "Internal or recursive type is not allowed as error parameter type." A recursive struct
+      // (self/mutual reference through a P[] / mapping<K,P> field) has no finite ABI tuple expansion.
+      if (this.typeContainsRecursiveRef(t)) {
+        this.diags.error(p, 'JETH488', `@error parameter '${p.name.text}' has a recursive type (${displayName(t)}); a recursive type is not allowed as an error parameter type`);
+        continue;
+      }
       // @error args: static value types, dynamic bytes/string, a DYNAMIC array (G3, head/tail), a
       // STATIC struct / fixed-array (encoded inline in the head, like a non-indexed event param), or
       // a DYNAMIC struct (a head offset + its head/tail blob, like a non-indexed dynamic-struct event
@@ -6854,6 +6900,12 @@ export class Analyzer {
           'JETH229',
           `event parameter '${p.name.text}' has type ${displayName(t)} containing an internal function pointer; an internal type is not allowed as an event parameter type`,
         );
+        continue;
+      }
+      // solc: "Internal or recursive type is not allowed as event parameter type." A recursive struct
+      // (self/mutual reference through a P[] / mapping<K,P> field) has no finite ABI tuple expansion.
+      if (this.typeContainsRecursiveRef(t)) {
+        this.diags.error(p, 'JETH488', `event parameter '${p.name.text}' has a recursive type (${displayName(t)}); a recursive type is not allowed as an event parameter type`);
         continue;
       }
       const indexed = decoratorNames(p).includes('indexed');
