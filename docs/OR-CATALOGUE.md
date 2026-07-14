@@ -815,3 +815,66 @@ sweep found the one axis - contract methods - that per-site guards had all misse
 is DELEGATECALLed and inherits caller callvalue: its dispatcher must omit the non-payable guard, or every
 value-bearing caller into a library miscompiles. (4) A side-effecting trial-type at a hot generic site
 (every `.length`) leaks analyzer state cross-file under isolate:false - use a side-effect-free resolver.
+
+## 2026-07-14 WHOLE-SURFACE HARD AUDIT (16 surfaces, 45 agents, ~120 verified probes; 6 OA fixed, 1 MC open, 17 sound ORs)
+
+A 16-surface adversarial audit (each surface: a solc-differential finder + per-finding adversarial verify)
+of value-types/ops, control-flow, functions/mutability, inheritance/C3, storage, memory/calldata, structs,
+arrays, events/errors, abi, libraries, interfaces, low-level/crypto, proxies/diamonds, native-syntax,
+robustness. Coverage was deep and byte-verified (deploy-both + compare returndata/logs/state/raw-slots):
+control-flow (1000+ probes, 0 divergences), inheritance/C3 (750+, incl. 253-case diamond + 250-case storage
+fuzzers), storage (90, raw-slot + residue), abi (100+, 0 divergences), events/errors (2 fuzzers, 246 cases),
+low-level/crypto (all precompiles + ecrecover vectors), all clean. 24 divergences confirmed:
+
+**6 OVER-ACCEPTANCES FIXED (bar violations; test/audit-hardening.test.ts):**
+- **ARR-SIZE-ALIAS**: `let b: Arr<u256,3> = a` where a is Arr<u256,2> (same element type) - solc rejects as
+  non-convertible; JETH aliased the shorter image, so `b[2]` read PAST it (an OOB adjacent-memory leak, a
+  memory-safety OA). Fixed: the fixed-array localDecl init now guards the source LENGTH (JETH085), not just
+  the element type (src/analyzer.ts checkLocalDecl value-word branch).
+- **LIB-RECEIVE / LIB-FALLBACK**: a native `receive()`/`fallback()` (a method literally named receive/fallback)
+  inside a `static class L` - solc: "Libraries cannot have receive/fallback ether functions." The decorator-
+  only ban missed the bare native form; fixed with a member-name gate in the library member loop (JETH390).
+- **LIB-VIRTUAL / LIB-OVERRIDE**: `@virtual`/`@override` on a library function - solc rejects (a library cannot
+  be inherited). Added both to the library banned-decorator list (JETH390).
+- **DECO-SHAPE-DROP**: a decorator in a non-identifier shape (`@a.nonReentrant` property-access) on a METHOD
+  was SILENTLY DROPPED - a `@a.nonReentrant`/`@storag` typo of `@nonReentrant` yielded an UNGUARDED contract
+  with zero diagnostics (a silently stripped reentrancy guard). Fixed: decoratorNames unwraps parens + surfaces
+  non-standard shapes; the modifier-application collector routes an unknown shape to the resolver -> JETH329.
+  `@(nonReentrant)` (paren) now correctly APPLIES the guard (byte-verified == bare `@nonReentrant`). RESIDUAL
+  (lower severity, not a solc differential - JETH-only decorators have no mirror): a decorator on a CLASS
+  (`@storag`), FIELD, or PARAM position is still silently dropped; a hardening follow-up should reject any
+  decorator outside the position's keep-list.
+
+**1 MISCOMPILE - OPEN (needs a design decision):**
+- **FUNCREF-EQ**: `p == q` / `p != q` on two INTERNAL function pointers whose target functions have BYTE-
+  IDENTICAL bodies (e.g. `a(){return 7n}` and `b(){return 7n}`). solc's EquivalentFunctionCombiner merges the
+  two functions to one code offset, so solc returns `true`; JETH keeps distinct dispatch ordinals and returns
+  `false` - a silent wrong-bytes MC. It does NOT reproduce for same-function or distinct-BODY operands (both
+  byte-identical, covered by internal-fn-pointers.test.ts). Same family as LT5 (funcref ordinal vs solc code
+  offset). Two closures: (a) SOUND - reject funcref `==`/`!=` (fail-closed, but removes a lifted/tested feature
+  whose common case is byte-identical); (b) MATCH - implement solc's function-combining at JETH's funcref-id
+  assignment (invasive, its own MC risk). Left open pending a decision; the common distinct/same-function
+  cases are byte-identical today, only the identical-BODY collision diverges.
+
+**17 SOUND OVER-REJECTIONS (fail-closed, clean diagnostic; catalogued for future lift, none a bar violation):**
+value-types: SHIFT-ASSIGN-SIGNED-LIT (`i256 >>= 1n` bare literal, JETH081). functions: GET-SELF-VIEWCALL (a
+`get` doing `this.g()` to a view external, JETH043 - the self message-call flavor of GET-EXTLIB-VIEW not yet
+extended); QUALIFIED-SELECTOR (`C.g.selector`/`I.g.selector`, JETH074/013 - only `this.g.selector` works).
+structs: RECURSIVE-REF-STRUCT (`type P = { kids: P[] }` / mapping-field self-reference, JETH013 - direct
+`next: P` correctly rejects in both). arrays: UNINIT-ARRAY-LOCAL (`let a: Arr<u256,3>;`, JETH200 - solc
+zero-inits); ARRLIT-DIRECT-INDEX (`[a,b,c][i]`, JETH151 - bind-to-local works). events: CONTRACT-TYPE-PARAM (a
+contract/interface-typed event/error/getter param, JETH041/013 - solc lowers it to `address`). libraries:
+LIB-CONST-IN-CONST (`static M = L.K + 1n`, JETH048 - a library constant is not foldable into another
+constant's init); LIB-MODIFIER (`@modifier` in a library, JETH390). interfaces: IFACE-VALUE-TYPE (an interface
+name as a field/param/return/self-ref value type, JETH013 - only `I(addr).m()` inline works); IFACE-EVENT-MEMBER
++ IFACE-ERROR-MEMBER (`E: event<{...}>`/`Bad: error<{...}>` in an interface, JETH341); TYPED-CATCH (`catch
+Error(string)`/`catch Panic(uint)`, JETH074/361 - `catch (e: bytes)` works). native-syntax: CONST-ARRAY-DIM
+(`Arr<u256, N>` with a static-constant N, JETH012); ABSTRACT-ONLY-FILE (a file whose only class is abstract,
+JETH040); MULTI-CONTRACT-FILE (more than one deployable class per file, JETH041 - documented MVP limit).
+
+Two surfaces (memory-calldata, proxies-diamonds) returned no confirmed findings; their diamond `_init`
+degenerate-revert-reason candidate was REFUTED (JETH-only generator, no solc program to be identical to).
+LESSONS: a decorator collector that reads only identifier/call shapes silently DROPS a mis-shaped decorator
+(surface every shape, reject the unknown); a memory-alias local-decl must guard the fixed LENGTH, not just the
+element type, or an in-bounds index reads OOB; a library-context validation gate must cover the NATIVE special-
+entry name (receive/fallback), not only the decorator form.

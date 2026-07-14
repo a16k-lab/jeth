@@ -223,17 +223,23 @@ function hoistInClassEnums(text: string): { text: string; errors: ClassEnumModif
 }
 
 /** Extract decorator names (e.g. ["contract"], ["external","view"]) from a node. */
+/** Canonical decorator name for one decorator expression. `@name` and `@name(...)` yield `name`;
+ *  a PARENTHESIZED wrapper `@(name)` / `@(name(...))` is unwrapped so it is not silently dropped. Any
+ *  OTHER shape (a property access `@a.b`, a computed/other expression) yields its raw source text, which
+ *  is never a kept-decorator name, so the ban (JETH329/JETH481) REJECTS it instead of silently dropping
+ *  it - closing a soundness hole where e.g. `@a.nonReentrant` stripped an effective reentrancy guard. */
+function oneDecoratorName(e: ts.Expression): string {
+  if (ts.isParenthesizedExpression(e)) return oneDecoratorName(e.expression);
+  if (ts.isIdentifier(e)) return e.text;
+  if (ts.isCallExpression(e) && ts.isIdentifier(e.expression)) return e.expression.text;
+  return e.getText().trim(); // non-standard shape -> an unknown name the ban rejects (not dropped)
+}
+
 export function decoratorNames(node: ts.Node): string[] {
   if (!ts.canHaveDecorators(node)) return [];
   const decs = ts.getDecorators(node);
   if (!decs) return [];
-  const names: string[] = [];
-  for (const d of decs) {
-    const e = d.expression;
-    if (ts.isIdentifier(e)) names.push(e.text);
-    else if (ts.isCallExpression(e) && ts.isIdentifier(e.expression)) names.push(e.expression.text);
-  }
-  return names;
+  return decs.map((d) => oneDecoratorName(d.expression));
 }
 
 /** Decorator names on a constructor. TS reports `ts.canHaveDecorators(ctor) === false`
@@ -241,15 +247,9 @@ export function decoratorNames(node: ts.Node): string[] {
  *  guarded `decoratorNames` above returns [] and would silently drop a ctor's @payable.
  *  The parser still records the decorators, reachable via ts.getDecorators directly. */
 export function ctorDecoratorNames(node: ts.ConstructorDeclaration): string[] {
-  const names: string[] = [];
   // ts.getDecorators' type excludes ConstructorDeclaration (decorating a ctor is not legal TS),
   // but the parser still records them and the call works at runtime; cast past the type guard.
-  for (const d of ts.getDecorators(node as unknown as ts.HasDecorators) ?? []) {
-    const e = d.expression;
-    if (ts.isIdentifier(e)) names.push(e.text);
-    else if (ts.isCallExpression(e) && ts.isIdentifier(e.expression)) names.push(e.expression.text);
-  }
-  return names;
+  return (ts.getDecorators(node as unknown as ts.HasDecorators) ?? []).map((d) => oneDecoratorName(d.expression));
 }
 
 /** Return the decorator CallExpression for a given decorator name, if it was

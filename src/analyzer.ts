@@ -1984,17 +1984,29 @@ export class Analyzer {
       }
       if (!ts.isMethodDeclaration(member)) continue;
       const decs = decoratorNames(member);
+      const mname = ts.isIdentifier(member.name) ? member.name.text : '<anon>';
+      // A NATIVE special entry - a method literally named receive/fallback - has no place in a library:
+      // solc rejects "Libraries cannot have receive/fallback ether functions." The decorator-form
+      // @receive/@fallback is caught by the `banned` check below; this catches the bare native form.
+      if (mname === 'receive' || mname === 'fallback') {
+        this.diags.error(member, 'JETH390', `@library '${name}' cannot declare a ${mname} function (a library has no runtime entry points)`);
+        continue;
+      }
       // A library function is EITHER internal (inlined, Phase A) OR @external (delegatecall, Phase B).
       // @receive/@fallback are runtime entries with no place in a library; @payable is rejected because
-      // a library delegatecall cannot carry value (solc: "Library functions cannot be payable.").
-      const banned = (['payable', 'receive', 'fallback'] as const).find((d) => decs.includes(d));
+      // a library delegatecall cannot carry value (solc: "Library functions cannot be payable."); @virtual
+      // and @override are rejected because a library cannot be inherited, so they are meaningless (solc:
+      // "Library functions cannot be 'virtual'." / "override ... does not override anything.").
+      const banned = (['payable', 'receive', 'fallback', 'virtual', 'override'] as const).find((d) => decs.includes(d));
       if (banned) {
         this.diags.error(
           member,
           'JETH390',
           banned === 'payable'
-            ? `@library '${name}' method '${ts.isIdentifier(member.name) ? member.name.text : '<anon>'}' cannot be @payable (a library delegatecall cannot carry value)`
-            : `@library '${name}' method '${ts.isIdentifier(member.name) ? member.name.text : '<anon>'}' cannot be @${banned} (a library has no runtime entry points)`,
+            ? `@library '${name}' method '${mname}' cannot be @payable (a library delegatecall cannot carry value)`
+            : banned === 'virtual' || banned === 'override'
+              ? `@library '${name}' method '${mname}' cannot be @${banned} (a library cannot be inherited, so @${banned} is meaningless)`
+              : `@library '${name}' method '${mname}' cannot be @${banned} (a library has no runtime entry points)`,
         );
         continue;
       }
@@ -7582,16 +7594,20 @@ export class Analyzer {
     ]);
     const appliedModifiers: { name: string; argNodes: ts.Expression[]; typeArgs?: readonly ts.TypeNode[]; site: ts.Node }[] = [];
     for (const d of ts.getDecorators(member) ?? []) {
-      const e = d.expression;
-      if (ts.isIdentifier(e) && !BUILTIN_FN_DECORATORS.has(e.text)) {
-        appliedModifiers.push({ name: e.text, argNodes: [], site: d });
-      } else if (
-        ts.isCallExpression(e) &&
-        ts.isIdentifier(e.expression) &&
-        !BUILTIN_FN_DECORATORS.has(e.expression.text)
-      ) {
+      let e = d.expression;
+      while (ts.isParenthesizedExpression(e)) e = e.expression; // `@(m)` / `@((m(...)))` -> unwrap to `m`
+      if (ts.isIdentifier(e)) {
+        if (!BUILTIN_FN_DECORATORS.has(e.text)) appliedModifiers.push({ name: e.text, argNodes: [], site: d });
+      } else if (ts.isCallExpression(e) && ts.isIdentifier(e.expression)) {
         // L15: `@lim<u256>(3n)` carries explicit generic-modifier type arguments on the call form.
-        appliedModifiers.push({ name: e.expression.text, argNodes: [...e.arguments], typeArgs: e.typeArguments, site: d });
+        if (!BUILTIN_FN_DECORATORS.has(e.expression.text))
+          appliedModifiers.push({ name: e.expression.text, argNodes: [...e.arguments], typeArgs: e.typeArguments, site: d });
+      } else {
+        // A non-standard decorator SHAPE (a property access `@a.b`, a computed expression, ...) names no
+        // builtin decorator and no modifier. Collect it under its raw text so modifier resolution REJECTS it
+        // (JETH329, "does not name a modifier") instead of SILENTLY DROPPING it - dropping `@a.nonReentrant`
+        // would strip an effective reentrancy guard and yield an unguarded contract with no diagnostic.
+        appliedModifiers.push({ name: e.getText().trim(), argNodes: [], site: d });
       }
     }
 
@@ -13343,6 +13359,19 @@ export class Analyzer {
           decl.initializer,
           'JETH900',
           `a fixed-array memory local must be initialized from a literal, another memory fixed array, a fixed-array calldata parameter, or a storage fixed array`,
+        );
+        return;
+      }
+      // solc treats fixed arrays of different SIZE as non-implicitly-convertible: `let b: Arr<u256,3> = a`
+      // where a is Arr<u256,2> must REJECT. Aliasing/copying the shorter source image under the longer
+      // declared type would let an in-bounds index read/write PAST the source (an OOB memory leak), so this
+      // is a memory-safety over-acceptance, not a mere typing gap. checkExpr already matched the ELEMENT
+      // type against `declared`; the source's fixed LENGTH is guarded explicitly here.
+      if (e.type.kind === 'array' && e.type.length !== undefined && e.type.length !== declared.length) {
+        this.diags.error(
+          decl.initializer,
+          'JETH085',
+          `cannot initialize ${displayName(declared)} from ${displayName(e.type)} (fixed arrays of different size are not convertible)`,
         );
         return;
       }
