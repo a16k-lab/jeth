@@ -1263,6 +1263,12 @@ export class Analyzer {
     const methods = new Map<string, InterfaceMethod[]>();
     for (const member of iface.members) {
       if (!ts.isMethodSignature(member)) {
+        // IFACE-EVENT-MEMBER / IFACE-ERROR-MEMBER: solc allows an `event E(...)` / `error Bad(...)` member in
+        // an interface. Route the native `E: event<{...}>` / `Bad: error<{...}>` field through the same
+        // collector the contract/library forms use, SCOPED to the interface name - inert (an interface is not
+        // a library, so no emit/revert path resolves it) and excluded from type(I).interfaceId (which sums
+        // only method selectors). This ACCEPTS the declaration byte-identically without enabling any emit.
+        if (ts.isPropertySignature(member) && this.collectNativeErrorOrEventField(member, name)) continue;
         this.diags.error(member, 'JETH341', `interface '${name}' may only declare methods (no fields, index/call signatures, or accessors)`);
         continue;
       }
@@ -6675,7 +6681,7 @@ export class Analyzer {
    *  The object-type fields become the declaration's ordered parameters; an `indexed<T>` field type
    *  unwraps to an @indexed parameter of T. A synthesized decorated bodyless method is routed through
    *  collectErrorDecl/collectEvent so every gate + the selector/topic0 are identical to the decorator form. */
-  private collectNativeErrorOrEventField(member: ts.PropertyDeclaration, libScope?: string): boolean {
+  private collectNativeErrorOrEventField(member: ts.PropertyDeclaration | ts.PropertySignature, libScope?: string): boolean {
     const t = member.type;
     if (!t || !ts.isTypeReferenceNode(t) || !ts.isIdentifier(t.typeName)) return false;
     const kind = t.typeName.text;
@@ -6693,7 +6699,7 @@ export class Analyzer {
       this.diags.error(member, 'JETH353', `an ${kind} declaration cannot be #-private (an ${kind} has no visibility)`);
       return true;
     }
-    if (member.initializer) {
+    if (ts.isPropertyDeclaration(member) && member.initializer) {
       this.diags.error(member.initializer, 'JETH353', `an ${kind} declaration cannot have an initializer`);
       return true;
     }
@@ -12302,8 +12308,14 @@ export class Analyzer {
     // A self-call is NOT @pure/@view-clean: a CALL frame may mutate this contract's state (and reads
     // the environment); a STATICCALL reads the environment. Setting writesState for a CALL (and
     // readsEnv for a STATICCALL) makes a @pure caller that uses this.f() rejected like solc.
-    if (op === 'call') this.currentWritesState = true;
-    else this.currentReadsEnv = true;
+    // GET-SELF-VIEWCALL (mirrors the GET-EXTLIB-VIEW lift): register the callee on the purity call graph so
+    // the transitive-purity fixpoint propagates g's REAL post-inference mutability into f. A `get` accessor
+    // then DEFERS the write decision to the fixpoint instead of eagerly guessing a write: f is accepted as
+    // `view` when g is read-only, and still rejected (JETH043) when g writes. A non-get caller keeps the
+    // conservative eager write. The emitted op (STATICCALL vs CALL) is unchanged, so bytecode is identical.
+    this.currentCallees.add(this.fkey(callee));
+    if (op === 'call' && !this.currentIsGetter) this.currentWritesState = true;
+    else if (op === 'staticcall') this.currentReadsEnv = true;
 
     const call: Expr & { kind: 'extCall' } = {
       kind: 'extCall',
@@ -13324,15 +13336,12 @@ export class Analyzer {
         this.diags.error(decl, 'JETH068', `redeclaration of '${decl.name.text}' in the same scope`);
         return;
       }
-      if (!decl.initializer) {
-        this.diags.error(
-          decl,
-          'JETH200',
-          `a fixed-array memory local must be initialized (e.g. let a: ${displayName(declared)} = [...])`,
-        );
-        return;
-      }
-      const e = this.checkExpr(decl.initializer, declared);
+      // UNINIT-ARRAY-LOCAL: solc ZERO-INITIALIZES an uninitialized fixed-array memory local
+      // (`uint256[3] memory a;`). Synthesize the same all-zero image the explicit `= [0n, 0n, 0n]` form
+      // produces - defaultStaticValue is the verified encoder used for `let p: P;` and is byte-identical to
+      // solc. Only fixed-length VALUE-element arrays (a static image) reach here; the dynamic-array uninit
+      // case is a separate, still-rejected site (solc's uninit dynamic memory array is a null pointer).
+      const e = decl.initializer ? this.checkExpr(decl.initializer, declared) : this.defaultStaticValue(declared);
       if (!e) return;
       const fromStorage = e.kind === 'arrayValue' && e.arr.base.kind === 'fixedArray';
       // a FIXED value-array ELEMENT of a MEMORY outer array (let row: Arr<u256,N> = xs[i], xs: Arr<u256,N>[]):
@@ -14104,7 +14113,7 @@ export class Analyzer {
       // writes the SAME location - byte-identical to solc (was rejected as JETH331). The RHS temp is
       // emitted before the index temps to preserve solc's RHS-first order (verified: a RHS that
       // mutates the lvalue is observed by the subsequent read).
-      const rhsChecked = this.checkExpr(e.right, target.type);
+      const rhsChecked = this.checkExpr(e.right, binOp === '<<' || binOp === '>>' ? undefined : target.type); // SHIFT-ASSIGN: amount typed by itself
       if (!rhsChecked) return;
       const rname = this.freshHoistName();
       this.declareLocal(rname, rhsChecked.type);
@@ -14121,7 +14130,11 @@ export class Analyzer {
       return;
     }
     const left = this.lvalueAsExpr(target);
-    const rhs = this.checkExpr(e.right, target.type);
+    // SHIFT-ASSIGN: a shift AMOUNT is typed by itself, not by the LHS (solc: `a >>= 1n` types `1` as its
+    // own natural unsigned type, exactly like the already-accepted non-assign `a >> 1n`). Threading the
+    // LHS type here would contextually SIGN a bare literal amount and trip the signed-amount reject
+    // (JETH081); the shift result still follows the left operand and coerces back to target.type below.
+    const rhs = this.checkExpr(e.right, binOp === '<<' || binOp === '>>' ? undefined : target.type);
     if (!rhs) return;
     const combined = this.buildBinary(binOp, left, rhs, e);
     if (!combined) return;
@@ -14168,7 +14181,7 @@ export class Analyzer {
       // would move the side effect - conditionally, per-iteration, or out of order - so it stays a
       // sound JETH331 reject rather than risk a miscompile.
       if (this.exprHoist && this.isUnconditionalStatementExpr(e)) {
-        const rhsChecked = this.checkExpr(e.right, target.type);
+        const rhsChecked = this.checkExpr(e.right, binOp === '<<' || binOp === '>>' ? undefined : target.type); // SHIFT-ASSIGN: amount typed by itself
         if (!rhsChecked) return undefined;
         const rname = this.freshHoistName();
         this.declareLocal(rname, rhsChecked.type);
@@ -14191,7 +14204,7 @@ export class Analyzer {
       return undefined;
     }
     const left = this.lvalueAsExpr(target);
-    const rhs = this.checkExpr(e.right, target.type);
+    const rhs = this.checkExpr(e.right, binOp === '<<' || binOp === '>>' ? undefined : target.type); // SHIFT-ASSIGN: amount typed by itself
     if (!rhs) return undefined;
     const combined = this.buildBinary(binOp, left, rhs, e);
     if (!combined) return undefined;
@@ -15346,57 +15359,39 @@ export class Analyzer {
     // to have an ABI selector; overloading among the @external ones makes the reference ambiguous.
     const cls = this.classByName.get(typeName);
     if (cls) {
-      const declared = cls.members.filter(
-        (mem): mem is ts.MethodDeclaration =>
-          ts.isMethodDeclaration(mem) && ts.isIdentifier(mem.name) && mem.name.text === memberName,
-      );
+      // QUALIFIED-SELECTOR: resolve `memberName` among the functions DECLARED DIRECTLY in `typeName` (solc
+      // rejects an INHERITED member via the derived name) via the COLLECTED candidate set - so NATIVE forms
+      // (a `get g()` accessor, an `f(): External<T>` marker method) are recognized, not just @external-
+      // DECORATED MethodDeclarations. definingContract pins direct declaration. The produced bytes4 equals
+      // the own-function `this.g.selector` path (functionSelectorOf), so this is byte-identical to it.
+      const declared = (this.candidatesByName.get(memberName) ?? []).filter((f) => f.definingContract === typeName);
       if (declared.length === 0) {
         this.diags.error(
           node,
           'JETH074',
-          `'${typeName}' has no member '${memberName}' (a qualified .selector resolves only methods declared directly in that contract, not inherited ones)`,
+          `'${typeName}' has no member '${memberName}' (a qualified .selector resolves only functions declared directly in that contract, not inherited ones)`,
         );
         return undefined;
       }
-      const external = declared.filter((mem) => decoratorNames(mem).includes('external'));
-      if (external.length === 0) {
+      const exposed = declared.filter((f) => f.visibility === 'external' || f.visibility === 'public');
+      if (exposed.length === 0) {
         this.diags.error(
           node,
           'JETH074',
-          `.selector requires an @external function ('${typeName}.${memberName}' is internal and has no ABI selector)`,
+          `.selector requires an external/public function ('${typeName}.${memberName}' is internal/private and has no ABI selector)`,
         );
         return undefined;
       }
-      if (external.length > 1) {
+      if (exposed.length > 1) {
         this.diags.error(
           node,
           'JETH074',
-          `.selector on overloaded function '${typeName}.${memberName}' is ambiguous (it has ${external.length} @external overloads)`,
+          `.selector on overloaded function '${typeName}.${memberName}' is ambiguous (it has ${exposed.length} external/public overloads)`,
         );
         return undefined;
       }
-      const m = external[0]!;
-      // Resolve the parameter types EXACTLY as the collection path does (resolveType against the same
-      // struct/alias registry). Use a throwaway diagnostics bag so a speculative resolution of a method
-      // already collected elsewhere cannot double-report; a genuinely unresolvable param type falls back
-      // to a JETH074 here (the method is unusable as a selector source).
-      const scratch = new DiagnosticBag(this.sourceFile, this.sourceFile.fileName);
-      const ptypes: JethType[] = [];
-      let bad = false;
-      for (const p of m.parameters) {
-        const t = resolveType(p.type, scratch, this.structsByName);
-        if (!t) {
-          bad = true;
-          break;
-        }
-        ptypes.push(t);
-      }
-      if (bad) {
-        this.diags.error(node, 'JETH074', `cannot resolve the signature of '${typeName}.${memberName}' for .selector`);
-        return undefined;
-      }
-      const sig = functionSignature(memberName, ptypes);
-      const selector = functionSelector(sig);
+      const f = exposed[0]!;
+      const selector = functionSelector(functionSignature(f.name, f.params.map((p) => p.type)));
       return { kind: 'literalInt', type: { kind: 'bytesN', size: 4 }, value: BigInt('0x' + selector) << 224n };
     }
     return 'not-a-type';
@@ -21592,6 +21587,26 @@ export class Analyzer {
     // parenthesized
     if (ts.isParenthesizedExpression(node)) return this.checkExpr(node.expression, expected);
 
+    // ARRLIT-DIRECT-INDEX: `[a, b, c][i]` - solc materializes the array literal into a memory fixed array
+    // then indexes. Desugar to the byte-identical `let __t: Arr<E,N> = [a,b,c]; __t[i]` via the statement
+    // hoist buffer, but ONLY as a WHOLE-STATEMENT value (isUnconditionalStatementExpr), so the literal's
+    // elements evaluate in source order exactly where solc evaluates them (the bind-to-a-local form this
+    // desugars into is already proven byte-identical). In a deeper position it falls through to the reject.
+    if (
+      ts.isElementAccessExpression(node) &&
+      node.argumentExpression &&
+      ts.isArrayLiteralExpression(node.expression) &&
+      this.exprHoist &&
+      this.isUnconditionalStatementExpr(node)
+    ) {
+      const litType = this.checkExprQuiet(node.expression)?.type;
+      if (litType && litType.kind === 'array' && litType.length !== undefined) {
+        const tmpRead = this.materializeAggregateRhsToTemp(node.expression, litType, this.exprHoist);
+        if (tmpRead)
+          return this.checkExpr(this.synth(ts.factory.createElementAccessExpression(tmpRead, node.argumentExpression), node), expected);
+      }
+    }
+
     // ADDRESS-TAKING an internal function as a function-pointer value: when the EXPECTED type is a
     // funcref and `node` is a bare function name `f` or `this.f` (NOT a call), resolve it to a stable
     // dispatch id. Placed before every other resolver so `this.inc` / `inc` in a funcref position is a
@@ -25727,7 +25742,10 @@ export class Analyzer {
           : ts.isPropertyAccessExpression(n) && n.expression.kind === ts.SyntaxKind.ThisKeyword
             ? n.name.text
             : undefined;
-      if (name === undefined) return undefined;
+      if (name === undefined) {
+        const lq = this.libQualifiedConst(n); // LIB-CONST-IN-CONST: a bool `L.K` folds like `C.K`
+        return lq && typeof lq.value === 'boolean' ? lq.value : undefined;
+      }
       const c = this.constantsByName.get(name);
       return c && typeof c.value === 'boolean' ? c.value : undefined;
     };
@@ -25939,6 +25957,17 @@ export class Analyzer {
 
   /** Fold a node that denotes a compile-time INTEGER: a reference to another integer @constant (a bare
    *  name not shadowed by a local, or `this.K`), or `type(T).max/.min`. Returns the value or undefined. */
+  /** LIB-CONST-IN-CONST: a QUALIFIED library constant `L.K` (solc's `L.internalConstant`) resolves to the
+   *  same folded {value, type} a same-class `C.K` does, so it folds identically into another constant's
+   *  initializer (inheriting the exact same wrap/reject behavior - no new miscompile). Guarded by
+   *  libraryBindsInScope so a contract member named like the library shadows it. */
+  private libQualifiedConst(node: ts.Expression): { value: bigint | boolean | Uint8Array; type: JethType } | undefined {
+    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && this.libraryBindsInScope(node.expression.text)) {
+      return this.libraryConstantsByName.get(node.expression.text)?.get(node.name.text);
+    }
+    return undefined;
+  }
+
   private constIntRef(node: ts.Expression): bigint | undefined {
     if (ts.isIdentifier(node) && !this.lookupLocal(node.text)) {
       const c = this.constantsByName.get(node.text);
@@ -25948,6 +25977,8 @@ export class Analyzer {
       const c = this.constantsByName.get(node.name.text);
       if (c && typeof c.value === 'bigint' && isInteger(c.type)) return c.value;
     }
+    const lq = this.libQualifiedConst(node); // LIB-CONST-IN-CONST: fold `L.K` like `C.K`
+    if (lq && typeof lq.value === 'bigint' && isInteger(lq.type)) return lq.value;
     if (
       ts.isPropertyAccessExpression(node) &&
       (node.name.text === 'max' || node.name.text === 'min') &&
@@ -25981,9 +26012,12 @@ export class Analyzer {
     if (ts.isIdentifier(node) && !this.lookupLocal(node.text)) nm = node.text;
     else if (ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword)
       nm = node.name.text;
-    if (nm === undefined) return undefined;
-    const c = this.constantsByName.get(nm);
-    return c && typeof c.value === 'bigint' && isInteger(c.type) ? c.type : undefined;
+    if (nm !== undefined) {
+      const c = this.constantsByName.get(nm);
+      return c && typeof c.value === 'bigint' && isInteger(c.type) ? c.type : undefined;
+    }
+    const lq = this.libQualifiedConst(node); // LIB-CONST-IN-CONST: a typed `L.K` types like `C.K`
+    return lq && typeof lq.value === 'bigint' && isInteger(lq.type) ? lq.type : undefined;
   }
 
   /** True iff `node` (recursively, modulo parentheses) contains a TYPED constant operand: a cast
@@ -26178,6 +26212,8 @@ export class Analyzer {
     {
       const rt = this.constTypedRefType(node);
       if (rt !== undefined) {
+        const lq = this.libQualifiedConst(node); // LIB-CONST-IN-CONST: a typed `L.K` evaluates like `C.K`
+        if (lq && typeof lq.value === 'bigint') return { value: lq.value, type: rt };
         const nm = ts.isIdentifier(node) ? node.text : (node as ts.PropertyAccessExpression).name.text;
         const c = this.constantsByName.get(nm)!;
         return { value: c.value as bigint, type: rt };

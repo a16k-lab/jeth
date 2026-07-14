@@ -443,18 +443,18 @@ describe('F3 adv: rejection probes (must diagnose, never crash, never silently a
     expect(dup.every((c) => !c.startsWith('CRASH'))).toBe(true);
   });
 
-  it('JETH043: a read-only get cannot make a this.f() external self-call (native twin of the pure restriction)', () => {
+  it('GET-SELF-VIEWCALL (lifted 2026-07-14): a get MAY this.f() a view/pure external self-call; a WRITER callee still JETH043', () => {
     // this.f(...) to an external f is a real external message-call to address(this). A read-only `get`
-    // (the native carrier of the old @pure/@view intent, since mutability is now inferred) may NOT make
-    // it - an external CALL can re-enter and modify state - so JETH rejects it with the read-only
-    // violation JETH043. Still a rejection probe (never a silent accept); a NON-get caller doing
-    // this.f(...) compiles byte-identically (external-self-call.test.ts).
+    // calling a VIEW/PURE external self-call defers to the purity fixpoint (solc: view-calls-view) and is
+    // ACCEPTED. Calling a state-WRITING external is still JETH043 (solc rejects a view fn calling a non-view
+    // external). Both are byte-identical to solc; a NON-get caller was always accepted (external-self-call).
     expect(
       jethCodes(
-        base(
-          `get f(a: u256, b: u256): External<u256> { return a + b; }\nget t(): External<u256> { return this.f({ a: 1n, b: 2n }); }`,
-        ),
+        base(`get f(a: u256, b: u256): External<u256> { return a + b; }\nget t(): External<u256> { return this.f({ a: 1n, b: 2n }); }`),
       ),
+    ).toEqual(['OK']);
+    expect(
+      jethCodes(base(`x: u256;\nsetx(v: u256): External<void> { this.x = v; }\nget t(): External<u256> { this.setx(5n); return 1n; }`)),
     ).toContain('JETH043');
   });
 

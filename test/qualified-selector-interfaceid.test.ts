@@ -92,16 +92,24 @@ describe('type-qualified .selector and type(I).interfaceId: byte-identical vs so
     );
   });
 
-  it('negative: contract-NAME-qualified C.m.selector rejects natively (JETH074); use this.m.selector', () => {
-    // The qualified-selector resolver keys on the @external decorator, which native methods do not carry,
-    // so `ClassName.method.selector` is unresolvable in native mode (solc still accepts it - hence a
-    // JETH-only reject rather than a bothReject).
-    const j = jethCompile(
+  it('LIFTED: contract-NAME-qualified C.m.selector resolves a DIRECTLY-declared native member, byte-identical', async () => {
+    // The resolver now uses the COLLECTED candidate set (native `get`/`External<T>` forms), scoped to
+    // members whose definingContract == the qualifying type - exactly solc's rule (verified 2026-07-14):
+    // C.m.selector (m direct in C) ACCEPTs in both; C.g.selector (g inherited from A) REJECTs in both.
+    await matchPositive(
       `abstract class A { get g(x: u256): External<u256> { return x; } }
        class C extends A { get m(a: address, b: bool): External<u256> { return 0n; } get f(): External<bytes4> { return C.m.selector; } }`,
+      `abstract contract A { function g(uint256 x) external view virtual returns(uint256){ return x; } }
+       contract C is A { function m(address a, bool b) external pure returns(uint256){ return 0; } function f() external pure returns(bytes4){ return C.m.selector; } }`,
+      ['f()'],
     );
-    expect(j.ok).toBe(false);
-    expect(j.codes).toContain('JETH074');
+    // an INHERITED member accessed via the DERIVED name is not directly-declared -> BOTH reject.
+    const jInh = jethCompile(`abstract class A { get g(x: u256): External<u256> { return x; } }
+       class C extends A { get f(): External<bytes4> { return C.g.selector; } }`);
+    expect(jInh.ok).toBe(false);
+    expect(jInh.codes).toContain('JETH074');
+    expect(solOk(`abstract contract A { function g(uint256 x) external view virtual returns(uint256){ return x; } }
+       contract C is A { function f() external pure returns(bytes4){ return C.g.selector; } }`)).toBe(false);
   });
 
   it('positive: selector with struct/array/bytes params uses the canonical tuple form', async () => {

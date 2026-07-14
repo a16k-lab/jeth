@@ -886,3 +886,42 @@ LESSONS: a decorator collector that reads only identifier/call shapes silently D
 (surface every shape, reject the unknown); a memory-alias local-decl must guard the fixed LENGTH, not just the
 element type, or an in-bounds index reads OOB; a library-context validation gate must cover the NATIVE special-
 entry name (receive/fallback), not only the decorator form.
+
+### 2026-07-14 OR-TRIAGE + 8 LIFTS (of the 17 above; each re-probed on main + checked vs tests/docs/commits first)
+
+Per the user, EVERY one of the 17 was triaged against the current codebase BEFORE lifting (a 16-agent
+workflow re-probing solc parity + grepping test/docs/git): none was already-fixed; 2 are deliberate rejects;
+8 were genuinely open + byte-identically liftable and are LIFTED; 6 are LIFTABLE-HARD/low-value and KEPT.
+Regression suite test/lift-audit-ors.test.ts (deploy-both byte/behaviour diff per row). Suite 457/4260.
+
+**8 LIFTED byte-identical:**
+- **SHIFT-ASSIGN-SIGNED-LIT** (JETH081->accept): `i256 >>= 1n`. The shift AMOUNT is now typed by itself, not
+  the LHS (4 compound-assign sites), exactly as the already-accepted `a >> 1n`. Signed-VARIABLE amount still JETH081.
+- **UNINIT-ARRAY-LOCAL** (JETH200->accept): `let a: Arr<u256,3>;` synthesizes the all-zero image via
+  defaultStaticValue (byte-identical to solc `T[N] memory a;`). Dynamic-array uninit still rejects.
+- **QUALIFIED-SELECTOR** (JETH074->accept): `C.g.selector` resolves the DIRECTLY-declared member via the
+  collected candidate set (native `get`/`External<T>` forms), scoped by definingContract == the type - EXACTLY
+  solc's rule (verified: `C.m.selector` direct accepts, `C.g.selector` inherited-via-derived rejects in both).
+- **IFACE-EVENT-MEMBER / IFACE-ERROR-MEMBER** (JETH341->accept): an `E: event<{...}>` / `Bad: error<{...}>`
+  member in an interface routes to the shared collector, scoped to the interface (inert; interfaceId unchanged).
+- **GET-SELF-VIEWCALL** (JETH043->accept): a `get` calling `this.g()` to a view/pure external defers the write
+  to the purity fixpoint (mirrors GET-EXTLIB-VIEW); a writer callee still JETH043. Behavioural parity (self-calls
+  are behaviour-identical, not byte-identical, in JETH - like external-self-call.test.ts).
+- **LIB-CONST-IN-CONST** (JETH048->accept): a library constant `L.K` folds into a contract constant's
+  initializer exactly like the same-class `C.K` (constIntRef/constTypedRefType/evalTypedConst/foldConstBool),
+  inheriting the identical wrap/reject behaviour (no new MC path); a shadowing member blocks the fold.
+- **ARRLIT-DIRECT-INDEX** (JETH151->accept): `[a,b,c][i]` desugars to `let __t = [a,b,c]; __t[i]` via the
+  statement hoist buffer (whole-statement context only, for source-order eval safety); OOB Panic byte-identical.
+
+**2 KEPT as DELIBERATE rejects (verified, do NOT lift):** TYPED-CATCH (`catch Error(string)`/`catch Panic(uint)`
+JETH074/361 - the native `catch (e: bytes)` + `this.reason`/`this.panic` forms work + are byte-identical, pinned
+in try-catch.test.ts) and MULTI-CONTRACT-FILE (JETH041 - the one-contract-per-file MVP limit, pinned in
+native-mode-declarations.test.ts:93/137; per-file + multi-file-import is the model).
+
+**6 KEPT as LIFTABLE-HARD / low-value (open, documented):** CONST-ARRAY-DIM (needs a constant environment
+threaded through resolveType; bare-literal `Arr<u256,3>` already works), RECURSIVE-REF-STRUCT (self-ref through
+a reference-type field), CONTRACT-TYPE-PARAM (a contract/interface value lowered to `address` - deep; the repro
+also hit the MULTI-CONTRACT limit), IFACE-VALUE-TYPE (a first-class interface value type - only `I(addr).m()`
+works), LIB-MODIFIER (no native library-modifier surface), ABSTRACT-ONLY-FILE (a no-deployable compile unit -
+degenerate, non-run-verifiable). LESSON (the user's): a differential finder can re-report an already-lifted or
+deliberate OR - re-probe on current main + check the tests/docs/commits BEFORE scoping any lift.
