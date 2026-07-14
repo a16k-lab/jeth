@@ -64,6 +64,13 @@ export function resolveType(
   node: ts.TypeNode | undefined,
   diags: DiagnosticBag,
   structs?: Map<string, JethType>,
+  // CONST-ARRAY-DIM: resolve a BARE-identifier integer constant used as an `Arr<T, N>` length to its
+  // bigint. The analyzer returns the constant's compile-time integer value, or undefined for anything
+  // that is not an in-scope whole-integer constant (leaving the JETH012 reject). solc 0.8.35 accepts
+  // ONLY a bare name here (it rejects every qualified `C.N`/`L.N` form), so the Arr branch only calls
+  // this for a plain identifier. A resolved dimension produces the SAME JethType as the bare-literal
+  // form `Arr<u256, 3>`, so it is byte-identical to solc's `uint256[N]`.
+  constDim?: (name: string) => bigint | undefined,
 ): JethType | undefined {
   if (!node) {
     return undefined;
@@ -71,7 +78,7 @@ export function resolveType(
   // A parenthesized type `(T)` -> resolve the inner type. Needed for a dynamic array of an internal
   // function pointer written `((x: T) => R)[]`: the `[]` binds tighter than `=>`, so the element must be
   // parenthesized, giving an ArrayTypeNode whose elementType is a ParenthesizedTypeNode wrapping the arrow.
-  if (ts.isParenthesizedTypeNode(node)) return resolveType(node.type, diags, structs);
+  if (ts.isParenthesizedTypeNode(node)) return resolveType(node.type, diags, structs, constDim);
 
   // void
   if (node.kind === ts.SyntaxKind.VoidKeyword) return { kind: 'void' };
@@ -92,7 +99,7 @@ export function resolveType(
         diags.error(node, 'JETH014', 'a function-pointer type parameter must have a plain type annotation');
         return undefined;
       }
-      const pt = resolveType(p.type, diags, structs);
+      const pt = resolveType(p.type, diags, structs, constDim);
       if (!pt) return undefined;
       params.push(pt);
     }
@@ -104,7 +111,7 @@ export function resolveType(
       for (const el of node.type.elements) {
         // a named tuple member `[x: T]` carries its type on .type; a plain member IS the type node.
         const tn = ts.isNamedTupleMember(el) ? el.type : el;
-        const rt = resolveType(tn, diags, structs);
+        const rt = resolveType(tn, diags, structs, constDim);
         if (!rt) return undefined;
         if (rt.kind === 'void') {
           diags.error(el, 'JETH014', 'void is not a valid tuple-return component in a function-pointer type');
@@ -119,7 +126,7 @@ export function resolveType(
       if (rets.length === 1) return { kind: 'funcref', params, ret: rets[0] };
       return { kind: 'funcref', params, ret: undefined, rets };
     }
-    const ret = resolveType(node.type, diags, structs);
+    const ret = resolveType(node.type, diags, structs, constDim);
     if (!ret) return undefined;
     return { kind: 'funcref', params, ret: ret.kind === 'void' ? undefined : ret };
   }
@@ -127,7 +134,7 @@ export function resolveType(
   // T[] array (fixed-length T[N] is written via a tuple-ish annotation; TS arrays
   // are always dynamic here -> JETH dynamic array).
   if (ts.isArrayTypeNode(node)) {
-    const element = resolveType(node.elementType, diags, structs);
+    const element = resolveType(node.elementType, diags, structs, constDim);
     if (!element) return undefined;
     return { kind: 'array', element };
   }
@@ -142,8 +149,8 @@ export function resolveType(
         diags.error(node, 'JETH010', 'mapping requires exactly two type arguments: mapping<K, V>');
         return undefined;
       }
-      const key = resolveType(args[0], diags, structs);
-      const value = resolveType(args[1], diags, structs);
+      const key = resolveType(args[0], diags, structs, constDim);
+      const value = resolveType(args[1], diags, structs, constDim);
       if (!key || !value) return undefined;
       return { kind: 'mapping', key, value };
     }
@@ -155,29 +162,43 @@ export function resolveType(
         diags.error(node, 'JETH011', 'fixed array requires Arr<T, N>');
         return undefined;
       }
-      const element = resolveType(args[0], diags, structs);
+      const element = resolveType(args[0], diags, structs, constDim);
       if (!element) return undefined;
       const lenNode = args[1];
-      if (!lenNode || !ts.isLiteralTypeNode(lenNode) || !ts.isNumericLiteral(lenNode.literal)) {
-        diags.error(lenNode ?? node, 'JETH012', 'fixed array length must be a numeric literal');
-        return undefined;
+      let exactLen: bigint | undefined;
+      if (lenNode && ts.isLiteralTypeNode(lenNode) && ts.isNumericLiteral(lenNode.literal)) {
+        // Read the ORIGINAL source spelling (getText), NOT NumericLiteral.text: `.text` is a JS-double
+        // normalization that silently rounds a large integer (9007199254740993 -> 9007199254740992), which
+        // would mislay every subsequent storage slot. `numericLiteralWholeValue` computes the exact bigint
+        // for a decimal / scientific literal; a hex literal (0x..) is exact via BigInt. A SYNTHESIZED literal
+        // node (e.g. from for-of element-type desugaring) has no source span, so getText() throws / is empty;
+        // fall back to .text there (a synthesized length is always small and exact - no lossy rounding).
+        const rawLen = (sourceSpelling(lenNode.literal) ?? lenNode.literal.text).replace(/_/g, '');
+        exactLen = /^0[xX]/.test(rawLen) ? safeBigInt(rawLen) : numericLiteralWholeValue(rawLen);
+      } else {
+        // CONST-ARRAY-DIM: a BARE-identifier integer constant used as the length, `Arr<T, N>`, the native
+        // spelling of solc's `T[N]` with a `constant` N. It resolves (via the analyzer's constant table) to
+        // the constant's bigint, producing the SAME JethType as the literal form (hence byte-identical).
+        // Gated STRICTLY to a plain identifier: solc 0.8.35 itself accepts ONLY a bare name here and rejects
+        // EVERY qualified form (`C.N`, a base `B.N`, a library `L.N`, another contract `O.N`) with "Invalid
+        // array length, expected integer literal or constant expression" - so a qualified name is left to the
+        // JETH012 reject to MATCH solc (accepting it would be an over-acceptance). A constant EXPRESSION
+        // (`N + 1`) is not even a valid TS type-argument (a grammar-phase parse error), and a non-integer /
+        // out-of-scope name resolves to undefined and keeps JETH012.
+        const named =
+          lenNode && ts.isTypeReferenceNode(lenNode) && !lenNode.typeArguments && ts.isIdentifier(lenNode.typeName)
+            ? lenNode.typeName.text
+            : undefined;
+        if (named !== undefined && constDim) exactLen = constDim(named);
       }
-      // Read the ORIGINAL source spelling (getText), NOT NumericLiteral.text: `.text` is a JS-double
-      // normalization that silently rounds a large integer (9007199254740993 -> 9007199254740992), which
-      // would mislay every subsequent storage slot. `numericLiteralWholeValue` computes the exact bigint
-      // for a decimal / scientific literal; a hex literal (0x..) is exact via BigInt. A SYNTHESIZED literal
-      // node (e.g. from for-of element-type desugaring) has no source span, so getText() throws / is empty;
-      // fall back to .text there (a synthesized length is always small and exact - no lossy rounding).
-      const rawLen = (sourceSpelling(lenNode.literal) ?? lenNode.literal.text).replace(/_/g, '');
-      const exactLen = /^0[xX]/.test(rawLen) ? safeBigInt(rawLen) : numericLiteralWholeValue(rawLen);
       if (exactLen === undefined) {
-        diags.error(lenNode, 'JETH012', 'fixed array length must be a whole-number integer literal');
+        diags.error(lenNode ?? node, 'JETH012', 'fixed array length must be a numeric literal or a named integer constant');
         return undefined;
       }
       if (exactLen <= 0n) {
         // solc rejects a zero-length fixed array in every position (it would consume
         // no storage and alias the following slot). Mirror that compile error.
-        diags.error(lenNode, 'JETH445', 'fixed array length must be greater than zero');
+        diags.error(lenNode ?? node, 'JETH445', 'fixed array length must be greater than zero');
         return undefined;
       }
       // JethType.array.length is a JS number; a length beyond Number.MAX_SAFE_INTEGER cannot be stored
@@ -186,7 +207,7 @@ export function resolveType(
       const length = Number(exactLen);
       if (!Number.isSafeInteger(length) || BigInt(length) !== exactLen) {
         diags.error(
-          lenNode,
+          lenNode ?? node,
           'JETH446',
           `fixed array length ${exactLen} is too large (exceeds ${Number.MAX_SAFE_INTEGER}); such an array is not representable`,
         );

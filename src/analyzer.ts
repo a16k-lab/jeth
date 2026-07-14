@@ -262,6 +262,24 @@ export class Analyzer {
   // read site (no SLOAD, no storage slot), so a @constant never shifts the slot of a @state var.
   private constantsByName = new Map<string, { value: bigint | boolean | Uint8Array; type: JethType; declaredIn?: string }>();
   private publicConstantNames = new Set<string>(); // @external @constant fields that get an auto-generated getter
+  // CONST-ARRAY-DIM: the scope-aware resolver threaded into resolveType so an `Arr<T, N>` length can name a
+  // compile-time integer constant (solc's `T[N]` with a `constant` N). solc 0.8.35 accepts ONLY a BARE
+  // identifier here (own-contract / inherited-base constant) and rejects every qualified form and every
+  // out-of-scope name ("Invalid array length" / "Undeclared identifier") - so this resolves a bare name to
+  // its bigint ONLY when the constant is a whole integer AND is declared in the contract currently being
+  // analyzed OR one of its bases (currentLinNames). A constant declared in an unrelated contract still lives
+  // in the global constantsByName (never cleared), so the linearization-scope check is REQUIRED to avoid an
+  // over-acceptance of `uint[N]` where N is not in scope. Anything failing these gates returns undefined and
+  // keeps the JETH012 reject. A resolved dimension yields the SAME JethType as the literal form (byte-
+  // identical to solc). The value is READ when the callback fires (during type resolution), by which point
+  // the referenced constant (own or base) has been collected in the analyzeContract state pass.
+  private currentLinNames = new Set<string>();
+  private namedDim = (name: string): bigint | undefined => {
+    const c = this.constantsByName.get(name);
+    if (!c || typeof c.value !== 'bigint' || !isInteger(c.type)) return undefined;
+    if (c.declaredIn === undefined || !this.currentLinNames.has(c.declaredIn)) return undefined;
+    return c.value;
+  };
   // @immutable fields (Phase 5): value-type, assigned once in the constructor, baked into runtime
   // code via setimmutable (NO storage slot - never enters rawState/planLayout). immutableOrder keeps
   // declaration order for deterministic setimmutable emission. currentInConstructor distinguishes a
@@ -742,7 +760,7 @@ export class Analyzer {
       this.diags.error(decl, 'JETH015', `Brand<...> takes exactly one base type, e.g. 'type ${name} = Brand<u256>'`);
       return;
     }
-    const base = resolveType(args[0], this.diags, this.structsByName);
+    const base = resolveType(args[0], this.diags, this.structsByName, this.namedDim);
     if (!base) return;
     if (!isStaticValueType(base) || (base as { brand?: string }).brand) {
       this.diags.error(
@@ -855,7 +873,7 @@ export class Analyzer {
         (node.expression as ts.Identifier).text,
         (node as ts.ExpressionWithTypeArguments).typeArguments,
       );
-      return resolveType(typeNode, this.diags, this.structsByName);
+      return resolveType(typeNode, this.diags, this.structsByName, this.namedDim);
     }
     return undefined;
   }
@@ -1088,7 +1106,7 @@ export class Analyzer {
         this.diags.error(member.node, 'JETH221', `duplicate struct field name '${fname}'`);
         continue;
       }
-      const t = resolveType(member.type, this.diags, this.structsByName);
+      const t = resolveType(member.type, this.diags, this.structsByName, this.namedDim);
       if (!t) continue;
       // A mapping field (G7) is allowed: it makes the struct STORAGE-ONLY (the storage-only
       // gates below reject using it as a memory local / param / return / construction / copy,
@@ -1252,7 +1270,7 @@ export class Analyzer {
           `@interface method '${ifaceName}.${mname}' parameter '${p.name.text}' cannot have a default value`,
         );
       }
-      const t = resolveType(p.type, this.diags, this.structsByName);
+      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim);
       if (!t) continue;
       if (this.typeHasMapping(t)) {
         this.diags.error(
@@ -1280,7 +1298,7 @@ export class Analyzer {
     if (member.type && ts.isTupleTypeNode(member.type)) {
       const rts: JethType[] = [];
       for (const el of member.type.elements) {
-        const t = resolveType(el, this.diags, this.structsByName);
+        const t = resolveType(el, this.diags, this.structsByName, this.namedDim);
         if (!t) continue;
         if (!this.decodeSupported(t)) {
           this.diags.error(
@@ -1295,7 +1313,7 @@ export class Analyzer {
       if (rts.length >= 2) returnTypes = rts;
       else if (rts.length === 1) returnType = rts[0]!;
     } else if (member.type) {
-      const t = resolveType(member.type, this.diags, this.structsByName);
+      const t = resolveType(member.type, this.diags, this.structsByName, this.namedDim);
       if (t && t.kind !== 'void') {
         if (!this.decodeSupported(t)) {
           this.diags.error(
@@ -1629,7 +1647,7 @@ export class Analyzer {
       if (p.initializer) {
         this.diags.error(p, 'JETH346', `interface method '${ifaceName}.${mname}' parameter '${p.name.text}' cannot have a default value`);
       }
-      const t = resolveType(p.type, this.diags, this.structsByName);
+      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim);
       if (!t) continue;
       if (this.typeHasMapping(t)) {
         this.diags.error(p, 'JETH247', `parameter '${p.name.text}' of type ${displayName(t)} contains a mapping and cannot be passed (mappings are storage-only)`);
@@ -1663,7 +1681,7 @@ export class Analyzer {
     if (retNode && ts.isTupleTypeNode(retNode)) {
       const rts: JethType[] = [];
       for (const el of retNode.elements) {
-        const t = resolveType(el, this.diags, this.structsByName);
+        const t = resolveType(el, this.diags, this.structsByName, this.namedDim);
         if (!t) continue;
         if (!this.decodeSupported(t)) {
           this.diags.error(el, 'JETH348', `interface method '${ifaceName}.${mname}' return component ${displayName(t)} is not supported yet (supported: value types, bytes/string, value arrays, and structs of those)`);
@@ -1674,7 +1692,7 @@ export class Analyzer {
       if (rts.length >= 2) returnTypes = rts;
       else if (rts.length === 1) returnType = rts[0]!;
     } else if (retNode) {
-      const t = resolveType(retNode, this.diags, this.structsByName);
+      const t = resolveType(retNode, this.diags, this.structsByName, this.namedDim);
       if (t && t.kind !== 'void') {
         if (!this.decodeSupported(t)) {
           this.diags.error(retNode, 'JETH348', `interface method '${ifaceName}.${mname}' return type ${displayName(t)} is not supported yet (supported: value types, bytes/string, value arrays, and structs of those)`);
@@ -2706,6 +2724,10 @@ export class Analyzer {
 
   private analyzeContract(cls: ts.ClassDeclaration, lin: ts.ClassDeclaration[]): ContractIR | undefined {
     const name = cls.name?.text ?? 'Contract';
+    // CONST-ARRAY-DIM: the in-scope constant names for `Arr<T, N>` dimension resolution are exactly this
+    // contract plus its bases (the linearization). Set here so namedDim only accepts a bare constant name
+    // that solc would also resolve (own / inherited), never one leaking from an unrelated contract.
+    this.currentLinNames = new Set(lin.map((c) => c.name?.text).filter((n): n is string => n !== undefined));
     const rawState: RawStateVar[] = [];
     const rawFns: RawFunction[] = [];
 
@@ -3842,7 +3864,7 @@ export class Analyzer {
       const ok =
         ps.length === 1 &&
         ts.isIdentifier(ps[0]!.name) &&
-        resolveType(ps[0]!.type, this.diags, this.structsByName)?.kind === 'address';
+        resolveType(ps[0]!.type, this.diags, this.structsByName, this.namedDim)?.kind === 'address';
       if (!ok)
         this.diags.error(ctorNode, 'JETH407', "a @beacon constructor must take exactly one parameter 'impl: address'");
       const bodyStmts = ctorNode.body?.statements ?? ts.factory.createNodeArray();
@@ -5582,7 +5604,7 @@ export class Analyzer {
         this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier');
         continue;
       }
-      const t = resolveType(p.type, this.diags, this.structsByName);
+      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim);
       if (!t) continue;
       if (p.initializer)
         this.diags.error(p, 'JETH304', `a constructor parameter ('${p.name.text}') cannot have a default value`);
@@ -5869,7 +5891,7 @@ export class Analyzer {
         );
       } else if (member.parameters.length === 1) {
         const p = member.parameters[0]!;
-        const pt = resolveType(p.type, this.diags, this.structsByName);
+        const pt = resolveType(p.type, this.diags, this.structsByName, this.namedDim);
         if (!ts.isIdentifier(p.name)) {
           this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier');
         } else if (!pt || pt.kind !== 'bytes') {
@@ -5887,7 +5909,7 @@ export class Analyzer {
       // The return type, if present, must be `bytes` (solc: `returns (bytes memory)`).
       const hasReturn = !!member.type && member.type.kind !== ts.SyntaxKind.VoidKeyword;
       if (hasReturn) {
-        const rt = resolveType(member.type, this.diags, this.structsByName);
+        const rt = resolveType(member.type, this.diags, this.structsByName, this.namedDim);
         if (!rt || rt.kind !== 'bytes') {
           this.diags.error(
             member.type!,
@@ -6031,7 +6053,7 @@ export class Analyzer {
         this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier');
         continue;
       }
-      const t = resolveType(p.type, this.diags, this.structsByName);
+      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim);
       if (!t) continue;
       if (p.initializer)
         this.diags.error(p, 'JETH304', `a constructor parameter ('${p.name.text}') cannot have a default value`);
@@ -6714,7 +6736,7 @@ export class Analyzer {
           `@error parameter '${p.name.text}' cannot be @indexed (only event parameters are indexed)`,
         );
       }
-      const t = resolveType(p.type, this.diags, this.structsByName);
+      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim);
       if (!t) continue;
       // solc bans an internal type as an error parameter type; funcref-bearing types stay
       // internal-only (the same screen the event gate applies, ahead of the shape gate).
@@ -6798,7 +6820,7 @@ export class Analyzer {
         this.diags.error(p, 'JETH053', `duplicate event parameter name '${p.name.text}'`);
         continue;
       }
-      const t = resolveType(p.type, this.diags, this.structsByName);
+      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim);
       if (!t) continue;
       // L11a keeps funcref-bearing types INTERNAL-only: solc bans an internal type as an event
       // parameter type (indexed or not), so both arms screen here before the shape gates
@@ -7256,7 +7278,7 @@ export class Analyzer {
       this.collectImmutable(member, declaredIn);
       return;
     }
-    const type = resolveType(member.type, this.diags, this.structsByName);
+    const type = resolveType(member.type, this.diags, this.structsByName, this.namedDim);
     if (!type) return;
     if (type.kind === 'void') {
       this.diags.error(member, 'JETH047', 'state variable cannot be void');
@@ -7537,7 +7559,7 @@ export class Analyzer {
     isDup: (name: string) => boolean,
   ): { value: bigint | boolean | Uint8Array; type: JethType } | undefined {
     const name = (member.name as ts.Identifier).text;
-    const type = resolveType(member.type, this.diags, this.structsByName);
+    const type = resolveType(member.type, this.diags, this.structsByName, this.namedDim);
     if (!type) return undefined;
     // Folding supports integer + bool + address + bytesN + string + bytes constants. Any OTHER
     // aggregate constant (a struct / array) stays a clean over-rejection, not a fold-failure cascade.
@@ -7710,7 +7732,7 @@ export class Analyzer {
       return;
     }
     if (isPublicImm) this.publicImmutableNames.add(name); // @external / Visible<T> @immutable -> auto-generated view getter
-    const type = resolveType(member.type, this.diags, this.structsByName);
+    const type = resolveType(member.type, this.diags, this.structsByName, this.namedDim);
     if (!type) return;
     if (!isStaticValueType(type)) {
       this.diags.error(
@@ -8019,7 +8041,7 @@ export class Analyzer {
         this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier');
         continue;
       }
-      const t = resolveType(p.type, this.diags, this.structsByName);
+      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim);
       if (!t) continue;
       // A type containing a mapping is storage-only: it cannot be a parameter (matches solc).
       if (this.typeHasMapping(t)) {
@@ -8071,7 +8093,7 @@ export class Analyzer {
       const returnTypes: JethType[] = [];
       let ok = true;
       for (const el of member.type.elements) {
-        const t = resolveType(el, this.diags, this.structsByName);
+        const t = resolveType(el, this.diags, this.structsByName, this.namedDim);
         if (!t) {
           ok = false;
           break;
@@ -8114,7 +8136,7 @@ export class Analyzer {
       };
     }
 
-    const returnType = member.type ? (resolveType(member.type, this.diags, this.structsByName) ?? VOID) : VOID;
+    const returnType = member.type ? (resolveType(member.type, this.diags, this.structsByName, this.namedDim) ?? VOID) : VOID;
     if (this.typeHasMapping(returnType)) {
       this.diags.error(
         member.type ?? member,
@@ -8311,7 +8333,7 @@ export class Analyzer {
         return undefined;
       }
       for (let i = 0; i < gen.typeParams.length; i++) {
-        const t = resolveType(node.typeArguments[i]!, this.diags, this.structsByName);
+        const t = resolveType(node.typeArguments[i]!, this.diags, this.structsByName, this.namedDim);
         if (!t) return undefined;
         if (!this.gateGenericTypeArg(t, node.typeArguments[i]!, gen.typeParams[i]!)) return undefined;
         binding.set(gen.typeParams[i]!, t);
@@ -9338,7 +9360,7 @@ export class Analyzer {
         this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier');
         continue;
       }
-      const t = resolveType(p.type, this.diags, this.structsByName);
+      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim);
       if (!t) continue;
       if (p.initializer)
         this.diags.error(p, 'JETH304', `a @modifier parameter ('${p.name.text}') cannot have a default value`);
@@ -9474,7 +9496,7 @@ export class Analyzer {
         return undefined;
       }
       for (let i = 0; i < gen.typeParams.length; i++) {
-        const t = resolveType(app.typeArgs[i]!, this.diags, this.structsByName);
+        const t = resolveType(app.typeArgs[i]!, this.diags, this.structsByName, this.namedDim);
         if (!t) return undefined;
         if (!this.gateModifierGenericTypeArg(t, app.typeArgs[i]!, gen.typeParams[i]!)) return undefined;
         binding.set(gen.typeParams[i]!, t);
@@ -10405,7 +10427,7 @@ export class Analyzer {
           return;
         }
         if (decl.type) {
-          const ann = resolveType(decl.type, this.diags, this.structsByName);
+          const ann = resolveType(decl.type, this.diags, this.structsByName, this.namedDim);
           if (ann && !typesEqual(ann, ic.returnType)) {
             this.diags.error(
               decl.type,
@@ -10484,7 +10506,7 @@ export class Analyzer {
       }
       // solc's `catch (bytes memory e)`: the binding is always the raw revert returndata (bytes).
       if (vd.type) {
-        const t = resolveType(vd.type, this.diags, this.structsByName);
+        const t = resolveType(vd.type, this.diags, this.structsByName, this.namedDim);
         if (t && !isBytesLike(t)) {
           this.diags.error(
             vd.type,
@@ -10537,7 +10559,7 @@ export class Analyzer {
     if (!ts.isTupleTypeNode(typeNode) || typeNode.elements.length !== n) return undefined;
     const out: JethType[] = [];
     for (const el of typeNode.elements) {
-      const t = resolveType(el, this.diags, this.structsByName);
+      const t = resolveType(el, this.diags, this.structsByName, this.namedDim);
       if (!t) return undefined;
       out.push(t);
     }
@@ -13237,7 +13259,7 @@ export class Analyzer {
       this.diags.error(decl, 'JETH062', 'destructuring is not supported');
       return;
     }
-    const declared = resolveType(decl.type, this.diags, this.structsByName);
+    const declared = resolveType(decl.type, this.diags, this.structsByName, this.namedDim);
     if (!decl.type) {
       this.diags.error(decl, 'JETH063', 'local variables require an explicit type annotation');
       return;
@@ -22790,7 +22812,7 @@ export class Analyzer {
         this.diags.error(node, 'JETH363', 'new Array<T>(n) takes exactly one length argument, e.g. new Array<u256>(n)');
         return undefined;
       }
-      const elem = resolveType(node.typeArguments[0]!, this.diags, this.structsByName);
+      const elem = resolveType(node.typeArguments[0]!, this.diags, this.structsByName, this.namedDim);
       if (!elem) return undefined;
       // The element may be a VALUE type (flat dynamic array), a nested VALUE-leaf array
       // (new Array<u256[]>(n) -> u256[][], new Array<Arr<u256,2>>(n), ...), a STATIC STRUCT

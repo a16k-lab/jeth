@@ -937,9 +937,30 @@ SAFE residual over-rejections (solc accepts, JETH cleanly rejects, no miscompile
 field (`kids[i].x`, JETH210), reading a bytes/string leaf of a recursive struct (JETH202), and a recursive
 struct as a memory local / internal-memory return (JETH074/200).
 
-**5 KEPT as LIFTABLE-HARD / low-value (open, documented):** CONST-ARRAY-DIM (needs a constant environment
-threaded through resolveType; bare-literal `Arr<u256,3>` already works), CONTRACT-TYPE-PARAM (a contract/interface value lowered to `address` - deep; the repro
+**KEPT as LIFTABLE-HARD / low-value (open, documented):** CONTRACT-TYPE-PARAM (a contract/interface value lowered to `address` - deep; the repro
 also hit the MULTI-CONTRACT limit), IFACE-VALUE-TYPE (a first-class interface value type - only `I(addr).m()`
 works), LIB-MODIFIER (no native library-modifier surface), ABSTRACT-ONLY-FILE (a no-deployable compile unit -
 degenerate, non-run-verifiable). LESSON (the user's): a differential finder can re-report an already-lifted or
 deliberate OR - re-probe on current main + check the tests/docs/commits BEFORE scoping any lift.
+
+### 2026-07-14 CONST-ARRAY-DIM LIFTED byte-identical (bare in-scope name only)
+
+**CONST-ARRAY-DIM** (JETH012->accept for a bare name): `a: Arr<u256, N>` with a compile-time integer
+`static N` now resolves N to its bigint, producing the SAME JethType as the bare-literal `Arr<u256, 3>`
+(hence byte-identical to solc's `uint256[N]`). A scope-aware resolver (`Analyzer.namedDim`) is threaded as a
+4th arg into `resolveType`; the Arr branch (typeresolver.ts) accepts a bare `Identifier` length that resolves
+to a whole-integer @constant declared in the CURRENTLY-analyzed contract or one of its bases
+(`currentLinNames`), reusing the JETH445 (<=0) / JETH446 (>2^53) fail-safes. Verified deploy-both byte-
+identical (returndata over all indices, OOB Panic, raw storage slots, second-field placement, u32 packing,
+nested `Arr<Arr<u256,N>,M>`, inherited-base N) in test/const-array-dim.test.ts.
+
+KEY CORRECTION to the earlier assumption: solc 0.8.35 accepts ONLY a bare name here. It REJECTS every
+QUALIFIED form ("Invalid array length, expected integer literal or constant expression"): self `C.N`, a base
+`B.N`, a library `L.N`, another contract `O.N`; and it REJECTS a bare name that is out of scope ("Undeclared
+identifier", e.g. a constant declared only in an unrelated contract). So JETH KEEPS the JETH012 reject for a
+qualified name AND for an out-of-scope bare name (the linearization-scope check is REQUIRED because
+constantsByName is global/never-cleared - without it, `uint[N]` in an unrelated contract would over-accept). A
+constant EXPRESSION (`N + 1`) is not a valid TS type argument (grammar-phase reject) and stays JETH012 - JETH
+does not fold a type-position expression (a divergent fold would miscompile the storage layout). SAFE RESIDUAL
+over-rejections kept (all match nothing solc-accepts or are simply not lifted here): a struct-member const dim
+(structs are collected before constants) and a file-level `const N` (not in constantsByName).
