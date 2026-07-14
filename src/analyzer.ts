@@ -828,6 +828,33 @@ export class Analyzer {
     return t.kind === 'address' && typeof t.brand === 'string' && t.brand.startsWith(CTREF_PREFIX);
   }
 
+  /** CONTRACT-TYPE-VALUE: reject an address-capability member access (`.balance` / `.code` / `.codehash`)
+   *  on a contract/interface reference VALUE. solc does NOT expose the raw address surface on a contract
+   *  value directly ("Member \"balance\" not found ... in contract C. Use address(c).balance"); the value
+   *  must be unwrapped with `address(c)` first. Emits the same-shaped diagnostic and returns undefined. */
+  private rejectContractRefMember(node: ts.Node, t: JethType & { brand: string }, member: string): undefined {
+    const name = t.brand.slice(CTREF_PREFIX.length);
+    this.diags.error(
+      node,
+      'JETH352',
+      `member '${member}' is not available on a ${name} contract value; use address(<value>).${member} (solc does not expose the raw address surface on a contract type)`,
+    );
+    return undefined;
+  }
+
+  /** CONTRACT-TYPE-VALUE: reject an explicit conversion of a contract/interface reference VALUE to any
+   *  target other than `address` (which is unwrapped via checkAddressCall). solc: "Explicit type conversion
+   *  not allowed from contract C to <T>" - a contract value is nominal, not a raw scalar/bytesN/address. */
+  private rejectContractRefCast(node: ts.Node, t: JethType & { brand: string }, targetName: string): undefined {
+    const name = t.brand.slice(CTREF_PREFIX.length);
+    this.diags.error(
+      node,
+      'JETH170',
+      `explicit conversion not allowed from contract ${name} to ${targetName} (unwrap with address(<value>) first)`,
+    );
+    return undefined;
+  }
+
   /** Collect `enum Color { Red, Green, Blue }` declarations. An enum is modeled as a BRANDED
    *  uint8 carrying its member names: nominal identity is the brand, storage/ABI/codegen come
    *  from the uint8 base. Members are 0,1,2,... in declaration order and may NOT carry explicit
@@ -5761,7 +5788,7 @@ export class Analyzer {
         this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier');
         continue;
       }
-      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
+      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName, this.contractRefNames());
       if (!t) continue;
       if (p.initializer)
         this.diags.error(p, 'JETH304', `a constructor parameter ('${p.name.text}') cannot have a default value`);
@@ -6210,7 +6237,7 @@ export class Analyzer {
         this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier');
         continue;
       }
-      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
+      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName, this.contractRefNames());
       if (!t) continue;
       if (p.initializer)
         this.diags.error(p, 'JETH304', `a constructor parameter ('${p.name.text}') cannot have a default value`);
@@ -7447,7 +7474,7 @@ export class Analyzer {
       this.collectImmutable(member, declaredIn);
       return;
     }
-    const type = resolveType(member.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
+    const type = resolveType(member.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName, this.contractRefNames());
     if (!type) return;
     if (type.kind === 'void') {
       this.diags.error(member, 'JETH047', 'state variable cannot be void');
@@ -7901,7 +7928,7 @@ export class Analyzer {
       return;
     }
     if (isPublicImm) this.publicImmutableNames.add(name); // @external / Visible<T> @immutable -> auto-generated view getter
-    const type = resolveType(member.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
+    const type = resolveType(member.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName, this.contractRefNames());
     if (!type) return;
     if (!isStaticValueType(type)) {
       this.diags.error(
@@ -8210,7 +8237,7 @@ export class Analyzer {
         this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier');
         continue;
       }
-      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
+      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName, this.contractRefNames());
       if (!t) continue;
       // A type containing a mapping is storage-only: it cannot be a parameter (matches solc).
       if (this.typeHasMapping(t)) {
@@ -8305,7 +8332,7 @@ export class Analyzer {
       };
     }
 
-    const returnType = member.type ? (resolveType(member.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName) ?? VOID) : VOID;
+    const returnType = member.type ? (resolveType(member.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName, this.contractRefNames()) ?? VOID) : VOID;
     if (this.typeHasMapping(returnType)) {
       this.diags.error(
         member.type ?? member,
@@ -9529,7 +9556,7 @@ export class Analyzer {
         this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier');
         continue;
       }
-      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
+      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName, this.contractRefNames());
       if (!t) continue;
       if (p.initializer)
         this.diags.error(p, 'JETH304', `a @modifier parameter ('${p.name.text}') cannot have a default value`);
@@ -13529,7 +13556,7 @@ export class Analyzer {
       this.diags.error(decl, 'JETH062', 'destructuring is not supported');
       return;
     }
-    const declared = resolveType(decl.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
+    const declared = resolveType(decl.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName, this.contractRefNames());
     if (!decl.type) {
       this.diags.error(decl, 'JETH063', 'local variables require an explicit type annotation');
       return;
@@ -21645,6 +21672,10 @@ export class Analyzer {
     if (callee === 'payable') {
       const inner = this.checkExpr(arg);
       if (!inner) return undefined;
+      // CONTRACT-TYPE-VALUE: a contract/interface reference value is NOT payable-castable directly
+      // (solc: "Explicit type conversion not allowed from contract C to address payable"); unwrap with
+      // address(...) first. The `__ctref:` brand IS an address kind, so screen it ahead of the kind check.
+      if (this.isContractRefType(inner.type)) return this.rejectContractRefCast(node, inner.type, 'address payable');
       if (inner.type.kind !== 'address') {
         this.diags.error(node, 'JETH171', `payable(...) requires an address operand, got ${displayName(inner.type)}`);
         return undefined;
@@ -21699,6 +21730,12 @@ export class Analyzer {
     const argExpected = target && (target.kind === 'bytes' || target.kind === 'string') ? target : undefined;
     const inner = this.checkExpr(arg, argExpected);
     if (!inner) return undefined;
+    // CONTRACT-TYPE-VALUE: no explicit conversion of a contract/interface reference value to a scalar /
+    // bytesN / another contract type. solc rejects every such cast ("Explicit type conversion not allowed
+    // from contract C to <T>"); only `address(c)` (checkAddressCall, a different path) unwraps it. The
+    // `__ctref:` brand is an `address` kind, so a bytesN/u160 cast would otherwise slip through the
+    // address-convertible allowance - screen it here.
+    if (this.isContractRefType(inner.type)) return this.rejectContractRefCast(node, inner.type, displayName(target));
     // An integer-literal cast is range-checked at compile time (uint8(300) is an error
     // in solc, not a runtime truncation): retype the literal to the target directly.
     if (inner.kind === 'literalInt' && isInteger(target)) {
@@ -23973,6 +24010,10 @@ export class Analyzer {
     // <address>.balance (incl. address(this).balance): the account balance as u256 (env read).
     if (ts.isPropertyAccessExpression(node) && node.name.text === 'balance') {
       const base = this.checkExpr(node.expression);
+      // CONTRACT-TYPE-VALUE: a contract/interface reference value does NOT expose the raw address
+      // members (solc: "Member balance not found ... in contract C. Use address(c).balance"). Skip
+      // so it falls to the unknown-member reject; only `address(c)` unwraps the capability surface.
+      if (base && this.isContractRefType(base.type)) return this.rejectContractRefMember(node, base.type, 'balance');
       if (base && base.type.kind === 'address') {
         if (this.attachedBuiltinCollision(node, node.expression, base.type, 'balance')) return undefined;
         this.currentReadsEnv = true; // forbidden in @pure
@@ -23984,6 +24025,7 @@ export class Analyzer {
     // Both are environment reads (allowed in @view, forbidden in @pure), like .balance.
     if (ts.isPropertyAccessExpression(node) && (node.name.text === 'code' || node.name.text === 'codehash')) {
       const base = this.checkExpr(node.expression);
+      if (base && this.isContractRefType(base.type)) return this.rejectContractRefMember(node, base.type, node.name.text);
       if (base && base.type.kind === 'address') {
         if (this.attachedBuiltinCollision(node, node.expression, base.type, node.name.text)) return undefined;
         this.currentReadsEnv = true; // forbidden in @pure

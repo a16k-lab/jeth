@@ -138,10 +138,10 @@ contract C {
       class C { E: event<{ d: L }>; }`)).not.toBe(null);
   });
 
-  it('RESIDUAL (safe over-rejection): a CONCRETE contract type in field/param position still rejects', () => {
-    // INTERFACE types in field/param/return are now a first-class value type (lifted by IFACE-VALUE-TYPE,
-    // covered byte-identically in test/lift-iface-value-type.test.ts). The remaining residual is a CONCRETE
-    // contract type outside an event/error member: solc accepts (lowering to address), JETH keeps JETH013.
-    expect(jethRejects(`class C { c: C; }`)).toContain('JETH013'); // own contract type as a field
+  it('CONCRETE contract type in field/param/return is now a first-class value type (CONTRACT-TYPE-VALUE lift)', () => {
+    // Previously a residual over-rejection (JETH013). Lifted by CONTRACT-TYPE-VALUE: a concrete/abstract
+    // contract name is a first-class value type at field / param / return / local / immutable positions,
+    // lowered THROUGH `address` with the `__ctref:` brand (byte-identical, see test/lift-contract-type-value.test.ts).
+    expect(jethRejects(`class C { c: C; }`)).toBe(null); // own contract type as a field now accepts
   });
 });
