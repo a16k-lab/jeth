@@ -406,6 +406,90 @@ function collectBannedDecorators(sf: ts.SourceFile, fileName: string): Diagnosti
 }
 
 // ---------------------------------------------------------------------------------------------
+// STAGE 2b - DECORATOR POSITION GATE (JETH490). A decorator whose name is legal only in ANOTHER
+// position (e.g. @nonReentrant / @virtual / @override on a class), an UNKNOWN name - notably a TYPO
+// of a real decorator (`@storag('ns')`, `@diamon('array')`, `@nonReentrent`) - or a MIS-SHAPED
+// decorator (`@a.b`, `@a[0]`) in CLASS / FIELD / PARAM position used to be SILENTLY DROPPED: a
+// `@storag('ns')` lost the storage namespace, a `@diamon('array')` lost the whole diamond, with no
+// diagnostic. Reject it loudly, naming the position's legal set - the exact mirror of the already
+// closed METHOD position (an unknown method decorator is a @modifier APPLICATION the analyzer rejects
+// as JETH329 when it names no declared modifier). The METHOD / GET / SET / CONSTRUCTOR positions are
+// therefore NOT gated here (a constructor also takes modifier applications + @payable, both an open
+// set this pre-analysis scan cannot resolve); their PARAMETERS still are (no parameter decorator is
+// legal). An event/error FIELD (`E: event<{...}>`) is gated by the analyzer's JETH353 (only
+// @anonymous is legal there), so it is skipped here to keep that one code. A banned retired name is
+// left to collectBannedDecorators (JETH481) so it is never double-reported.
+// ---------------------------------------------------------------------------------------------
+const CLASS_DECORATORS = new Set(['diamond', 'storage', 'proxy', 'beacon', 'facet', 'using', 'uups']);
+const FIELD_DECORATORS = new Set(['storage', 'override', 'virtual']);
+
+function collectStrayDecorators(sf: ts.SourceFile, fileName: string): Diagnostic[] {
+  const out: Diagnostic[] = [];
+  // Canonical name, unwrapping a parenthesized `@(x)`; undefined for a MIS-SHAPED decorator
+  // (`@a.b`, `@a[0]`, a computed expression) that names no bare/called identifier.
+  const nameOf = (e: ts.Expression): string | undefined => {
+    let x = e;
+    while (ts.isParenthesizedExpression(x)) x = x.expression;
+    if (ts.isIdentifier(x)) return x.text;
+    if (ts.isCallExpression(x) && ts.isIdentifier(x.expression)) return x.expression.text;
+    return undefined;
+  };
+  const report = (d: ts.Decorator, message: string): void => {
+    const start = d.getStart(sf);
+    const { line, character } = sf.getLineAndCharacterOfPosition(start);
+    out.push({
+      severity: 'error',
+      code: 'JETH490',
+      message,
+      file: fileName,
+      line: line + 1,
+      column: character + 1,
+      length: Math.max(1, d.getEnd() - start),
+    });
+  };
+  // `E: event<{...}>` / `X: error<{...}>` field: its stray-decorator rule (only @anonymous) is the
+  // analyzer's JETH353; skip it here so that one code survives unchanged.
+  const isEventOrErrorField = (m: ts.PropertyDeclaration): boolean => {
+    const t = m.type;
+    return (
+      !!t && ts.isTypeReferenceNode(t) && ts.isIdentifier(t.typeName) && (t.typeName.text === 'event' || t.typeName.text === 'error')
+    );
+  };
+  const gate = (d: ts.Decorator, allowed: Set<string> | undefined, positionMsg: string): void => {
+    const name = nameOf(d.expression);
+    // A banned retired name is reported by collectBannedDecorators (JETH481); do not double-report.
+    if (name !== undefined && Object.prototype.hasOwnProperty.call(BANNED_DECORATOR_POINTERS, name)) return;
+    if (name !== undefined && allowed?.has(name)) return;
+    const shown = name !== undefined ? '@' + name : '@' + d.expression.getText(sf).trim();
+    report(d, `${shown} ${positionMsg}`);
+  };
+  const visit = (n: ts.Node): void => {
+    if (ts.isClassDeclaration(n)) {
+      for (const d of ts.getDecorators(n) ?? [])
+        gate(
+          d,
+          CLASS_DECORATORS,
+          'is not a valid class decorator (a class may carry only @diamond, @storage, @proxy, @beacon, @facet, @using, or @uups)',
+        );
+    } else if (ts.isPropertyDeclaration(n)) {
+      if (!isEventOrErrorField(n))
+        for (const d of ts.getDecorators(n) ?? [])
+          gate(d, FIELD_DECORATORS, 'is not a valid field decorator (a field may carry only @storage, @override, or @virtual)');
+    } else if (ts.isParameter(n)) {
+      for (const d of ts.getDecorators(n) ?? [])
+        gate(
+          d,
+          undefined,
+          'cannot decorate a parameter (parameters take no decorators; an indexed event parameter is spelled `indexed<T>`)',
+        );
+    }
+    ts.forEachChild(n, visit);
+  };
+  ts.forEachChild(sf, visit);
+  return out;
+}
+
+// ---------------------------------------------------------------------------------------------
 // MIGRATION CAPTURE (dev-only, P0c): when JETH_MIGRATE_CAPTURE=<dir> is set, every compile() call
 // is recorded - success (creationBytecode) or CompileError (sorted diagnostic codes) - and then the
 // result/error passes through UNCHANGED. The records feed scripts/migrate/verify.mjs, which proves
@@ -576,7 +660,7 @@ function compileUnit(source: string, opts: CompileOptions): CompileResult {
       banSegments = undefined;
     }
   }
-  const bannedDecorators = collectBannedDecorators(banSf, fileName);
+  const bannedDecorators = [...collectBannedDecorators(banSf, fileName), ...collectStrayDecorators(banSf, fileName)];
   if (bannedDecorators.length > 0) {
     if (banSegments) remapDiagnostics(bannedDecorators, banSegments);
     throw new CompileError(bannedDecorators);

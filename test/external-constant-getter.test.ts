@@ -163,15 +163,17 @@ describe('@external @constant auto-getter (solc public constant), byte-identical
   });
 
   it('every non-Visible exposure/mutability decorator on a static constant is a clean reject (never silently ignored)', () => {
-    // native adjudication: a @constant is a `static K = v` field; the ONLY exposure marker is Visible<T>. The
-    // legacy JETH466 gate ("only @external combines with @constant") splits by whether the extra decorator was
-    // RETIRED (public/internal/private/view/pure/payable/read -> banned JETH481) or KEPT (override/virtual/hidden,
-    // which reach the constant collector and are nonsensical on a slot-free constant -> JETH466). Either way the
-    // decorator is loud, never swallowed - which is exactly what this test guards.
+    // native adjudication: a @constant is a `static K = v` field; the ONLY exposure marker is Visible<T>. Every
+    // extra decorator is loud, never swallowed - which is exactly what this test guards. The specific code splits
+    // three ways: a RETIRED name (public/internal/private/view/pure/payable/read) is the native-only ban JETH481;
+    // @hidden is a METHOD-only decorator in an illegal FIELD position, caught by the decorator-position gate
+    // (JETH490) ahead of analysis; @override/@virtual ARE legal field-position names (a getter-var), so they pass
+    // the position gate and reach the constant collector, which rejects them as nonsensical on a slot-free
+    // constant (JETH466).
     const expected: Record<string, string> = {
       public: 'JETH481', internal: 'JETH481', private: 'JETH481', view: 'JETH481',
       pure: 'JETH481', payable: 'JETH481', read: 'JETH481',
-      hidden: 'JETH466', override: 'JETH466', virtual: 'JETH466',
+      hidden: 'JETH490', override: 'JETH466', virtual: 'JETH466',
     };
     for (const [dec, code] of Object.entries(expected)) {
       expect(codes(`class C { @${dec} static K: u256 = 7n; get f(): External<u256> { return 1n; } }`), `@${dec}`).toContain(code);
