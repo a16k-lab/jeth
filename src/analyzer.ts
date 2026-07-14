@@ -100,6 +100,11 @@ const BYTES: JethType = { kind: 'bytes' };
 // checks); tryCall/tryStaticcall return [bool, bytes] (raw escape hatch, only in a tuple destructure).
 const EXT_CALL_METHODS = new Set(['call', 'staticcall', 'tryCall', 'tryStaticcall']);
 
+// CONTRACT-TYPE-PARAM: the brand prefix a contract/interface reference TYPE carries when modeled as a
+// branded address. `__ctref:<Name>` - the leading `__` and colon cannot appear in a source identifier,
+// so it can never collide with a user branded-newtype alias.
+const CTREF_PREFIX = '__ctref:';
+
 // Environment globals: "<obj>.<field>" -> opcode + type + category.
 // 'env' forbidden in @pure; 'value' (msg.value) requires @payable; 'calldata'
 // (msg.sig) allowed in @pure. Verified opcode/type/mutability against solc 0.8.
@@ -781,6 +786,24 @@ export class Analyzer {
   private isBrandedAlias(name: string): boolean {
     const t = this.structsByName.get(name);
     return !!t && !!(t as { brand?: string }).brand;
+  }
+
+  /** CONTRACT-TYPE-PARAM: the set of names that denote a CONTRACT/INTERFACE reference TYPE - every
+   *  @interface plus every concrete/abstract contract class (never a library, which is not a value
+   *  type). solc lowers such a type in an ABI position to `address`; JETH models it as a branded
+   *  address (the brand is erased at ABI/selectors/codegen - canonicalName yields "address" - but keeps
+   *  it nominally distinct from a plain address, matching solc's no-implicit-conversion / no-address-
+   *  member rules). Passed to resolveType ONLY at the event/error member sites, so the contract-ref type
+   *  is confined to a signature/encoding role and never becomes a body variable (param/return/field of
+   *  a contract type stay a clean JETH013 rejection - a narrower residual). */
+  private contractRefNames(): Set<string> {
+    return new Set<string>([...this.interfacesByName.keys(), ...this.classByName.keys()]);
+  }
+
+  /** Is `t` a contract/interface reference type (a branded address minted by resolveType via
+   *  contractRefNames)? Its brand is `__ctref:<Name>`. */
+  private isContractRefType(t: JethType): t is JethType & { kind: 'address'; brand: string } {
+    return t.kind === 'address' && typeof t.brand === 'string' && t.brand.startsWith(CTREF_PREFIX);
   }
 
   /** Collect `enum Color { Red, Green, Blue }` declarations. An enum is modeled as a BRANDED
@@ -6736,7 +6759,7 @@ export class Analyzer {
           `@error parameter '${p.name.text}' cannot be @indexed (only event parameters are indexed)`,
         );
       }
-      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
+      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName, this.contractRefNames());
       if (!t) continue;
       // solc bans an internal type as an error parameter type; funcref-bearing types stay
       // internal-only (the same screen the event gate applies, ahead of the shape gate).
@@ -6820,7 +6843,7 @@ export class Analyzer {
         this.diags.error(p, 'JETH053', `duplicate event parameter name '${p.name.text}'`);
         continue;
       }
-      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
+      const t = resolveType(p.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName, this.contractRefNames());
       if (!t) continue;
       // L11a keeps funcref-bearing types INTERNAL-only: solc bans an internal type as an event
       // parameter type (indexed or not), so both arms screen here before the shape gates
@@ -12135,6 +12158,45 @@ export class Analyzer {
     return this.checkErrorArgs(node, decl, name);
   }
 
+  /** CONTRACT-TYPE-PARAM: check one emit/revert argument against an event/error parameter. When the
+   *  parameter is a contract/interface reference type (a branded address), solc accepts ONLY the explicit
+   *  wrapper cast `T(<address>)` (a plain address rejects - there is no implicit address->contract
+   *  conversion, and `T(<non-address>)` rejects too). The value produced is the address operand retyped
+   *  to the contract-ref; the log/error encoder masks it to 160 bits exactly like solc. Returns the
+   *  lowered Expr, `undefined` after a diagnostic, or `null` when `want` is NOT a contract-ref (the caller
+   *  uses its normal checkExpr+coerce path). */
+  private checkRaiseArg(argNode: ts.Expression, want: JethType): Expr | undefined | null {
+    if (!this.isContractRefType(want)) return null;
+    const typeName = want.brand.slice(CTREF_PREFIX.length);
+    if (
+      ts.isCallExpression(argNode) &&
+      ts.isIdentifier(argNode.expression) &&
+      argNode.expression.text === typeName &&
+      !this.isVisibleLocal(typeName) &&
+      argNode.arguments.length === 1
+    ) {
+      const inner = this.checkExpr(argNode.arguments[0]!);
+      if (!inner) return undefined;
+      if (inner.type.kind !== 'address') {
+        this.diags.error(
+          argNode.arguments[0]!,
+          'JETH171',
+          `${typeName}(...) converts only from an address (contract type ${typeName}), got ${displayName(inner.type)}`,
+        );
+        return undefined;
+      }
+      // The address operand retyped as the contract-ref. The value is already in the address domain;
+      // the ABI encoder masks it to 160 bits (proven byte-identical for dirty high bits).
+      return { ...inner, type: want } as Expr;
+    }
+    this.diags.error(
+      argNode,
+      'JETH085',
+      `a ${typeName}-typed argument must be written as the explicit cast ${typeName}(<address>) (solc rejects an implicit conversion to a contract type)`,
+    );
+    return undefined;
+  }
+
   /** Shared arity + per-arg check for a custom-error raise, given the resolved decl. Reused by the bare
    *  `revert(X(...))` path (checkErrorConstructor) and the qualified `revert(L.Bad(...))` library-error path. */
   private checkErrorArgs(node: ts.CallExpression, decl: ErrorDecl, name: string): RevertReason | undefined {
@@ -12149,6 +12211,12 @@ export class Analyzer {
     const args: Expr[] = [];
     for (let i = 0; i < decl.params.length; i++) {
       const want = decl.params[i]!.type;
+      const cr = this.checkRaiseArg(node.arguments[i]!, want);
+      if (cr !== null) {
+        if (!cr) return undefined;
+        args.push(cr);
+        continue;
+      }
       const e = this.checkExpr(node.arguments[i]!, want);
       if (!e) return undefined;
       args.push(this.coerce(e, want, node.arguments[i]!));
@@ -13260,6 +13328,12 @@ export class Analyzer {
     const args: Expr[] = [];
     for (let i = 0; i < ev.params.length; i++) {
       const expected = ev.params[i]!.type;
+      const cr = this.checkRaiseArg(inner.arguments[i]!, expected);
+      if (cr !== null) {
+        if (!cr) return;
+        args.push(cr);
+        continue;
+      }
       const a = this.checkExpr(inner.arguments[i]!, expected);
       if (!a) return;
       args.push(this.coerce(a, expected, inner.arguments[i]!));
@@ -13276,6 +13350,14 @@ export class Analyzer {
       re = this.currentReadsEnv;
     let ok = true;
     for (let i = 0; i < ev.params.length; i++) {
+      const cr = this.checkRaiseArg(inner.arguments[i]!, ev.params[i]!.type);
+      if (cr !== null) {
+        if (!cr) {
+          ok = false;
+          break;
+        }
+        continue;
+      }
       const a = this.checkExpr(inner.arguments[i]!, ev.params[i]!.type);
       if (!a) {
         ok = false;

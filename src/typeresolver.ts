@@ -78,6 +78,10 @@ export function resolveType(
   // IFACE-VALUE-TYPE: `interfaces` (name membership) lets an @interface name be a first-class VALUE type,
   // lowered THROUGH the `address` kind carrying the interface name as a nominal brand (identical bytes).
   interfaces?: { has(name: string): boolean },
+  // CONTRACT-TYPE-PARAM: `refNames` (a CONCRETE/abstract contract name set, passed ONLY at event/error
+  // member sites) lets a contract type there lower to a branded ABI `address` (canonicalName -> "address").
+  // Interfaces are already covered by `interfaces` above (checked first); refNames adds contract names.
+  refNames?: Set<string>,
 ): JethType | undefined {
   if (!node) {
     return undefined;
@@ -245,19 +249,30 @@ export function resolveType(
       return resolved;
     }
 
-    // An @interface name used as a first-class VALUE type (field / param / return / local).
-    // solc lowers an interface-typed value THROUGH `address` (20-byte, 160-bit-masked storage,
-    // ABI, and packing), so it resolves to the `address` kind carrying the interface name as its
-    // nominal brand: bytes are identical to a plain address, and the brand keeps the type nominally
-    // distinct at analysis time (an interface value is not interchangeable with a plain address or a
-    // different interface without an explicit conversion, exactly as in solc). Method dispatch on such
-    // a value routes to the SAME external-call lowering the inline `I(addr).m()` cast-call uses.
+    // IFACE-VALUE-TYPE: an @interface name used as a first-class VALUE type (field / param / return /
+    // local). solc lowers an interface-typed value THROUGH `address` (20-byte, 160-bit-masked storage,
+    // ABI, and packing), so it resolves to the `address` kind carrying the interface name as its nominal
+    // brand: bytes are identical to a plain address, and the brand keeps the type nominally distinct at
+    // analysis time. Method dispatch on such a value routes to the SAME external-call lowering the inline
+    // `I(addr).m()` cast-call uses. Checked BEFORE refNames so an interface always takes the iface path.
     if (interfaces?.has(name)) {
       if (node.typeArguments && node.typeArguments.length > 0) {
         diags.error(node, 'JETH460', `type arguments not allowed on '${name}'`);
         return undefined;
       }
       return { kind: 'address', payable: false, brand: name };
+    }
+    // CONTRACT-TYPE-PARAM: a CONCRETE/abstract CONTRACT name (passed in `refNames` ONLY at the event/error
+    // member sites) lowers to ABI `address`, modeled as a branded address. The brand is erased at ABI/
+    // selectors/codegen (canonicalName -> "address", so topic0 = keccak("E(address)")) but keeps the type
+    // nominally distinct. NOT threaded into the recursive element/parameter resolutions, so it is accepted
+    // only at the TOP LEVEL of a member type (a contract-typed array/mapping/struct-field stays JETH013).
+    if (refNames?.has(name)) {
+      if (node.typeArguments && node.typeArguments.length > 0) {
+        diags.error(node, 'JETH460', `type arguments not allowed on '${name}'`);
+        return undefined;
+      }
+      return { kind: 'address', payable: false, brand: '__ctref:' + name };
     }
 
     diags.error(node, 'JETH013', `unknown JETH type '${name}'`);
