@@ -937,11 +937,29 @@ SAFE residual over-rejections (solc accepts, JETH cleanly rejects, no miscompile
 field (`kids[i].x`, JETH210), reading a bytes/string leaf of a recursive struct (JETH202), and a recursive
 struct as a memory local / internal-memory return (JETH074/200).
 
-**KEPT as LIFTABLE-HARD / low-value (open, documented):** CONTRACT-TYPE-PARAM (a contract/interface value lowered to `address` - deep; the repro
-also hit the MULTI-CONTRACT limit), IFACE-VALUE-TYPE (a first-class interface value type - only `I(addr).m()`
-works), LIB-MODIFIER (no native library-modifier surface), ABSTRACT-ONLY-FILE (a no-deployable compile unit -
-degenerate, non-run-verifiable). LESSON (the user's): a differential finder can re-report an already-lifted or
-deliberate OR - re-probe on current main + check the tests/docs/commits BEFORE scoping any lift.
+### 2026-07-14 ALL 6 LIFTABLE-HARD ORs LIFTED byte-identical (worktree fan-out -> sequential integrate -> cross-verify)
+
+The 6 remaining hard ORs were each implemented + adversarially verified byte-identical in an ISOLATED git
+worktree (a 6-agent fan-out), then integrated onto one branch SEQUENTIALLY (rebuild + regression per step; the
+three that extend `resolveType` - CONST-ARRAY-DIM `constDim`, IFACE-VALUE-TYPE `interfaces`, CONTRACT-TYPE-PARAM
+`refNames` - reconciled into ONE 6-param signature `resolveType(node,diags,structs,constDim,interfaces,refNames)`).
+LIFTED: **CONST-ARRAY-DIM** (`Arr<u256,N>` bare in-scope integer const), **LIB-MODIFIER** (a `@modifier` in a
+library, per-library `L.name`-keyed, expanded at the lib-fn definition site), **IFACE-VALUE-TYPE** (an interface
+name as a first-class VALUE type -> the `address` kind with the interface as a nominal brand: field/param/return/
+local/mapping-value/array-element + `x.m()` dispatch reusing the inline `I(addr).m()` lowering),
+**CONTRACT-TYPE-PARAM** (a contract/interface type as an EVENT/ERROR member -> branded address, canonicalName ->
+"address" so topic0 = keccak("E(address)"); scoped to member position, concrete-contract param/field kept a SAFE
+residual), **RECURSIVE-REF-STRUCT** (self/mutual ref through a `P[]`/`mapping` field, via two-phase registration
++ a `recursiveRef` sentinel), **ABSTRACT-ONLY-FILE** (an abstract/interface-only unit compiles to empty bytecode).
+
+A merged-tree adversarial CROSS-VERIFICATION (5 axes) then found + fixed 2 over-acceptances the isolated checks
+could not see: **MERGE-OA-1** a bodyless abstract method without `@virtual` slipped through the newly-unmasked
+non-deployable path (solc: "must be marked virtual") -> JETH489; **MERGE-OA-2** a recursive struct as an event/
+error member was accepted (solc: "recursive type not allowed as event parameter") -> JETH488 via
+`typeContainsRecursiveRef`. The iface x contract-type overlap, the const-dim x iface x struct cross-products, and
+the recursive-struct codec were all byte-identical / reject-parity clean. Suite 464/4316, flake gate green.
+LESSON: independently-verified lifts do NOT compose for free - a shared resolver (resolveType) reconciled by hand
++ a fresh adversarial cross-verification of the MERGED tree caught interaction OAs no per-lift check saw.
 
 ### 2026-07-14 CONST-ARRAY-DIM LIFTED byte-identical (bare in-scope name only)
 
