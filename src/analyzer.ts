@@ -828,12 +828,24 @@ export class Analyzer {
     return t.kind === 'address' && typeof t.brand === 'string' && t.brand.startsWith(CTREF_PREFIX);
   }
 
+  /** Is `t` a NOMINAL contract/interface reference VALUE (a branded address)? Covers BOTH a CONTRACT value
+   *  (`__ctref:<Name>` brand, minted from contractRefNames) AND an INTERFACE value (brand === the interface
+   *  name, minted by IFACE-VALUE-TYPE). solc forbids the raw address surface (`.balance`/`.code`/`.codehash`)
+   *  on either without `address(x)` first, so both must be screened - not just `__ctref:`. */
+  private isNominalAddressValue(t: JethType): t is JethType & { kind: 'address'; brand: string } {
+    return (
+      t.kind === 'address' &&
+      typeof t.brand === 'string' &&
+      (t.brand.startsWith(CTREF_PREFIX) || this.interfacesByName.has(t.brand))
+    );
+  }
+
   /** CONTRACT-TYPE-VALUE: reject an address-capability member access (`.balance` / `.code` / `.codehash`)
    *  on a contract/interface reference VALUE. solc does NOT expose the raw address surface on a contract
    *  value directly ("Member \"balance\" not found ... in contract C. Use address(c).balance"); the value
    *  must be unwrapped with `address(c)` first. Emits the same-shaped diagnostic and returns undefined. */
   private rejectContractRefMember(node: ts.Node, t: JethType & { brand: string }, member: string): undefined {
-    const name = t.brand.slice(CTREF_PREFIX.length);
+    const name = t.brand.startsWith(CTREF_PREFIX) ? t.brand.slice(CTREF_PREFIX.length) : t.brand;
     this.diags.error(
       node,
       'JETH352',
@@ -24085,7 +24097,7 @@ export class Analyzer {
       // CONTRACT-TYPE-VALUE: a contract/interface reference value does NOT expose the raw address
       // members (solc: "Member balance not found ... in contract C. Use address(c).balance"). Skip
       // so it falls to the unknown-member reject; only `address(c)` unwraps the capability surface.
-      if (base && this.isContractRefType(base.type)) return this.rejectContractRefMember(node, base.type, 'balance');
+      if (base && this.isNominalAddressValue(base.type)) return this.rejectContractRefMember(node, base.type, 'balance');
       if (base && base.type.kind === 'address') {
         if (this.attachedBuiltinCollision(node, node.expression, base.type, 'balance')) return undefined;
         this.currentReadsEnv = true; // forbidden in @pure
@@ -24097,7 +24109,7 @@ export class Analyzer {
     // Both are environment reads (allowed in @view, forbidden in @pure), like .balance.
     if (ts.isPropertyAccessExpression(node) && (node.name.text === 'code' || node.name.text === 'codehash')) {
       const base = this.checkExpr(node.expression);
-      if (base && this.isContractRefType(base.type)) return this.rejectContractRefMember(node, base.type, node.name.text);
+      if (base && this.isNominalAddressValue(base.type)) return this.rejectContractRefMember(node, base.type, node.name.text);
       if (base && base.type.kind === 'address') {
         if (this.attachedBuiltinCollision(node, node.expression, base.type, node.name.text)) return undefined;
         this.currentReadsEnv = true; // forbidden in @pure
