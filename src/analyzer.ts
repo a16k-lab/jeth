@@ -336,6 +336,12 @@ export class Analyzer {
   private libraryConstantsByName = new Map<string, Map<string, { value: bigint | boolean | Uint8Array; type: JethType }>>();
   private libraryEventsByName = new Map<string, Map<string, EventIR[]>>();
   private libraryErrorsByName = new Map<string, Map<string, ErrorDecl>>();
+  // LIB-MODIFIER: the BARE names of each library's @modifier declarations (solc allows a `modifier` in a
+  // library). The RawModifier itself is registered into modifiersByName under a QUALIFIED key `L.name` (a
+  // `.` is illegal in an identifier, so a library modifier never collides with a contract's bare-name
+  // modifier nor another library's); this map only records the bare names for the per-library cross-kind
+  // identifier-collision check (a library shares one member namespace across fn/const/event/error/modifier).
+  private libraryModifierNames = new Map<string, Set<string>>();
   // The library whose function body is being checked (undefined inside a contract/abstract-base body), so
   // a bare `K` / `revert(Bad(a))` / `emit(E(a))` inside a lib fn resolves against THAT library's tables
   // plus file-level decls, and never the using-contract's (matching solc's library scope).
@@ -1953,6 +1959,11 @@ export class Analyzer {
       );
     }
     const fns: RawFunction[] = [];
+    // LIB-MODIFIER: @modifier declarations for THIS library, collected via the same collectModifier
+    // pipeline a contract uses (identical validation + placeholder/shape analysis), then registered
+    // under a qualified `L.name` key after the member loop (so the bare-name duplicate check inside
+    // collectModifier stays correct across the whole library while collecting).
+    const libMods: RawModifier[] = [];
     for (const member of cls.members) {
       if (ts.isPropertyDeclaration(member)) {
         // LIB-MEMBER-EVENT / LIB-MEMBER-ERROR: an `E: event<{...}>` / `X: error<{...}>` field routes to
@@ -2047,14 +2058,40 @@ export class Analyzer {
         isExternal = true;
         (member as unknown as { type?: ts.TypeNode }).type = args[0];
       }
-      // @modifier / @event / @error inside a library are not supported in Phase A (solc allows none
-      // of these as a library's callable surface in the way JETH needs); keep the surface to plain
-      // internal functions. Generic library functions are likewise deferred.
-      if (decs.includes('modifier') || decs.includes('event') || decs.includes('error')) {
+      // LIB-MODIFIER: solc allows a `modifier` inside a library. Collect it through the SAME
+      // collectModifier pipeline a contract uses. A library cannot be inherited, so @virtual/@override
+      // are meaningless (reject), and a GENERIC library modifier is deferred (its template would register
+      // under a BARE name in genericModifiersByName and leak into contract scope - keep it a clean reject).
+      if (decs.includes('modifier')) {
+        if (member.typeParameters && member.typeParameters.length > 0) {
+          this.diags.error(
+            member,
+            'JETH390',
+            `@library '${name}' generic @modifier '${mname}' is not supported yet (declare a concrete modifier)`,
+          );
+          continue;
+        }
+        const modBanned = (['virtual', 'override'] as const).find((d) => decs.includes(d));
+        if (modBanned) {
+          this.diags.error(
+            member,
+            'JETH390',
+            `@library '${name}' @modifier '${mname}' cannot be @${modBanned} (a library cannot be inherited, so @${modBanned} is meaningless)`,
+          );
+          continue;
+        }
+        // Collect with the library name as the "declaring contract" so collectModifier's same-scope
+        // duplicate check (JETH046) is per-library. The entry is qualified + de-lib'd after the loop.
+        this.collectModifier(member, name, libMods);
+        continue;
+      }
+      // @event / @error inside a library route through the per-library tables on the PropertyDeclaration
+      // path above; a bare-method @event/@error form is not supported here.
+      if (decs.includes('event') || decs.includes('error')) {
         this.diags.error(
           member,
           'JETH390',
-          `@library '${name}' may only declare internal functions (no @modifier/@event/@error) in Phase A`,
+          `@library '${name}' declares an @${decs.includes('event') ? 'event' : 'error'} as a method; write it as a field member (E: event<{...}> / X: error<{...}>)`,
         );
         continue;
       }
@@ -2100,6 +2137,12 @@ export class Analyzer {
       // existing overload resolver works), and makes the userfn_ / call-graph key unique.
       fn.name = `${name}.${fn.name}`;
       fn.libraryName = name;
+      // LIB-MODIFIER: an applied @modifier on a library function resolves ONLY within this library (a
+      // library shares no scope with a contract and cannot be inherited). Qualify every applied name to
+      // `L.name` so the modifier-application machinery (wrapModifiers/inlineModifier) looks it up in the
+      // per-library entries registered below; a name that is not a library modifier fails to resolve and
+      // rejects (JETH329) - it must NEVER fall through to a same-named CONTRACT modifier.
+      if (fn.modifiers) for (const app of fn.modifiers) app.name = `${name}.${app.name}`;
       // Phase B: an @external library function is a DELEGATECALL entry (visibility 'external', dispatched
       // by selector in the library's own runtime object). An @view/@pure external library fn is still a
       // delegatecall (solc always delegatecalls a public/external library fn so it runs in the caller's
@@ -2111,6 +2154,23 @@ export class Analyzer {
       fns.push(fn);
     }
     this.libraryByName.set(name, fns);
+
+    // LIB-MODIFIER: register each collected library @modifier into modifiersByName under a QUALIFIED
+    // `L.name` key (unique across contracts/libraries: `.` is illegal in an identifier). Its
+    // definingContract is cleared so the modifier BODY is checked with bodyOwnerContract undefined (a
+    // library has no contract instance/state; currentLibrary=L is already installed by checkFunction, so
+    // the body's bare `K`/`revert(Bad())`/`emit(E())` resolve against THIS library's tables). An UNUSED
+    // library modifier is simply never expanded, emitting nothing - byte-identical to the no-library
+    // baseline (solc: an unused library modifier is dead code).
+    const libModNames = new Set<string>();
+    for (const rm of libMods) {
+      const bare = rm.name;
+      libModNames.add(bare);
+      rm.name = `${name}.${bare}`;
+      rm.definingContract = undefined;
+      this.modifiersByName.set(rm.name, rm);
+    }
+    if (libModNames.size) this.libraryModifierNames.set(name, libModNames);
 
     // CROSS-KIND name collision: a library has a SINGLE member namespace shared by its functions,
     // constants, events, and errors (solc: `DeclarationError: Identifier already declared`). Intra-kind
@@ -2125,11 +2185,15 @@ export class Analyzer {
       s.add(kind);
     };
     for (const m of cls.members) {
-      if (ts.isMethodDeclaration(m) && ts.isIdentifier(m.name)) note(m.name.text, 'function');
+      // A @modifier method shares the method syntax but is a MODIFIER, not a function - note it under
+      // its own kind (below) so it does not collide with ITSELF as a same-named function.
+      if (ts.isMethodDeclaration(m) && ts.isIdentifier(m.name) && !decoratorNames(m).includes('modifier'))
+        note(m.name.text, 'function');
     }
     for (const nm of this.libraryConstantsByName.get(name)?.keys() ?? []) note(nm, 'constant');
     for (const nm of this.libraryEventsByName.get(name)?.keys() ?? []) note(nm, 'event');
     for (const nm of this.libraryErrorsByName.get(name)?.keys() ?? []) note(nm, 'error');
+    for (const nm of this.libraryModifierNames.get(name)?.keys() ?? []) note(nm, 'modifier');
     for (const [nm, kinds] of kindsByName) {
       if (kinds.size > 1) {
         this.diags.error(

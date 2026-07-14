@@ -873,7 +873,10 @@ structs: RECURSIVE-REF-STRUCT (`type P = { kids: P[] }` / mapping-field self-ref
 zero-inits); ARRLIT-DIRECT-INDEX (`[a,b,c][i]`, JETH151 - bind-to-local works). events: CONTRACT-TYPE-PARAM (a
 contract/interface-typed event/error/getter param, JETH041/013 - solc lowers it to `address`). libraries:
 LIB-CONST-IN-CONST (`static M = L.K + 1n`, JETH048 - a library constant is not foldable into another
-constant's init); LIB-MODIFIER (`@modifier` in a library, JETH390). interfaces: IFACE-VALUE-TYPE (an interface
+constant's init); LIB-MODIFIER - **LIFTED** (`@modifier` in a library: registered under a qualified `L.name`
+key + threaded through the existing modifier-application machinery, expanding at the library-fn definition
+site; concrete only, generic/@virtual/@override deferred; see the 2026-07-14 LIB-MODIFIER section below).
+interfaces: IFACE-VALUE-TYPE (an interface
 name as a field/param/return/self-ref value type, JETH013 - only `I(addr).m()` inline works); IFACE-EVENT-MEMBER
 + IFACE-ERROR-MEMBER (`E: event<{...}>`/`Bad: error<{...}>` in an interface, JETH341); TYPED-CATCH (`catch
 Error(string)`/`catch Panic(uint)`, JETH074/361 - `catch (e: bytes)` works). native-syntax: CONST-ARRAY-DIM
