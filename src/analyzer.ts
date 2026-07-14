@@ -1136,6 +1136,23 @@ export class Analyzer {
     return false;
   }
 
+  /** Resolve a `recursiveRef` SENTINEL leaf back to the REAL, fully-laid-out struct definition
+   *  (`structsByName`), which carries the true field list + slot/offset layout (and therefore the true
+   *  `storageSlotCount` STRIDE). The sentinel deliberately has EMPTY fields and `storageSlotCount` 1 (vs the
+   *  real struct's finite, correct stride), which would silently MISCOMPILE any element-stride / field-slot
+   *  arithmetic. Callers that descend into a recursive field for a STORAGE-place access (`p.kids[i].x`) must
+   *  resolve the sentinel here so the stride + field slot match solc exactly. The real struct's OWN recursive
+   *  field is again a sentinel, so a deeper descent (`p.kids[i].kids[j].x`) re-resolves at each hop -
+   *  terminating because each hop consumes a runtime index (finite compile-time chain depth). Non-sentinel
+   *  types pass through unchanged. */
+  private resolveRecursiveRef(t: JethType): JethType {
+    if (t.kind === 'struct' && t.recursiveRef) {
+      const real = this.structsByName.get(t.name);
+      if (real && real.kind === 'struct' && !real.recursiveRef && real.fields.length > 0) return real;
+    }
+    return t;
+  }
+
   /** True if `t` IS or TRANSITIVELY CONTAINS a recursive struct (a `recursiveRef` sentinel anywhere in its
    *  field tree). solc forbids a "recursive type" as an event/error PARAMETER (topic0/data encoding has no
    *  finite tuple expansion), so this screens the event/error member sites. The object graph is acyclic
@@ -19998,6 +20015,7 @@ export class Analyzer {
     raw.reverse();
     let t: JethType = rootType;
     const steps: AccessStep[] = [];
+    let crossedContainer = false; // any array index / mapping key before the landed array (see below)
     for (const s of raw) {
       if ('field' in s) {
         if (t.kind !== 'struct') return undefined;
@@ -20021,17 +20039,34 @@ export class Analyzer {
           });
         else
           steps.push({ kind: 'dynIndex', index: idx, strideSlots: storageSlotCount(t.element), elemType: t.element });
+        // NOTE: the sentinel element is deliberately NOT resolved on the intermediate index. A following
+        // FIELD step into a sentinel element (`this.p.kids[i].kids` - a NESTED recursive array) then fails to
+        // find the field and this resolver declines, keeping nested push/pop/length a CLEAN over-rejection.
+        // That is essential for SOUNDNESS: solc's pop() on a recursive struct element performs a RECURSIVE
+        // deep-clear of the element's nested dynamic arrays, which JETH's flat storageSlotCount clear does NOT
+        // emit. By refusing to create any nested-array data, the inner arrays are always empty.
+        crossedContainer = true;
         t = t.element;
       } else if (t.kind === 'mapping') {
         const keyE = this.checkExpr(s.index, t.key);
         if (!keyE) return undefined;
         steps.push({ kind: 'mapKey', key: this.coerce(keyE, t.key, s.index), valueType: t.value });
+        crossedContainer = true;
         t = t.value;
       } else return undefined;
     }
     if (t.kind === 'array' && t.length === undefined) {
       this.currentReadsState = true;
-      return { path: { baseSlot, steps }, elem: t.element };
+      // Resolve a `recursiveRef` sentinel element to the real struct ONLY when the landed recursive array was
+      // reached through struct-fields (no container crossed) - a SINGLE-level recursive field `this.p.kids`:
+      // the placeArray's push/pop then clears the real per-element slot span (storageSlotCount of the real
+      // struct, e.g. 2) instead of the sentinel's stub stride of 1. Because nested navigation is refused, the
+      // landed element's own recursive sub-array is always empty, so this single-level clear can never leave
+      // orphaned deep data. When a CONTAINER was crossed (`this.ps[i].kids`), the element is left as the
+      // sentinel (base behavior): such a recursive field is never populated with dirty data (the value-leaf
+      // write resolver applies the SAME container gate), so a containing pop/delete stays byte-identical too.
+      const elem = crossedContainer ? t.element : this.resolveRecursiveRef(t.element);
+      return { path: { baseSlot, steps }, elem };
     }
     return undefined;
   }
@@ -20284,6 +20319,13 @@ export class Analyzer {
     // pure-mapping chains stay with resolveMapAccess (which checks keys once).
     let pt: JethType = rootType;
     let hasAggregate = false;
+    // Whether the walk has crossed a POPPABLE/DELETABLE container (a dynamic OR fixed array index, or a
+    // mapping key). A recursive field (kids: P[]) reached AFTER such a step lives inside an element that a
+    // pop()/delete would deep-clear; JETH's static clear cannot emit that recursion, so we must NOT let such
+    // a recursive field be populated/indexed (see the resolveRecursiveRef gate below). A recursive field
+    // reached through struct-fields ONLY sits at a fixed storage position that is never popped/deleted, so
+    // its single-level pop is byte-identical (proven).
+    let crossedContainer = false;
     for (const s of rawSteps) {
       if ('field' in s) {
         if (pt.kind !== 'struct') break;
@@ -20301,10 +20343,17 @@ export class Analyzer {
         // bytes/string value (header at keccak(lenSlot)+i); let the dedicated
         // strArrayElem handlers own it rather than the static-leaf place resolver.
         if (pt.length === undefined && isBytesLike(pt.element)) return undefined;
-        pt = pt.element; // fixed or dynamic array index
+        // A recursive-struct element (kids[i] where kids: P[]) is a `recursiveRef` sentinel; resolve it to
+        // the real struct so a following field step (kids[i].x) is owned here - but ONLY when the recursive
+        // array was reached through struct-fields (no container crossed). Under a container the sentinel is
+        // left in place, so the following field step fails and the chain declines (a clean over-rejection).
+        const sentinel = pt.element.kind === 'struct' && pt.element.recursiveRef === true;
+        pt = sentinel && !crossedContainer ? this.resolveRecursiveRef(pt.element) : pt.element;
+        crossedContainer = true;
         hasAggregate = true;
       } else if (pt.kind === 'mapping') {
         pt = pt.value;
+        crossedContainer = true;
       } else break;
     }
     if (!hasAggregate) return undefined; // not ours
@@ -20312,6 +20361,7 @@ export class Analyzer {
     // Committed: fully resolve, type-check sub-expressions, emit diagnostics.
     let t: JethType = rootType;
     const steps: AccessStep[] = [];
+    let crossedContainerC = false; // mirrors the pre-pass container gate (see resolveRecursiveRef below)
     for (const s of rawSteps) {
       if ('field' in s) {
         if (t.kind !== 'struct') {
@@ -20328,7 +20378,15 @@ export class Analyzer {
       } else {
         const idxNode = s.index;
         if (t.kind === 'array') {
-          const elem = t.element;
+          // Resolve a `recursiveRef` sentinel element (kids: P[]) to the real struct so `storageSlotCount`
+          // yields the TRUE per-element STRIDE (the sentinel's empty-field stride is 1, the real struct's is
+          // its finite slot count) and the following field step reads the correct slot - byte-identical to
+          // solc, whose element layout is likewise the real struct's finite storage block. Gated on
+          // `!crossedContainerC`: a recursive field UNDER a poppable/deletable container is left as the
+          // sentinel (a following field step then rejects), matching the pre-pass ownership decision.
+          const sentinelC = t.element.kind === 'struct' && t.element.recursiveRef === true;
+          const elem = sentinelC && !crossedContainerC ? this.resolveRecursiveRef(t.element) : t.element;
+          crossedContainerC = true;
           const packed = elem.kind !== 'struct' && elem.kind !== 'array' && storageByteSize(elem) < 32;
           const idxE = this.checkExpr(idxNode, U256);
           if (!idxE) return { committed: true };
@@ -20376,6 +20434,7 @@ export class Analyzer {
           if (!keyE) return { committed: true };
           steps.push({ kind: 'mapKey', key: this.coerce(keyE, t.key, idxNode), valueType: t.value });
           t = t.value;
+          crossedContainerC = true;
         } else {
           this.diags.error(idxNode, 'JETH212', `cannot index ${displayName(t)}`);
           return { committed: true };
@@ -20584,6 +20643,19 @@ export class Analyzer {
           a,
           'JETH173',
           `abi.${method} cannot encode ${displayName(t)}: an internal function pointer is not ABI-encodable`,
+        );
+        return undefined;
+      }
+      // A recursive struct (self/mutual reference through a P[] / mapping<K,P> field) - or an aggregate
+      // CONTAINING one, e.g. the bare recursive field `p.kids` (a P[] whose element is a recursiveRef
+      // sentinel) - has no finite ABI tuple expansion. solc rejects it outright ("This type cannot be
+      // encoded"); the `t.kind === 'array'` clause below would otherwise wave a recursive-struct array
+      // through to a garbage-byte lowering. Reject cleanly here, mirroring the @event/@error gates.
+      if (this.typeContainsRecursiveRef(t)) {
+        this.diags.error(
+          a,
+          'JETH173',
+          `abi.${method} cannot encode ${displayName(t)}: a recursive type has no finite ABI encoding`,
         );
         return undefined;
       }
