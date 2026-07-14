@@ -816,7 +816,7 @@ is DELEGATECALLed and inherits caller callvalue: its dispatcher must omit the no
 value-bearing caller into a library miscompiles. (4) A side-effecting trial-type at a hot generic site
 (every `.length`) leaks analyzer state cross-file under isolate:false - use a side-effect-free resolver.
 
-## 2026-07-14 WHOLE-SURFACE HARD AUDIT (16 surfaces, 45 agents, ~120 verified probes; 6 OA fixed, 1 MC open, 17 sound ORs)
+## 2026-07-14 WHOLE-SURFACE HARD AUDIT (16 surfaces, 45 agents, ~120 verified probes; 6 OA fixed, 1 MC-candidate = documented deviation, 17 sound ORs)
 
 A 16-surface adversarial audit (each surface: a solc-differential finder + per-finding adversarial verify)
 of value-types/ops, control-flow, functions/mutability, inheritance/C3, storage, memory/calldata, structs,
@@ -824,7 +824,9 @@ arrays, events/errors, abi, libraries, interfaces, low-level/crypto, proxies/dia
 robustness. Coverage was deep and byte-verified (deploy-both + compare returndata/logs/state/raw-slots):
 control-flow (1000+ probes, 0 divergences), inheritance/C3 (750+, incl. 253-case diamond + 250-case storage
 fuzzers), storage (90, raw-slot + residue), abi (100+, 0 divergences), events/errors (2 fuzzers, 246 cases),
-low-level/crypto (all precompiles + ecrecover vectors), all clean. 24 divergences confirmed:
+low-level/crypto (all precompiles + ecrecover vectors), all clean. 24 divergences confirmed - 6 real OA
+(fixed), 1 MC-candidate that turned out to be a documented deviation (JETH matches viaIR semantics), 17 sound
+ORs:
 
 **6 OVER-ACCEPTANCES FIXED (bar violations; test/audit-hardening.test.ts):**
 - **ARR-SIZE-ALIAS**: `let b: Arr<u256,3> = a` where a is Arr<u256,2> (same element type) - solc rejects as
@@ -845,16 +847,22 @@ low-level/crypto (all precompiles + ecrecover vectors), all clean. 24 divergence
   (`@storag`), FIELD, or PARAM position is still silently dropped; a hardening follow-up should reject any
   decorator outside the position's keep-list.
 
-**1 MISCOMPILE - OPEN (needs a design decision):**
+**1 "MISCOMPILE" candidate - RESOLVED as a DOCUMENTED KNOWN DEVIATION (not a bug; no action):**
 - **FUNCREF-EQ**: `p == q` / `p != q` on two INTERNAL function pointers whose target functions have BYTE-
-  IDENTICAL bodies (e.g. `a(){return 7n}` and `b(){return 7n}`). solc's EquivalentFunctionCombiner merges the
-  two functions to one code offset, so solc returns `true`; JETH keeps distinct dispatch ordinals and returns
-  `false` - a silent wrong-bytes MC. It does NOT reproduce for same-function or distinct-BODY operands (both
-  byte-identical, covered by internal-fn-pointers.test.ts). Same family as LT5 (funcref ordinal vs solc code
-  offset). Two closures: (a) SOUND - reject funcref `==`/`!=` (fail-closed, but removes a lifted/tested feature
-  whose common case is byte-identical); (b) MATCH - implement solc's function-combining at JETH's funcref-id
-  assignment (invasive, its own MC risk). Left open pending a decision; the common distinct/same-function
-  cases are byte-identical today, only the identical-BODY collision diverges.
+  IDENTICAL bodies (e.g. `a(){return 7n}` and `b(){return 7n}`). The audit's finder diffed against the
+  differential harness's reference (solc legacy optimizer ON, runs 200) and saw JETH `false` vs solc `true`,
+  flagging an MC. But this is the ALREADY-DOCUMENTED deviation in docs/distinctive-features.md section 6 /
+  test/internal-fn-pointers.test.ts:246. Empirically (2026-07-14, 4-config probe) JETH's `false` matches solc
+  in 3 of 4 configs - optimizer-OFF, viaIR+optimizer-ON, and viaIR+optimizer-OFF all return `false`; ONLY the
+  legacy-optimizer-ON config returns `true`, because its ASSEMBLY-BLOCK DEDUPLICATOR collapses the two
+  identical bodies onto one jump tag so the pointers collide. That is a legacy-optimizer ARTIFACT, not language
+  semantics: viaIR (solc's present/future codegen) agrees with JETH. JETH never returns semantically-wrong
+  bytes, and CALLS through such pointers dispatch byte-identically in every config. Making JETH return `true`
+  would (a) require replicating the legacy assembly deduplicator - infeasible without solc's optimizer (solc
+  folds `3+4`->7 and normalizes `x+1`==`1+x`, which JETH cannot see at pre-optimization id-assignment time),
+  and (b) make JETH DIVERGE from viaIR semantics. So it is left AS-IS by deliberate, documented choice - the
+  semantically-correct value. NOT a bar violation. (The funcref machinery is behaviorally-equivalent, not
+  byte-identical, to solc anyway - JETH uses integer dispatch ids + a switch, solc uses code offsets.)
 
 **17 SOUND OVER-REJECTIONS (fail-closed, clean diagnostic; catalogued for future lift, none a bar violation):**
 value-types: SHIFT-ASSIGN-SIGNED-LIT (`i256 >>= 1n` bare literal, JETH081). functions: GET-SELF-VIEWCALL (a
