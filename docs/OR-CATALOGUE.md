@@ -1004,3 +1004,32 @@ interface value (.balance/.code/.codehash, JETH352), and a RECURSIVE struct in a
 lift. Suite 467/4333, flake green. LESSON (reinforced): an isolated lift verification can miss a consumer that
 only miscompiles under state the lift newly enables (populated recursive field); the merged-tree adversarial
 cross-verify is what caught the 2 MCs + 4 OAs, and reverting the un-fixable-cheaply lift beats shipping an MC.
+
+### 2026-07-15 CTR-TYPE-AGG LIFT (a contract/abstract-contract type in the AGGREGATE positions)
+
+The residual left by CONCRETE-CONTRACT-VALUE (2026-07-14): a concrete/abstract contract name was a first-class
+VALUE type (field/param/return/local/immutable, `__ctref:` branded address) but stayed a JETH013 over-rejection
+in the AGGREGATE positions - a STRUCT FIELD, a dynamic-array element, an `Arr<T,N>` element, and a mapping value
+- because `refNames` was not threaded into those recursive type-resolution sites (the interface brand already
+was, via `interfaces`, so an @interface name accepted there - the template mirrored here). LIFTED byte-identical
+by (1) threading `refNames` through every recursive `resolveType` call (array element, mapping key/value, Arr
+element, parenthesized, funcref param/return) exactly as `interfaces` is, and (2) a name-only `contractNamesEarly`
+pre-scan in collectStructs (mirroring registerContractClasses's predicate) passed as `refNames` at the struct-
+field resolution site (the same reason interfaceNamesEarly exists: struct fields resolve before classByName is
+built). Everything erases to `address` at storage/ABI/selectors/codecs, so a contract-typed aggregate program is
+byte-identical to the same program written with a plain `address` there (proven at the bytecode level across 14
+consumers) AND to the solc mirror using the contract type (66-cell oracle + a run+decode sweep vs solc under
+POPULATED state). The REC-STRUCT-CONSUMERS trap was re-checked directly: `this.p = this.q` (distinct-populated
+structs) and `delete this.p`, plus array-element delete and storage array-to-array copy, are all byte-identical
+to solc - unlike the reverted recursive-ref lift, a contract-ref aggregate uses the ordinary address layout
+(no recursiveRef sentinel), so the copy/delete paths carry the full payload. GUARDS held: a value read OUT OF an
+aggregate is still NOMINAL - `.balance`/`.code`/`.codehash` (JETH210/JETH352), a uN/iN/bytesN/payable cast
+(JETH170), and an implicit contract<->address conversion (JETH085) all fail closed with the `__ctref:` brand
+visible; a plain address does not implicitly convert INTO a contract element; a library name stays a JETH013
+element reject; MULTI-CONTRACT-FILE / dep-file concrete gates are untouched. RESIDUAL (unchanged, documented):
+a METHOD CALL on a contract-ref value (`t.v()`) is JETH074 in EVERY position (value AND aggregate) - contract-
+value dispatch was never built (interfaces have it); solc accepts it, so JETH's clean reject is a SAFE
+over-rejection. This lift threads only the TYPE brand; it does not add dispatch, keeping value and aggregate
+consistent. Suite 468/4340. LESSON: the byte-identity-to-the-address-twin invariant (a branded address must
+produce IDENTICAL codegen to a plain address) is a fast, strong miscompile detector across the whole consumer
+axis - any divergence localizes exactly where the brand leaked into codegen.

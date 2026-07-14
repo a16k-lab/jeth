@@ -78,9 +78,12 @@ export function resolveType(
   // IFACE-VALUE-TYPE: `interfaces` (name membership) lets an @interface name be a first-class VALUE type,
   // lowered THROUGH the `address` kind carrying the interface name as a nominal brand (identical bytes).
   interfaces?: { has(name: string): boolean },
-  // CONTRACT-TYPE-PARAM: `refNames` (a CONCRETE/abstract contract name set, passed ONLY at event/error
-  // member sites) lets a contract type there lower to a branded ABI `address` (canonicalName -> "address").
-  // Interfaces are already covered by `interfaces` above (checked first); refNames adds contract names.
+  // CONTRACT-TYPE-PARAM / CTR-TYPE-AGG: `refNames` (a CONCRETE/abstract contract name set) lets a contract
+  // type lower to a branded ABI `address` (canonicalName -> "address"). It is threaded through the same
+  // recursive positions as `interfaces` (array element, mapping key/value, Arr element, funcref param/
+  // return, parenthesized) so a contract type is a first-class member type in the AGGREGATE positions too,
+  // byte-identical to the interface brand there. Interfaces are covered by `interfaces` (checked first);
+  // refNames adds contract names. When a caller omits refNames the contract name stays a JETH013 reject.
   refNames?: Set<string>,
 ): JethType | undefined {
   if (!node) {
@@ -89,7 +92,7 @@ export function resolveType(
   // A parenthesized type `(T)` -> resolve the inner type. Needed for a dynamic array of an internal
   // function pointer written `((x: T) => R)[]`: the `[]` binds tighter than `=>`, so the element must be
   // parenthesized, giving an ArrayTypeNode whose elementType is a ParenthesizedTypeNode wrapping the arrow.
-  if (ts.isParenthesizedTypeNode(node)) return resolveType(node.type, diags, structs, constDim, interfaces);
+  if (ts.isParenthesizedTypeNode(node)) return resolveType(node.type, diags, structs, constDim, interfaces, refNames);
 
   // void
   if (node.kind === ts.SyntaxKind.VoidKeyword) return { kind: 'void' };
@@ -110,7 +113,7 @@ export function resolveType(
         diags.error(node, 'JETH014', 'a function-pointer type parameter must have a plain type annotation');
         return undefined;
       }
-      const pt = resolveType(p.type, diags, structs, constDim, interfaces);
+      const pt = resolveType(p.type, diags, structs, constDim, interfaces, refNames);
       if (!pt) return undefined;
       params.push(pt);
     }
@@ -122,7 +125,7 @@ export function resolveType(
       for (const el of node.type.elements) {
         // a named tuple member `[x: T]` carries its type on .type; a plain member IS the type node.
         const tn = ts.isNamedTupleMember(el) ? el.type : el;
-        const rt = resolveType(tn, diags, structs, constDim, interfaces);
+        const rt = resolveType(tn, diags, structs, constDim, interfaces, refNames);
         if (!rt) return undefined;
         if (rt.kind === 'void') {
           diags.error(el, 'JETH014', 'void is not a valid tuple-return component in a function-pointer type');
@@ -137,7 +140,7 @@ export function resolveType(
       if (rets.length === 1) return { kind: 'funcref', params, ret: rets[0] };
       return { kind: 'funcref', params, ret: undefined, rets };
     }
-    const ret = resolveType(node.type, diags, structs, constDim, interfaces);
+    const ret = resolveType(node.type, diags, structs, constDim, interfaces, refNames);
     if (!ret) return undefined;
     return { kind: 'funcref', params, ret: ret.kind === 'void' ? undefined : ret };
   }
@@ -145,7 +148,7 @@ export function resolveType(
   // T[] array (fixed-length T[N] is written via a tuple-ish annotation; TS arrays
   // are always dynamic here -> JETH dynamic array).
   if (ts.isArrayTypeNode(node)) {
-    const element = resolveType(node.elementType, diags, structs, constDim, interfaces);
+    const element = resolveType(node.elementType, diags, structs, constDim, interfaces, refNames);
     if (!element) return undefined;
     return { kind: 'array', element };
   }
@@ -160,8 +163,8 @@ export function resolveType(
         diags.error(node, 'JETH010', 'mapping requires exactly two type arguments: mapping<K, V>');
         return undefined;
       }
-      const key = resolveType(args[0], diags, structs, constDim, interfaces);
-      const value = resolveType(args[1], diags, structs, constDim, interfaces);
+      const key = resolveType(args[0], diags, structs, constDim, interfaces, refNames);
+      const value = resolveType(args[1], diags, structs, constDim, interfaces, refNames);
       if (!key || !value) return undefined;
       return { kind: 'mapping', key, value };
     }
@@ -173,7 +176,7 @@ export function resolveType(
         diags.error(node, 'JETH011', 'fixed array requires Arr<T, N>');
         return undefined;
       }
-      const element = resolveType(args[0], diags, structs, constDim, interfaces);
+      const element = resolveType(args[0], diags, structs, constDim, interfaces, refNames);
       if (!element) return undefined;
       const lenNode = args[1];
       let exactLen: bigint | undefined;
@@ -262,11 +265,12 @@ export function resolveType(
       }
       return { kind: 'address', payable: false, brand: name };
     }
-    // CONTRACT-TYPE-PARAM: a CONCRETE/abstract CONTRACT name (passed in `refNames` ONLY at the event/error
-    // member sites) lowers to ABI `address`, modeled as a branded address. The brand is erased at ABI/
-    // selectors/codegen (canonicalName -> "address", so topic0 = keccak("E(address)")) but keeps the type
-    // nominally distinct. NOT threaded into the recursive element/parameter resolutions, so it is accepted
-    // only at the TOP LEVEL of a member type (a contract-typed array/mapping/struct-field stays JETH013).
+    // CONTRACT-TYPE-PARAM / CTR-TYPE-AGG: a CONCRETE/abstract CONTRACT name (passed in `refNames`) lowers to
+    // ABI `address`, modeled as a branded address. The brand is erased at ABI/selectors/codegen
+    // (canonicalName -> "address", so topic0 = keccak("E(address)")) but keeps the type nominally distinct.
+    // refNames is threaded into the recursive element/parameter resolutions (exactly like `interfaces`), so a
+    // contract type is also a first-class member type in the aggregate positions (array element, mapping
+    // value, Arr element, struct field, funcref param/return) - byte-identical to the interface brand there.
     if (refNames?.has(name)) {
       if (node.typeArguments && node.typeArguments.length > 0) {
         diags.error(node, 'JETH460', `type arguments not allowed on '${name}'`);

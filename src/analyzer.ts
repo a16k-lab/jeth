@@ -360,6 +360,12 @@ export class Analyzer {
   // branded `address` struct field exactly as an interface state var / param does (IFACE-VALUE-TYPE), while
   // the ordering that lets an interface method reference a struct type stays intact.
   private interfaceNamesEarly = new Set<string>();
+  // CTR-TYPE-AGG: concrete/abstract CONTRACT NAME membership, pre-scanned before collectStructs for the SAME
+  // reason interfaceNamesEarly exists: struct fields are resolved during collectStructs, which runs BEFORE
+  // registerContractClasses populates `classByName`. This name-only set (mirroring registerContractClasses's
+  // membership predicate) lets a contract-typed struct field resolve to a `__ctref:`-branded `address`
+  // exactly as a contract state var / param does (CONTRACT-TYPE-VALUE), byte-identical to the interface path.
+  private contractNamesEarly = new Set<string>();
   // Phase 6: the @interface's class node (`@interface class I extends J {..}`), kept so C3 linearization
   // can include interfaces as ORDERING nodes exactly as solc does (an interface is a base in the graph),
   // while flattening skips them (no storage/ctor/functions). name -> the `@interface class` declaration.
@@ -1036,6 +1042,21 @@ export class Analyzer {
       if (ts.isInterfaceDeclaration(n)) this.interfaceNamesEarly.add(n.name.text);
       else if (ts.isClassDeclaration(n) && n.name && decoratorNames(n).includes('interface'))
         this.interfaceNamesEarly.add(n.name.text);
+      // CTR-TYPE-AGG: pre-scan every concrete/abstract CONTRACT class name (the SAME predicate
+      // registerContractClasses uses: an explicit @contract/@abstract/@facet, a TS `abstract class`, or a
+      // native contract class). classByName is not built until after collectStructs, so this name-only set
+      // is what lets a contract-typed struct field resolve during field collection. A @struct / @interface /
+      // library class is excluded (isNativeContractClass returns false and it carries no contract decorator),
+      // so a library name stays a JETH013 struct-field reject exactly as in every other position.
+      else if (ts.isClassDeclaration(n) && n.name) {
+        const decs = decoratorNames(n);
+        if (
+          decs.includes('contract') || decs.includes('abstract') || decs.includes('facet') ||
+          this.hasAbstractKeyword(n) || this.isNativeContractClass(n)
+        ) {
+          this.contractNamesEarly.add(n.name.text);
+        }
+      }
       ts.forEachChild(n, scanIfaceNames);
     };
     ts.forEachChild(this.sourceFile, scanIfaceNames);
@@ -1277,10 +1298,15 @@ export class Analyzer {
         this.diags.error(member.node, 'JETH221', `duplicate struct field name '${fname}'`);
         continue;
       }
-      // IFACE-STRUCT-FIELD: pass the pre-scanned interface NAME set (not the still-empty interfacesByName
-      // map) so an interface-typed field lowers THROUGH `address` (branded), byte-identical to a plain
-      // address field and to an interface state var / param (IFACE-VALUE-TYPE).
-      const t = resolveType(member.type, this.diags, this.structsByName, this.namedDim, this.interfaceNamesEarly);
+      // IFACE-STRUCT-FIELD / CTR-TYPE-AGG: pass the pre-scanned interface AND contract NAME sets (not the
+      // still-empty interfacesByName / classByName maps) so an interface- OR contract-typed field lowers
+      // THROUGH `address` (branded), byte-identical to a plain address field and to an interface / contract
+      // state var / param (IFACE-VALUE-TYPE / CONTRACT-TYPE-VALUE). refNames is threaded into the array /
+      // mapping / Arr recursion, so a `T[]` / `mapping<K,T>` / `Arr<T,N>` struct field of a contract type
+      // resolves too.
+      const t = resolveType(
+        member.type, this.diags, this.structsByName, this.namedDim, this.interfaceNamesEarly, this.contractNamesEarly,
+      );
       if (!t) continue;
       // A mapping field (G7) is allowed: it makes the struct STORAGE-ONLY (the storage-only
       // gates below reject using it as a memory local / param / return / construction / copy,
