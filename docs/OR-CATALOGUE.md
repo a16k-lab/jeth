@@ -868,8 +868,9 @@ ORs:
 value-types: SHIFT-ASSIGN-SIGNED-LIT (`i256 >>= 1n` bare literal, JETH081). functions: GET-SELF-VIEWCALL (a
 `get` doing `this.g()` to a view external, JETH043 - the self message-call flavor of GET-EXTLIB-VIEW not yet
 extended); QUALIFIED-SELECTOR (`C.g.selector`/`I.g.selector`, JETH074/013 - only `this.g.selector` works).
-structs: RECURSIVE-REF-STRUCT (`type P = { kids: P[] }` / mapping-field self-reference, JETH013 - direct
-`next: P` correctly rejects in both). arrays: UNINIT-ARRAY-LOCAL (`let a: Arr<u256,3>;`, JETH200 - solc
+structs: RECURSIVE-REF-STRUCT was LIFTED (see below - two-phase struct registration + `recursiveRef`
+sentinel; storage var + static-value-leaf byte-identical, ABI/memory/kids-codec consumers still reject).
+arrays: UNINIT-ARRAY-LOCAL (`let a: Arr<u256,3>;`, JETH200 - solc
 zero-inits); ARRLIT-DIRECT-INDEX (`[a,b,c][i]`, JETH151 - bind-to-local works). events: CONTRACT-TYPE-PARAM (a
 contract/interface-typed event/error/getter param, JETH041/013 - solc lowers it to `address`). libraries:
 LIB-CONST-IN-CONST (`static M = L.K + 1n`, JETH048 - a library constant is not foldable into another
@@ -921,9 +922,23 @@ JETH074/361 - the native `catch (e: bytes)` + `this.reason`/`this.panic` forms w
 in try-catch.test.ts) and MULTI-CONTRACT-FILE (JETH041 - the one-contract-per-file MVP limit, pinned in
 native-mode-declarations.test.ts:93/137; per-file + multi-file-import is the model).
 
-**6 KEPT as LIFTABLE-HARD / low-value (open, documented):** CONST-ARRAY-DIM (needs a constant environment
-threaded through resolveType; bare-literal `Arr<u256,3>` already works), RECURSIVE-REF-STRUCT (self-ref through
-a reference-type field), CONTRACT-TYPE-PARAM (a contract/interface value lowered to `address` - deep; the repro
+RECURSIVE-REF-STRUCT LIFTED (2026-07-14, lift-recursive-ref-struct.test.ts): a struct that references itself
+(directly or mutually) through a REFERENCE-type field (`P[]` / `mapping<K,P>`) is now accepted, byte-identical
+to solc, via TWO-PHASE struct registration (shells -> resolve -> cycle-classify -> gate) plus a `recursiveRef`
+sentinel that breaks the object-graph back-edge so every compile-time type-walk terminates. A by-value cycle
+(`next: P`, `Arr<P,N>`, mutual by-value) stays a clean reject (JETH487 = solc "Recursive struct definition").
+PROVEN byte-identical (deploy-both + raw storage): storage var + static-value-leaf read/write (`p.x`), the
+auto-getter (returns only value members), top-level `P[]`/`mapping<K,P>` push/index/read/length, packed leaves,
+mutual + mapping-field self-reference, forward/mutual acyclic references. solc-rejected consumers (external
+return, abi.encode, event param) stay rejected. Also byte-identical: the recursive field's own
+push/pop/length + whole-struct storage-to-storage copy (the recursiveRef sentinel only appears where the
+element CONTENT is provably zero - `kids[i]` indexing rejects - so no stride/codec divergence is observable).
+SAFE residual over-rejections (solc accepts, JETH cleanly rejects, no miscompile): indexing INTO a recursive
+field (`kids[i].x`, JETH210), reading a bytes/string leaf of a recursive struct (JETH202), and a recursive
+struct as a memory local / internal-memory return (JETH074/200).
+
+**5 KEPT as LIFTABLE-HARD / low-value (open, documented):** CONST-ARRAY-DIM (needs a constant environment
+threaded through resolveType; bare-literal `Arr<u256,3>` already works), CONTRACT-TYPE-PARAM (a contract/interface value lowered to `address` - deep; the repro
 also hit the MULTI-CONTRACT limit), IFACE-VALUE-TYPE (a first-class interface value type - only `I(addr).m()`
 works), LIB-MODIFIER (no native library-modifier surface), ABSTRACT-ONLY-FILE (a no-deployable compile unit -
 degenerate, non-run-verifiable). LESSON (the user's): a differential finder can re-report an already-lifted or

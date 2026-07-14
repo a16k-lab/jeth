@@ -860,32 +860,89 @@ export class Analyzer {
     return undefined;
   }
 
-  /** Collect @struct class declarations into the registry (in source order so a
-   *  struct may reference earlier structs by value). */
+  /** Collect @struct class declarations and native `type P = { ... }` object-type aliases into the
+   *  registry using TWO-PHASE registration: phase 1 registers every struct NAME as an empty shell, so a
+   *  field may reference a struct declared LATER (forward reference) or the struct ITSELF (bounded
+   *  recursion through a `P[]` / `mapping<K,P>` field), byte-identical to solc's whole-scope type
+   *  visibility. Phase 2 resolves field types; phase 3 classifies recursion (a by-value self-cycle is
+   *  infinite and rejected, a reference cycle is bounded and its object-graph back-edge is broken with a
+   *  sentinel); phase 4 runs the supported-field-kind gate on the completed, acyclic types. */
   private collectStructs(): void {
+    // Phase 1: register every struct/type-struct NAME as an empty shell (source order, so a name
+    // collision reports against the FIRST declaration exactly as before).
+    const decls: {
+      name: string;
+      anchor: ts.Node;
+      kindLabel: string;
+      members: { name: ts.PropertyName; type: ts.TypeNode | undefined; node: ts.Node }[];
+    }[] = [];
     const visit = (n: ts.Node): void => {
-      if (ts.isClassDeclaration(n) && decoratorNames(n).includes('struct')) this.collectStruct(n);
-      // Item #5 (native mode): a `type P = { ... }` object-type alias is a struct, collected here (in the
-      // same source-ordered walk as @struct classes) so a type-struct field may reference any enum,
-      // @struct, or EARLIER struct/type-struct - identical to the @struct "reference earlier types" rule.
-      else if (ts.isTypeAliasDeclaration(n) && ts.isTypeLiteralNode(n.type))
-        this.collectNativeTypeStruct(n);
+      if (ts.isClassDeclaration(n) && decoratorNames(n).includes('struct')) {
+        const d = this.preregisterStruct(n);
+        if (d) decls.push(d);
+      } else if (ts.isTypeAliasDeclaration(n) && ts.isTypeLiteralNode(n.type)) {
+        const d = this.preregisterNativeTypeStruct(n);
+        if (d) decls.push(d);
+      }
       ts.forEachChild(n, visit);
     };
     ts.forEachChild(this.sourceFile, visit);
+    // Phase 2: resolve every struct's field types into its shell (forward / self references now resolve).
+    // The supported-field-kind gate is DEFERRED to phase 4 (types must be complete + acyclic first).
+    for (const d of decls) {
+      const shell = this.structsByName.get(d.name);
+      if (!shell || shell.kind !== 'struct') continue;
+      const fields = this.buildStructFields(d.anchor, d.name, d.kindLabel, d.members);
+      if (fields) shell.fields = fields;
+    }
+    // Phase 3: classify recursion. A cycle through a REFERENCE field (dynamic array / mapping) is bounded
+    // (mark recursive, break the object-graph back-edge with a `recursiveRef` sentinel); a cycle through
+    // only BY-VALUE fields (struct-in-struct, fixed array) is infinite (reject, byte-identical to solc's
+    // "Recursive struct definition").
+    this.detectAndBreakStructCycles(decls);
+    // Phase 4: run the supported-field-kind gate on the now-complete, acyclic (sentinel-broken) types.
+    for (const d of decls) {
+      const shell = this.structsByName.get(d.name);
+      if (!shell || shell.kind !== 'struct') continue;
+      this.gateStructFields(d.anchor, shell.fields, d.members);
+    }
   }
 
-  /** Item #5: build a struct from a native `type P = { a: T; b: T }` object-type alias. Reuses the exact
-   *  @struct field builder, so the struct IR is IDENTICAL to `@struct class P`. A struct type carries
-   *  data only: any non-field member (method / index / call / get-set signature) or a `?`-optional,
-   *  `readonly`, or untyped field is REJECTED, not silently dropped - solc has no such struct members, so
-   *  dropping them would over-accept. */
-  private collectNativeTypeStruct(decl: ts.TypeAliasDeclaration): void {
+  /** Phase 1 for an @struct class: name-collision check + empty-shell registration. Returns the decl
+   *  info for phases 2-4, or undefined if the name was already taken (diagnostic emitted). */
+  private preregisterStruct(cls: ts.ClassDeclaration): {
+    name: string;
+    anchor: ts.Node;
+    kindLabel: string;
+    members: { name: ts.PropertyName; type: ts.TypeNode | undefined; node: ts.Node }[];
+  } | undefined {
+    const name = cls.name?.text ?? 'Struct';
+    if (this.structsByName.has(name)) {
+      this.diags.error(cls, 'JETH220', `@struct '${name}' redeclared`);
+      return undefined;
+    }
+    const members = cls.members
+      .filter(ts.isPropertyDeclaration)
+      .map((m) => ({ name: m.name, type: m.type, node: m as ts.Node }));
+    this.structsByName.set(name, { kind: 'struct', name, fields: [] });
+    return { name, anchor: cls, kindLabel: '@struct', members };
+  }
+
+  /** Phase 1 for a native `type P = { a: T; b: T }` object-type alias (item #5): member-shape validation
+   *  + name-collision check + empty-shell registration. A struct type carries data only: any non-field
+   *  member (method / index / call / get-set signature) or a `?`-optional, `readonly`, or untyped field
+   *  is REJECTED, not silently dropped. Returns the decl info, or undefined on a hard shape/name error. */
+  private preregisterNativeTypeStruct(decl: ts.TypeAliasDeclaration): {
+    name: string;
+    anchor: ts.Node;
+    kindLabel: string;
+    members: { name: ts.PropertyName; type: ts.TypeNode | undefined; node: ts.Node }[];
+  } | undefined {
     const name = decl.name.text;
     const lit = decl.type as ts.TypeLiteralNode;
     if (this.structsByName.has(name) || resolvePrimitiveName(name)) {
       this.diags.error(decl, 'JETH015', `type name '${name}' conflicts with an existing type`);
-      return;
+      return undefined;
     }
     for (const m of lit.members) {
       if (
@@ -899,30 +956,115 @@ export class Analyzer {
           'JETH015',
           `a struct type '${name}' may only contain plain \`name: Type\` fields (no method / index / call signatures, and no optional '?', readonly, or untyped fields)`,
         );
-        return;
+        return undefined;
       }
     }
     const members = lit.members.map((m) => {
       const p = m as ts.PropertySignature;
       return { name: p.name, type: p.type, node: p as ts.Node };
     });
-    const fields = this.buildStructFields(decl, name, 'struct type', members);
-    if (!fields) return;
-    this.structsByName.set(name, { kind: 'struct', name, fields });
+    this.structsByName.set(name, { kind: 'struct', name, fields: [] });
+    return { name, anchor: decl, kindLabel: 'struct type', members };
   }
 
-  private collectStruct(cls: ts.ClassDeclaration): void {
-    const name = cls.name?.text ?? 'Struct';
-    if (this.structsByName.has(name)) {
-      this.diags.error(cls, 'JETH220', `@struct '${name}' redeclared`);
-      return;
+  /** True if `t` is, or reaches through dynamic-array elements / mapping values, a `recursiveRef`
+   *  sentinel: i.e. `t` is a bounded self / mutual reference field of a recursive struct (`P[]`,
+   *  `mapping<K,P>`, `P[][]`, ...). Terminates (the sentinel is a leaf, so the object graph is acyclic).*/
+  private isRecursiveRefLeaf(t: JethType): boolean {
+    if (t.kind === 'struct') return t.recursiveRef === true;
+    if (t.kind === 'array') return this.isRecursiveRefLeaf(t.element);
+    if (t.kind === 'mapping') return this.isRecursiveRefLeaf(t.value);
+    return false;
+  }
+
+  /** Phase 3: walk every struct's field graph, classify and break recursion cycles.
+   *  Edges: a struct-typed field or a FIXED-array element is a BY-VALUE edge; a DYNAMIC-array element or
+   *  a mapping value is a REFERENCE edge. A cycle that uses only by-value edges is infinite (reject,
+   *  JETH487, matching solc "Recursive struct definition"); a cycle that crosses a reference edge is
+   *  bounded (replace the back-edge occurrence with a `recursiveRef` sentinel so the object graph is
+   *  acyclic and every later type-walk terminates). */
+  private detectAndBreakStructCycles(
+    decls: readonly { name: string; anchor: ts.Node }[],
+  ): void {
+    const declNode = new Map<string, ts.Node>();
+    for (const d of decls) declNode.set(d.name, d.anchor);
+    const grayEntryRefs = new Map<string, number>(); // struct name currently on the DFS stack -> refCount at entry
+    const black = new Set<string>();
+    let refCount = 0;
+    const walk = (t: JethType): JethType => {
+      if (t.kind === 'array') {
+        const ref = t.length === undefined;
+        if (ref) refCount++;
+        t.element = walk(t.element);
+        if (ref) refCount--;
+        return t;
+      }
+      if (t.kind === 'mapping') {
+        refCount++;
+        t.value = walk(t.value);
+        refCount--;
+        return t;
+      }
+      if (t.kind === 'struct') {
+        if (t.recursiveRef) return t; // already a sentinel leaf
+        if (grayEntryRefs.has(t.name)) {
+          // back-edge -> a cycle from t.name down to the current struct.
+          const crossedReference = refCount > grayEntryRefs.get(t.name)!;
+          if (!crossedReference) {
+            this.diags.error(
+              declNode.get(t.name) ?? this.sourceFile,
+              'JETH487',
+              `recursive struct '${t.name}' is infinite: a struct cannot contain itself by value; self-reference is only allowed through a dynamic array (${t.name}[]) or a mapping value`,
+            );
+          }
+          // Break the cycle either way (a bounded reference cycle, or an already-reported infinite one).
+          return { kind: 'struct', name: t.name, fields: [], recursiveRef: true };
+        }
+        if (black.has(t.name)) return t; // fully processed already; its internals are fixed
+        grayEntryRefs.set(t.name, refCount);
+        for (const f of t.fields) f.type = walk(f.type);
+        grayEntryRefs.delete(t.name);
+        black.add(t.name);
+        return t;
+      }
+      return t;
+    };
+    for (const d of decls) {
+      const s = this.structsByName.get(d.name);
+      if (s && s.kind === 'struct' && !black.has(s.name)) walk(s);
     }
-    const members = cls.members
-      .filter(ts.isPropertyDeclaration)
-      .map((m) => ({ name: m.name, type: m.type, node: m as ts.Node }));
-    const fields = this.buildStructFields(cls, name, '@struct', members);
-    if (!fields) return;
-    this.structsByName.set(name, { kind: 'struct', name, fields });
+  }
+
+  /** Phase 4: run the supported-field-kind gate on a struct's completed, acyclic fields. A bounded
+   *  self / mutual reference field (`isRecursiveRefLeaf`) is admitted (it is a storage-representable
+   *  dynamic-array / mapping head - byte-identical to solc); every other field must be static, a
+   *  supported dynamic field, or a funcref aggregate, exactly as the pre-two-phase inline gate required.*/
+  private gateStructFields(
+    anchor: ts.Node,
+    fields: readonly StructField[],
+    members: readonly { name: ts.PropertyName; type: ts.TypeNode | undefined; node: ts.Node }[],
+  ): void {
+    for (const f of fields) {
+      const t = f.type;
+      if (t.kind === 'mapping') continue; // mapping keys already validated in phase 2
+      if (isFuncrefValueAggregate(t)) continue;
+      // A bounded self / mutual reference field of a recursive struct: admitted for layout (a dynamic
+      // array / mapping head is one slot). Every consumer of the recursive field / whole recursive struct
+      // is gated elsewhere (ABI / getter / return / encode / element codec), byte-identical to solc.
+      if (this.isRecursiveRefLeaf(t)) continue;
+      const funcrefNestedOk = t.kind === 'struct' && this.typeHasFuncref(t) && this.isSupportedDynStructLocal(t);
+      if (!isStaticType(t) && !this.isSupportedDynStructField(t) && !funcrefNestedOk) {
+        const node =
+          members.find((m) => ts.isIdentifier(m.name) && m.name.text === f.name)?.node ?? anchor;
+        this.diags.error(
+          node,
+          'JETH229',
+          this.typeHasFuncref(t)
+            ? `struct field '${f.name}' of type ${displayName(t)} is not supported yet (an internal function pointer as a struct field is not supported; use a single function-pointer variable)`
+            : `struct field '${f.name}' of type ${displayName(t)} is not supported yet (supported dynamic field kinds: bytes/string and a nested struct)`,
+        );
+      }
+    }
   }
 
   /** Build a struct's packed StructField[] from its typed members. Shared by @struct classes and native
@@ -969,31 +1111,10 @@ export class Analyzer {
         raw.push({ name: fname, type: t });
         continue;
       }
-      // Fields may be static (value, nested struct, or fixed array). A struct with
-      // >=1 dynamic field is itself dynamic (spec section 3) and supported as a
-      // calldata param / return (Phase 4e-6). The supported dynamic field kinds are
-      // bytes/string and a nested struct (which may itself be dynamic). A dynamic
-      // ARRAY field (T[], string[], T[][]) inside a struct is still deferred (the
-      // tuple codec would need an array-in-tuple tail walk we have not verified).
-      // Batch C (F-TYPES t3): a NESTED funcref-bearing DYNAMIC struct field (Outer { fd: Fd }, Fd
-      // itself a supported funcref-bearing dyn-struct memory shape) is ONE head word holding a pointer
-      // to the nested image - exactly the nested-dyn-struct field layout isSupportedDynStructLocal
-      // already admits (its recursion accepts funcref fields, L11a). Admit it at the DECL gate too;
-      // typeHasFuncref recurses through nested structs, so EVERY ABI boundary (external sigs JETH426,
-      // abi.encode* JETH173, events/errors, getters, ctor params) still auto-rejects the whole struct,
-      // byte-identical to solc's "internal type in ABI" reject. Gated on typeHasFuncref so no
-      // non-funcref shape is newly admitted here.
-      const funcrefNestedOk = t.kind === 'struct' && this.typeHasFuncref(t) && this.isSupportedDynStructLocal(t);
-      if (!isStaticType(t) && !this.isSupportedDynStructField(t) && !funcrefNestedOk) {
-        this.diags.error(
-          member.node,
-          'JETH229',
-          this.typeHasFuncref(t)
-            ? `struct field '${fname}' of type ${displayName(t)} is not supported yet (an internal function pointer as a struct field is not supported; use a single function-pointer variable)`
-            : `struct field '${fname}' of type ${displayName(t)} is not supported yet (supported dynamic field kinds: bytes/string and a nested struct)`,
-        );
-        continue;
-      }
+      // The supported-field-kind gate (static value / nested struct / bytes-string / funcref aggregate,
+      // else JETH229) is DEFERRED to phase 4 (gateStructFields): it must run on the COMPLETE, acyclic
+      // type tree, which only exists after every shell is populated (phase 2) and recursion is broken
+      // (phase 3). Here we only resolve + lay out the field, so forward / self references resolve first.
       raw.push({ name: fname, type: t });
     }
     if (raw.length === 0) {
@@ -18255,7 +18376,18 @@ export class Analyzer {
     // read/written by the plain value-field codec - so a funcref-bearing dynamic struct is storable.
     // (The raw slot CONTENT of any funcref differs from solc by construction - a JETH id vs solc's code
     // offset - exactly like a bare @state funcref var; it is never observable through the ABI.)
-    return t.fields.every((f) => isStaticType(f.type) || f.type.kind === 'funcref' || this.isSupportedDynStructField(f.type));
+    return t.fields.every(
+      (f) =>
+        isStaticType(f.type) ||
+        f.type.kind === 'funcref' ||
+        // A bounded self / mutual reference field (`P[]`, `mapping<K,P>`) of a recursive struct is a
+        // storage-representable dynamic-array / mapping head (one slot; elements at keccak, bounded at
+        // runtime), so the enclosing struct IS storable - byte-identical to solc, which allows a recursive
+        // struct as a storage variable. (The ABI/codec consumers of the recursive field stay rejected via
+        // the recursiveRef sentinel making isSupportedDynStructField false.)
+        this.isRecursiveRefLeaf(f.type) ||
+        this.isSupportedDynStructField(f.type),
+    );
   }
 
   /** Type-only walk: true iff `node` is a property/index chain rooted at a

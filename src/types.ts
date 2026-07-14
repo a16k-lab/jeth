@@ -17,7 +17,15 @@ export type JethType =
   | { kind: 'string' } // dynamic
   | { kind: 'mapping'; key: JethType; value: JethType }
   | { kind: 'array'; element: JethType; length?: number } // T[N] | T[]
-  | { kind: 'struct'; name: string; fields: StructField[] } // @struct class
+  // `recursiveRef` marks a SENTINEL leaf standing in for a struct that references ITSELF (directly or
+  // mutually) through a REFERENCE-type field (a dynamic array `P[]` or a mapping value). solc accepts such
+  // a bounded recursion (a storage variable + static-leaf access); by-value self-containment is infinite
+  // and rejected. To keep every compile-time type-tree walk terminating, the self/mutual back-edge in the
+  // object graph is replaced by a `recursiveRef` sentinel: an EMPTY-fields struct object (name only) that
+  // is a LEAF for all recursive predicates. It classifies as neither static nor an ABI-codec-supported
+  // type, so every ABI/getter/return/encode/element-codec consumer rejects the enclosing recursive struct
+  // (byte-identical to solc, which likewise forbids a recursive type in those positions).
+  | { kind: 'struct'; name: string; fields: StructField[]; recursiveRef?: boolean } // @struct class
   // An INTERNAL function pointer `(p1, p2, ...) => R` (Solidity `function(...) returns(R)`). A VALUE
   // TYPE occupying one 32-byte word: a stable small integer id identifying an address-taken internal
   // function (NOT solc's raw code offset - the id is JETH-internal). `params`/`ret` give the signature;
@@ -139,6 +147,11 @@ export function storageSlotCount(t: JethType): number {
 /** Fully static for ABI head-only encoding (no tail), possibly multi-word. */
 export function isStaticType(t: JethType): boolean {
   if (isStaticValueType(t)) return true;
+  // A recursive-reference sentinel (a self/mutually-referential struct reached through a dynamic array /
+  // mapping) is NOT a static type: it stands for an unbounded aggregate. Forcing false (rather than the
+  // vacuous `every` over its empty field list) keeps the enclosing recursive struct out of every
+  // static-only codec path, so those consumers reject it exactly as solc does.
+  if (t.kind === 'struct' && t.recursiveRef) return false;
   if (t.kind === 'struct') return t.fields.every((f) => isStaticType(f.type));
   if (t.kind === 'array') return t.length !== undefined && isStaticType(t.element);
   return false;
