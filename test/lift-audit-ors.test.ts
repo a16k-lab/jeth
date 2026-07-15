@@ -30,7 +30,7 @@ describe('LIFT SHIFT-ASSIGN-SIGNED-LIT: `i256 >>= 1n` typed by amount, not LHS',
       [`class C { get f(): External<i256> { let a: i256 = -20n; a >>= 2n; return a; } }`, `contract C { function f() external pure returns(int256){ int256 a = -20; a >>= 2; return a; } }`],
       [`class C { get f(): External<i256> { let a: i256 = 3n; a <<= 4n; return a; } }`, `contract C { function f() external pure returns(int256){ int256 a = 3; a <<= 4; return a; } }`],
       [`class C { get f(): External<i128> { let a: i128 = -7n; a >>= 1n; return a; } }`, `contract C { function f() external pure returns(int128){ int128 a = -7; a >>= 1; return a; } }`],
-    ]) {
+    ] as [string, string][]) {
       expect(codes(j)).toEqual([]);
       const { jr, sr } = await sameRun(j, s, 'f()');
       expect(jr.returnHex).toBe(sr.returnHex);

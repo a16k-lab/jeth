@@ -8079,7 +8079,7 @@ export class Analyzer {
     ]);
     const appliedModifiers: { name: string; argNodes: ts.Expression[]; typeArgs?: readonly ts.TypeNode[]; site: ts.Node }[] = [];
     for (const d of ts.getDecorators(member) ?? []) {
-      let e = d.expression;
+      let e: ts.Expression = d.expression;
       while (ts.isParenthesizedExpression(e)) e = e.expression; // `@(m)` / `@((m(...)))` -> unwrap to `m`
       if (ts.isIdentifier(e)) {
         if (!BUILTIN_FN_DECORATORS.has(e.text)) appliedModifiers.push({ name: e.text, argNodes: [], site: d });
@@ -13958,7 +13958,7 @@ export class Analyzer {
         fromStorage;
       if (!okInit) {
         this.diags.error(
-          decl.initializer,
+          decl.initializer ?? decl,
           'JETH900',
           `a fixed-array memory local must be initialized from a literal, another memory fixed array, a fixed-array calldata parameter, or a storage fixed array`,
         );
@@ -13971,7 +13971,7 @@ export class Analyzer {
       // type against `declared`; the source's fixed LENGTH is guarded explicitly here.
       if (e.type.kind === 'array' && e.type.length !== undefined && e.type.length !== declared.length) {
         this.diags.error(
-          decl.initializer,
+          decl.initializer ?? decl,
           'JETH085',
           `cannot initialize ${displayName(declared)} from ${displayName(e.type)} (fixed arrays of different size are not convertible)`,
         );
