@@ -275,39 +275,88 @@ function rewriteModuleScopes(
       p.parent === sf
     );
   };
-  // CROSS-SCOPE-NAME (multi-file): a contract-MEMBER error/event (`Bad: error<{...}>` / `Bad: event<{...}>`)
-  // SHADOWS a same-named IMPORTED (or file-level) error/event INSIDE that contract - solc resolves a bare
-  // `revert(Bad(...))` / `emit(Bad(...))` / `Bad(...)` to the member, never to the import. The v3 module
-  // rename would otherwise rewrite that bare reference to the imported `$mN$Bad` and route AROUND the member
-  // (a pre-existing over-acceptance: a raise fitting the imported signature but not the member's was
-  // accepted, where solc rejects). So a reference identifier whose name matches a member error/event of its
-  // enclosing class is left UNRENAMED; downstream name resolution (resolveErrorDeclInScope / the emit
-  // resolver) then binds it to the member and enforces the member's signature, matching solc's shadow. The
-  // member-access spelling `this.Bad(...)` is a property name (not a reference identifier), so it is
-  // untouched and already resolved to the member; only the bare-name references need this guard.
-  const memberRaiseNames = (cls: ts.ClassDeclaration): Set<string> => {
-    const s = new Set<string>();
+  // MEMBER-SHADOW (multi-file): a contract VALUE MEMBER (state field / constant / immutable / mapping /
+  // struct-typed / public field - `Bad: u256` / `static Bad` / `Bad: mapping<_,_>` / `Bad: S` /
+  // `Bad: Visible<u256>`, INCLUDING an error/event member `Bad: error<{...}>` / `Bad: event<{...}>`) SHADOWS
+  // a same-named IMPORTED (or file-level) symbol INSIDE that contract - solc resolves a bare `Bad(...)` /
+  // `revert(Bad(...))` / `emit(Bad(...))` / a type-position `Bad`/`Bad[]`/`mapping<_,Bad>` / an enum use
+  // `Bad.A` / an interface cast `Bad(a)` to the MEMBER, never to the import. The v3 module rename would
+  // otherwise rewrite that bare reference to the imported `$mN$Bad` and route AROUND the member (a
+  // pre-existing over-acceptance family: a use fitting the imported symbol but not the member was accepted,
+  // where solc rejects - "This expression is not callable" for an error/event ref, "Name has to refer to a
+  // user-defined type" for a type/enum/interface ref). So a reference identifier whose name matches a value
+  // member of its enclosing class (or of a base reached through `extends`) is left UNRENAMED; downstream name
+  // resolution then binds it to the member and the analyzer's existing member-shadow logic fires the same
+  // reject the single-file path gives. The set is REFERENCE-SENSITIVE (only reference identifiers are
+  // skipped, never the member's own declaration), so a decl collision with a `Bad` that is NEVER referenced
+  // still both-accepts (solc allows the shadow). METHOD members are deliberately EXCLUDED: a bare call to a
+  // same-named method needs true overload-set resolution, and a declaration-level skip there would
+  // over-reject; method behavior is left exactly as it was. The member-access spelling `this.Bad(...)` is a
+  // property name (not a reference identifier), so it is untouched and already resolved to the member.
+  const topClasses: ts.ClassDeclaration[] = [];
+  sf.forEachChild((c) => { if (ts.isClassDeclaration(c) && c.name) topClasses.push(c); });
+  // a class name resolves, after this file's rename map, to its FINAL (possibly `$mN$`-scoped) name; the
+  // rename map is keyed by ORIGINAL name and this precomputation runs BEFORE any mutation, so lookups are
+  // stable. An entry class's `extends B` reference and the imported base's `class B` decl both land on the
+  // same final name, so cross-file inheritance resolves uniformly.
+  const finalNameOf = (name: ts.Identifier): string => {
+    const file = fileOf(name);
+    return (file ? renamesByFile.get(file)?.get(name.text) : undefined) ?? name.text;
+  };
+  const classByFinalName = new Map<string, ts.ClassDeclaration>();
+  for (const cls of topClasses) {
+    if (!cls.name) continue;
+    const fn = finalNameOf(cls.name);
+    if (!classByFinalName.has(fn)) classByFinalName.set(fn, cls);
+  }
+  const ownValueMemberNames = (cls: ts.ClassDeclaration): string[] => {
+    const out: string[] = [];
     for (const m of cls.members) {
-      if (
-        ts.isPropertyDeclaration(m) &&
-        m.name && ts.isIdentifier(m.name) &&
-        m.type && ts.isTypeReferenceNode(m.type) && ts.isIdentifier(m.type.typeName) &&
-        (m.type.typeName.text === 'error' || m.type.typeName.text === 'event')
-      ) {
-        s.add(m.name.text);
-      }
+      if (ts.isPropertyDeclaration(m) && m.name && ts.isIdentifier(m.name)) out.push(m.name.text);
     }
+    return out;
+  };
+  const baseClassOf = (cls: ts.ClassDeclaration): ts.ClassDeclaration | undefined => {
+    const ext = cls.heritageClauses?.find((h) => h.token === ts.SyntaxKind.ExtendsKeyword);
+    const expr = ext?.types[0]?.expression;
+    if (!expr || !ts.isIdentifier(expr)) return undefined;
+    return classByFinalName.get(finalNameOf(expr));
+  };
+  // per-class shadow set = own value-member names UNION every inherited value-member name up the `extends`
+  // chain (cycle-guarded). Memoized; precomputed for every top-level class BEFORE the rewrite mutates any
+  // identifier so base resolution reads pristine names.
+  const shadowByClass = new Map<ts.ClassDeclaration, Set<string>>();
+  const shadowNamesFor = (cls: ts.ClassDeclaration): Set<string> => {
+    const cached = shadowByClass.get(cls);
+    if (cached) return cached;
+    const s = new Set<string>();
+    const seen = new Set<ts.ClassDeclaration>();
+    let cur: ts.ClassDeclaration | undefined = cls;
+    while (cur && !seen.has(cur)) {
+      seen.add(cur);
+      for (const nm of ownValueMemberNames(cur)) s.add(nm);
+      cur = baseClassOf(cur);
+    }
+    shadowByClass.set(cls, s);
     return s;
   };
+  for (const cls of topClasses) shadowNamesFor(cls);
+  // The base-class identifier of an `extends` heritage clause is a reference, but solc shadows a name
+  // only in expression/type positions - NEVER in the `is X` heritage clause. So even when a value member
+  // shares the base's name, the heritage reference must still be renamed to `$mN$Base` (else base-class
+  // resolution/merge fails and a previously-valid `class C extends ImportedBase { Base: u256 }` over-rejects).
+  const isHeritageBaseIdent = (id: ts.Identifier): boolean =>
+    ts.isExpressionWithTypeArguments(id.parent) && ts.isHeritageClause(id.parent.parent);
   const rewrite = (n: ts.Node, shadow: Set<string> | undefined): void => {
-    // entering a class, the shadow set becomes that class's member error/event names (JETH classes do not
-    // nest, so a replace is exact); at file level between classes it is `undefined` again.
-    const inner = ts.isClassDeclaration(n) ? memberRaiseNames(n) : shadow;
+    // entering a class, the shadow set becomes that class's value-member names (own + inherited); at file
+    // level between classes it is `undefined` again.
+    const inner = ts.isClassDeclaration(n) ? shadowNamesFor(n) : shadow;
     if (ts.isIdentifier(n) && (isReferenceIdentifier(n) || isTopLevelDeclName(n))) {
       const file = fileOf(n);
       const to = file ? renamesByFile.get(file)?.get(n.text) : undefined;
-      // skip the rename when a member error/event of the enclosing class shadows this bare-name reference.
-      if (to && !(isReferenceIdentifier(n) && inner?.has(n.text))) {
+      // skip the rename when a value member of the enclosing class shadows this bare-name reference,
+      // EXCEPT in an `extends` heritage clause (solc never shadows there - the base must still resolve).
+      if (to && !(isReferenceIdentifier(n) && inner?.has(n.text) && !isHeritageBaseIdent(n))) {
         (n as unknown as { escapedText: ts.__String }).escapedText = ts.escapeLeadingUnderscores(to);
       }
     }
