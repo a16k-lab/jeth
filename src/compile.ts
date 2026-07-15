@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
-import { parse } from './parser.js';
+import { parse, decoratorNames } from './parser.js';
 import { expandDiamond } from './diamond.js';
 import { DiagnosticBag, CompileError, Diagnostic, demangleModuleName } from './diagnostics.js';
 import { validateSubset } from './validator.js';
@@ -363,6 +363,120 @@ function rewriteModuleScopes(
     ts.forEachChild(n, (c) => rewrite(c, inner));
   };
   ts.forEachChild(sf, (c) => rewrite(c, undefined));
+}
+
+/**
+ * METHOD-vs-IMPORTED-TYPE collision (multi-file only). solc rejects a contract whose METHOD name equals a
+ * same-named file-level error / event / struct / enum / interface that is IN SCOPE (declared in the file or
+ * imported into it): the member SHADOWS the imported symbol, so any use of that name resolves to the 0-arg
+ * method, never the import ("Wrong argument count" for an error/event, "Name has to refer to a user-defined
+ * type" for a struct/enum/interface). The SINGLE-FILE analyzer already gives this reject (JETH133, its
+ * cross-scope member-vs-file-level gate in analyzeContract). But the v3 module rename mangles the imported
+ * `Bad` to `$mN$Bad` BEFORE the analyzer runs, so the analyzer never sees the method-vs-import collision and
+ * a BUNDLE routes AROUND the gate (a pre-existing over-acceptance). This pre-pass restores the reject by
+ * mirroring that gate over IMPORTED (cross-file) declarations only, emitting the SAME JETH133 code and
+ * message the single-file path produces.
+ *
+ * Scope, deliberately narrow: METHODS ONLY (a value-member shadow is handled by rewriteModuleScopes leaving
+ * the reference unrenamed; a @modifier is a distinct member kind). CROSS-FILE ONLY - a same-file collision
+ * (the entry's own file-level type + a method, i.e. the single-file shape inside a bundle) is left to the
+ * analyzer's existing gate so its companion diagnostics are preserved. Runs on PRISTINE identifiers (BEFORE
+ * rewriteModuleScopes mutates any name); final (scoped) names are computed from renamesByFile exactly as
+ * rewriteModuleScopes does, so each declaration maps to a unique `$mN$`-scoped name and lookups are exact.
+ * The reject fires regardless of whether the colliding name is USED - matching the single-file path, which
+ * also rejects the no-use collision (solc accepts the no-use shadow, so this is the endorsed, consistent
+ * single/multi-file deliberate over-rejection: methods are camelCase, types/errors/events are PascalCase).
+ */
+function collectImportedMethodTypeCollisions(
+  sf: ts.SourceFile,
+  segments: BundleSegment[],
+  renamesByFile: Map<string, Map<string, string>>,
+  diags: DiagnosticBag,
+): void {
+  if (renamesByFile.size === 0) return;
+  const fileOf = (node: ts.Node): string | undefined => {
+    const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+    const l = line + 1;
+    for (const seg of segments) {
+      if (l >= seg.startLine && l < seg.startLine + seg.lineCount) return seg.file;
+    }
+    return undefined;
+  };
+  // The FINAL (post-rename) name of source identifier `name` as it is seen inside `file`: the file's rename
+  // map resolves both its own top-level declarations and its import bindings to their `$mN$` scoped names;
+  // an unmapped name (the entry's own decls, a bare non-imported reference) stays as written.
+  const finalNameIn = (file: string | undefined, name: string): string =>
+    (file ? renamesByFile.get(file)?.get(name) : undefined) ?? name;
+  // Every file-level error / event / struct / enum / interface declaration in the bundle, keyed by its FINAL
+  // scoped name. Classification MIRRORS the analyzer's file-scope buckets exactly (so the multi-file reject
+  // set matches the single-file one - no spurious JETH133 the single-file path would not give):
+  //   `type X = error<{...}>`  -> 'error'   (isErrorEventAliasRHS)
+  //   `type X = event<{...}>`  -> 'event'
+  //   `type X = { ... }`       -> 'type'    (a STRUCT object literal; structsByName - NOT a newtype/array/
+  //                                          tuple alias, which the single-file gate does not treat as a
+  //                                          colliding file-level type)
+  //   `enum X { ... }`         -> 'type'
+  //   `interface X { ... }`    -> 'type'    (interfacesByName)
+  // v3 scoping guarantees each declaration has a unique final name, so this map never conflates two distinct
+  // declarations.
+  const declByFinal = new Map<string, { kind: 'error' | 'event' | 'type'; file: string | undefined }>();
+  sf.forEachChild((n) => {
+    let nameNode: ts.Identifier | undefined;
+    let kind: 'error' | 'event' | 'type' | undefined;
+    if (ts.isTypeAliasDeclaration(n) && n.name) {
+      const t = n.type;
+      if (ts.isTypeReferenceNode(t) && ts.isIdentifier(t.typeName) && (t.typeName.text === 'error' || t.typeName.text === 'event')) {
+        nameNode = n.name;
+        kind = t.typeName.text as 'error' | 'event';
+      } else if (ts.isTypeLiteralNode(t)) {
+        nameNode = n.name;
+        kind = 'type'; // a struct object-literal alias
+      }
+    } else if (ts.isEnumDeclaration(n) && n.name) {
+      nameNode = n.name;
+      kind = 'type';
+    } else if (ts.isInterfaceDeclaration(n) && n.name) {
+      nameNode = n.name;
+      kind = 'type';
+    }
+    if (nameNode && kind) {
+      const file = fileOf(nameNode);
+      declByFinal.set(finalNameIn(file, nameNode.text), { kind, file });
+    }
+  });
+  if (declByFinal.size === 0) return;
+  // A class that carries solc's contract MEMBER namespace: a bare / @contract-family / abstract class. A
+  // @library / `static class` (library) / @struct object type / native `interface`-as-class / @diamond does
+  // not participate in this member-vs-file-level collision. (Dep files cannot declare contracts, so in
+  // practice only the entry contributes classes here; the check stays general via the per-file discriminator.)
+  const isContractKindClass = (cls: ts.ClassDeclaration): boolean => {
+    const decs = decoratorNames(cls);
+    if (decs.includes('library') || decs.includes('struct') || decs.includes('interface') || decs.includes('diamond'))
+      return false;
+    if ((ts.getModifiers(cls) ?? []).some((m) => m.kind === ts.SyntaxKind.StaticKeyword)) return false; // static class = library
+    return true;
+  };
+  sf.forEachChild((n) => {
+    if (!ts.isClassDeclaration(n) || !n.name || !isContractKindClass(n)) return;
+    const cfile = fileOf(n.name);
+    const reported = new Set<string>();
+    for (const m of n.members) {
+      if (!ts.isMethodDeclaration(m) || !ts.isIdentifier(m.name)) continue;
+      if (decoratorNames(m).includes('modifier')) continue; // a @modifier is not a plain function member
+      const mname = m.name.text;
+      if (reported.has(mname)) continue;
+      const d = declByFinal.get(finalNameIn(cfile, mname));
+      // Only a CROSS-FILE (imported) collision is surfaced here; a same-file file-level type + method is the
+      // single-file shape and is left to the analyzer's own gate (so its companion diagnostics survive).
+      if (!d || d.file === cfile) continue;
+      reported.add(mname);
+      diags.error(
+        n,
+        'JETH133',
+        `identifier '${mname}' is already declared (a file-level ${d.kind} and a contract-member function share the name; solc's member shadow leaves the file-level unusable inside the contract - only a matching error/error or event/event pair may coexist)`,
+      );
+    }
+  });
 }
 
 /** `$m<N>$` and `$p$` identifiers are reserved for the compiler's internal mangles - the v3
@@ -770,6 +884,13 @@ function compileUnit(source: string, opts: CompileOptions): CompileResult {
   // would silently rewrite it to a name that appears nowhere in the source. Reserved EVERYWHERE - checked
   // pre-rename so it sees only user-written spellings (single-file and bundles alike).
   rejectReservedModuleIdentifiers(parsed.sourceFile, diags);
+  // OA close (multi-file): a contract METHOD whose name collides with a same-named IMPORTED file-level
+  // error/event/struct/enum/interface is an "Identifier already declared" reject the SINGLE-FILE analyzer
+  // already gives (JETH133). The v3 rename below would mangle the imported symbol to `$mN$X` and route the
+  // bundle AROUND that gate, so detect the collision here on PRISTINE names (before the rename mutates them)
+  // and emit the same JETH133 the single-file path produces.
+  if (bundleSegments && bundleRenames)
+    collectImportedMethodTypeCollisions(parsed.sourceFile, bundleSegments, bundleRenames, diags);
   // v3 module scoping FIRST: rename each dep's top-level declarations (and every file's import bindings)
   // to their `$mN$` scoped names, so every later pass (the # mangle, the static-member rewrite, all name
   // resolution) sees one consistent namespace with per-file scoping already applied.

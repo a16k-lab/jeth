@@ -9,7 +9,9 @@
 // shadowed by ANY value member (own or inherited) UNRENAMED, so resolution binds it to the member and the
 // analyzer's existing member-shadow logic fires the SAME reject the single-file path gives (JETH129 for an
 // error ref, JETH147 for an event ref, JETH013 for a type/enum/interface ref). METHOD members are out of
-// scope and left exactly as base (a bare same-named method call needs true overload resolution).
+// scope for THIS (value-member reference-unrenaming) mechanism; a method that COLLIDES with an imported
+// error/event/struct/enum/interface is instead a DECLARATION collision handled separately by
+// collectImportedMethodTypeCollisions (JETH133) - see the METHOD-vs-IMPORTED-TYPE block at the bottom.
 import { describe, it, expect } from 'vitest';
 import { compile } from '../src/compile.js';
 import { Harness } from '../src/evm.js';
@@ -109,10 +111,42 @@ describe('MEMBER-SHADOW-IMPORT CONTROLS: over-rejection guards (must stay ACCEPT
   it('a member ERROR shadowing a same-named imported error, raised to FIT the member, still ACCEPTS', () => {
     expect(accepts(`import { Bad } from "./e.jeth";\nclass C { Bad: error<{ a: u256 }>; f(): External<void> { revert(Bad(2n)); } }`, { 'e.jeth': DEP_E })).toBe(true);
   });
-  it('METHOD collision is OUT OF SCOPE: a same-named method + imported error is left EXACTLY as base (still accepted)', () => {
-    // A bare call resolving to a method needs true overload-set resolution; a declaration-level skip would
-    // over-reject. This documents the deliberate scope boundary: method behavior is unchanged by the fix.
-    expect(accepts(`import { Bad } from "./e.jeth";\nclass C { Bad(): u256 { return 1n; } f(): External<void> { revert(Bad(1n)); } }`, { 'e.jeth': DEP_E })).toBe(true);
+  it('NON-COLLIDING method + imported error: a differently-named method resolves the import unchanged (still ACCEPTS)', () => {
+    // The value-member shadow mechanism (reference-unrenaming) never touches a method; a method whose name
+    // does NOT collide with the import leaves the bare `Bad(1n)` bound to the import exactly as base.
+    expect(accepts(`import { Bad } from "./e.jeth";\nclass C { gg(): u256 { return 1n; } f(): External<void> { revert(Bad(1n)); } }`, { 'e.jeth': DEP_E })).toBe(true);
+  });
+});
+
+// METHOD-vs-IMPORTED-TYPE collision: a contract METHOD whose name equals a same-named IMPORTED file-level
+// error / event / struct / enum / interface is a DECLARATION collision solc rejects (the member shadows the
+// import, so any use resolves to the 0-arg method - "Wrong argument count" / "Name has to refer to a
+// user-defined type"). The SINGLE-FILE analyzer already rejects it JETH133; the v3 rename mangled the import
+// to `$mN$X` and routed the bundle around that gate (a pre-existing over-acceptance). collectImportedMethod-
+// TypeCollisions (compile.ts) restores the SAME JETH133 for the cross-file (imported) case. This is a
+// DELIBERATE reject (methods are camelCase, types/errors/events PascalCase) endorsed by the user, and it
+// fires regardless of whether the name is USED - byte-consistent with the single-file path (which likewise
+// rejects the no-use collision, even though solc accepts the pure no-use shadow).
+describe('METHOD-vs-IMPORTED-TYPE collision REJECTS JETH133 (multi-file, mirrors the single-file gate)', () => {
+  const USE: Record<string, { dep: string; body: string }> = {
+    error:     { dep: DEP_E,  body: `f(): External<void> { revert(Bad(1n)); }` },
+    event:     { dep: DEP_V,  body: `f(): External<void> { emit(Bad(1n)); }` },
+    struct:    { dep: DEP_S,  body: `f(): External<void> { let s: Bad = { a: 1n }; }` },
+    enum:      { dep: DEP_EN, body: `f(): External<void> { let s: Bad = Bad.A; }` },
+    interface: { dep: DEP_IF, body: `f(a: address): External<void> { Bad(a).z(); }` },
+  };
+  for (const [kind, { dep, body }] of Object.entries(USE)) {
+    it(`method collides with imported ${kind} (used) -> JETH133`, () => {
+      const entry = `import { Bad } from "./d.jeth";\nclass C { Bad(): u256 { return 5n; } ${body} }`;
+      expect(mcodes(entry, { 'd.jeth': dep })).toContain('JETH133');
+    });
+  }
+  it('NO-USE collision: method Bad + imported error Bad, never used -> still JETH133 (matches single-file)', () => {
+    expect(mcodes(`import { Bad } from "./d.jeth";\nclass C { Bad(): u256 { return 5n; } g(): External<void> {} }`, { 'd.jeth': DEP_E })).toContain('JETH133');
+  });
+  it('the multi-file JETH133 matches what the SINGLE-FILE analyzer emits for the same shape', () => {
+    const single = (src: string): string[] => { try { compile(src, { fileName: 'entry.jeth' }); return []; } catch (e: any) { return e?.diagnostics?.map((d: any) => d.code) ?? ['THROW']; } };
+    expect(single(`type Bad = error<{ a: u256 }>;\nclass C { Bad(): u256 { return 5n; } f(): External<void> { revert(Bad(1n)); } }`)).toContain('JETH133');
   });
 });
 
