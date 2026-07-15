@@ -354,6 +354,13 @@ export class Analyzer {
   private events: EventIR[] = [];
   // Phase 6: @interface declarations (name -> {methods}); emits no bytecode, names a type + ABI shape.
   private interfacesByName = new Map<string, InterfaceDecl>();
+  // CONTRACT-VALUE-CALL: for EVERY registered contract/abstract class, its EXTERNAL methods keyed by name
+  // (the callable ABI surface of a contract-typed VALUE `t.m(...)`), built as InterfaceMethod twins so a
+  // member-access call on a `__ctref:<Name>` value routes through the SAME external-call lowering the
+  // `IFoo(addr).m()` interface path uses (buildIfaceExtCall). Populated by collectContractMethods BEFORE
+  // analyzeContract strips the External/Payable/View/Pure return markers off the shared AST nodes, so the
+  // entry contract's OWN methods (self-referential `class C { c: C }`) are captured with markers intact.
+  private contractMethodsByName = new Map<string, Map<string, InterfaceMethod[]>>();
   // IFACE-STRUCT-FIELD: interface NAME membership, pre-scanned before collectStructs (which runs before the
   // full interface registries are built). Struct fields are resolved during collectStructs, so the complete
   // `interfacesByName` map is not yet populated; this name-only set lets an interface name resolve to a
@@ -732,6 +739,7 @@ export class Analyzer {
     // C3 linearization can be resolved, then flatten the deployed contract's base chain into one merged
     // member ordering fed to the existing analyze/emit pipeline (only the @contract deploys).
     this.registerContractClasses();
+    this.collectContractMethods(); // CONTRACT-VALUE-CALL: external-method registry, BEFORE marker stripping
     const lin = this.linearize(classes[0]!);
     if (!lin) return undefined; // a C3-impossible base order was reported
     const ir = this.analyzeContract(classes[0]!, lin);
@@ -2018,6 +2026,7 @@ export class Analyzer {
     // Register the abstract classes (and any bases they reference) so `extends` resolution and C3
     // linearization work exactly as on the normal path.
     this.registerContractClasses();
+    this.collectContractMethods(); // CONTRACT-VALUE-CALL: external-method registry, BEFORE marker stripping
     // Validate the leaf abstract class's members/bodies as if it were the deployed contract. The emitted
     // IR is discarded (nothing deploys); it names the artifact and supplies an ABI. Analyzing a standalone
     // abstract class fires the same member/override/body diagnostics the normal path fires - an abstract
@@ -13018,12 +13027,20 @@ export class Analyzer {
     if (!ifaceName) {
       const rt = this.trialExprType(pa.expression);
       const ifn = rt && rt.kind === 'address' ? (rt as { brand?: string }).brand : undefined;
-      if (!ifn || !this.interfacesByName.has(ifn)) return undefined; // not an interface value: not our shape
-      const recvVal = this.checkExpr(pa.expression); // commit the receiver evaluation
-      if (!recvVal) return 'handled';
-      const m = this.resolveIfaceMethod(ifn, methodName, node, pa);
-      if (m === 'handled') return 'handled';
-      return this.buildIfaceExtCall(ifn, methodName, m, recvVal, node, undefined, undefined);
+      if (ifn && this.interfacesByName.has(ifn)) {
+        const recvVal = this.checkExpr(pa.expression); // commit the receiver evaluation
+        if (!recvVal) return 'handled';
+        const m = this.resolveIfaceMethod(ifn, methodName, node, pa);
+        if (m === 'handled') return 'handled';
+        return this.buildIfaceExtCall(ifn, methodName, m, recvVal, node, undefined, undefined);
+      }
+      // CONTRACT-VALUE-CALL: a call on a value of contract/abstract type (`__ctref:<Name>` brand). solc
+      // lowers `t.m(...)` on a contract value through the SAME external message-call as an interface value,
+      // so it routes through the identical buildIfaceExtCall (byte-identical to IFoo(addr).m() and to solc).
+      if (ifn && ifn.startsWith(CTREF_PREFIX)) {
+        return this.resolveContractValueCall(node, pa, methodName, ifn.slice(CTREF_PREFIX.length));
+      }
+      return undefined; // not an interface / contract value: not our shape
     }
 
     const wrapper = pa.expression as ts.CallExpression;
@@ -13241,6 +13258,227 @@ export class Analyzer {
       codeGuard: true,
     };
     return { call, returnType: method.returnType, returnTypes: method.returnTypes };
+  }
+
+  // ---- CONTRACT-VALUE-CALL: `t.m(args)` where t is a contract/abstract-typed VALUE ------------------
+
+  /** Pre-pass (run right after registerContractClasses, BEFORE analyzeContract strips markers): for every
+   *  registered contract/abstract class, collect its EXTERNAL methods into contractMethodsByName as
+   *  InterfaceMethod twins. This is the callable ABI surface of a contract-typed VALUE - solc lowers
+   *  `t.m(...)` on a contract value through the SAME external message-call it emits for `IFoo(addr).m(...)`,
+   *  so JETH routes it through the identical buildIfaceExtCall (byte-identical selector / calldata /
+   *  STATICCALL-vs-CALL / decode). Best-effort and DIAGNOSTIC-FREE: an unresolvable / unsupported member is
+   *  simply omitted (a call to it then rejects cleanly at the call site with JETH491), never a spurious
+   *  reject of an unrelated program. The External/Payable/View/Pure return marker must still be present on
+   *  the AST here (analyzeContract's collectFunction strips it later), which is why this runs first. */
+  private collectContractMethods(): void {
+    const save = this.diags.items.length;
+    for (const [name, cls] of this.classByName) {
+      if (this.isInterfaceClass(cls)) continue; // an interface is collected separately (interfacesByName)
+      const methods = new Map<string, InterfaceMethod[]>();
+      for (const member of cls.members) {
+        const m = this.buildContractCallMethod(member);
+        if (!m) continue;
+        const group = methods.get(m.name) ?? [];
+        if (!group.some((g) => g.signature === m.signature)) group.push(m); // solc rejects same-sig dup elsewhere
+        methods.set(m.name, group);
+      }
+      if (methods.size > 0) this.contractMethodsByName.set(name, methods);
+    }
+    this.diags.items.length = save; // side-effect-free: discard any trial diagnostics from resolveType
+  }
+
+  /** Build the InterfaceMethod twin for ONE contract member IF it is an EXTERNAL method (the callable
+   *  surface of a contract VALUE) - a `get` accessor with an External/View/Pure marker (external read-only,
+   *  a STATICCALL) or a method with an External/Payable/View/Pure marker (external writer / view / payable).
+   *  A bare method or a bare `get` is INTERNAL (no ABI selector) and returns undefined (a call to it rejects
+   *  as "not visible", matching solc). Returns undefined for any non-method member or an unsupported
+   *  param/return type (best-effort; the caller omits it). The mutability drives ONLY the STATICCALL-vs-CALL
+   *  op and the payable value-option gate, so a read-only accessor's inferred view/pure both map to `view`. */
+  private buildContractCallMethod(member: ts.ClassElement): InterfaceMethod | undefined {
+    let mname: string;
+    let paramNodes: readonly ts.ParameterDeclaration[];
+    let retNode: ts.TypeNode | undefined;
+    let mutability: Mutability;
+    const markerOf = (t: ts.TypeNode | undefined): string | undefined =>
+      t && ts.isTypeReferenceNode(t) && ts.isIdentifier(t.typeName) ? t.typeName.text : undefined;
+    if (ts.isGetAccessor(member)) {
+      if (!ts.isIdentifier(member.name)) return undefined;
+      const mk = markerOf(member.type);
+      // a `get` is READ-ONLY: external only with External/View/Pure (a bare get is internal, Payable illegal).
+      if (mk !== 'External' && mk !== 'View' && mk !== 'Pure') return undefined;
+      mutability = 'view'; // read-only accessor -> STATICCALL, never payable (view/pure both map to view here)
+      mname = member.name.text;
+      paramNodes = member.parameters;
+      retNode = (member.type as ts.TypeReferenceNode).typeArguments?.[0];
+    } else if (ts.isMethodDeclaration(member) && ts.isIdentifier(member.name)) {
+      const mk = markerOf(member.type);
+      if (mk === 'External') mutability = 'nonpayable';
+      else if (mk === 'Payable') mutability = 'payable';
+      else if (mk === 'View') mutability = 'view';
+      else if (mk === 'Pure') mutability = 'pure';
+      else return undefined; // a bare method (no marker) is INTERNAL - not externally callable
+      mname = member.name.text;
+      paramNodes = member.parameters;
+      retNode = (member.type as ts.TypeReferenceNode).typeArguments?.[0];
+    } else return undefined;
+    if (!retNode) return undefined; // a marker must wrap exactly one return type; malformed -> omit
+    if (mname.startsWith('$p$') || mname.startsWith('#') || mname === 'constructor') return undefined;
+
+    const params: Param[] = [];
+    for (const p of paramNodes) {
+      if (!ts.isIdentifier(p.name) || !p.type) return undefined;
+      const pt = resolveType(p.type, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
+      if (!pt || this.typeHasMapping(pt) || !this.interfaceAbiTypeSupported(pt)) return undefined;
+      params.push({ name: p.name.text, type: pt });
+    }
+    let returnType: JethType = VOID;
+    let returnTypes: JethType[] | undefined;
+    if (ts.isTupleTypeNode(retNode)) {
+      const rts: JethType[] = [];
+      for (const el of retNode.elements) {
+        const t = resolveType(el, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
+        if (!t || !this.decodeSupported(t)) return undefined;
+        rts.push(t);
+      }
+      if (rts.length >= 2) returnTypes = rts;
+      else if (rts.length === 1) returnType = rts[0]!;
+    } else {
+      const t = resolveType(retNode, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
+      if (t && t.kind !== 'void') {
+        if (!this.decodeSupported(t)) return undefined;
+        returnType = t;
+      }
+    }
+    const signature = functionSignature(
+      mname,
+      params.map((p) => p.type),
+    );
+    const selector = functionSelector(signature);
+    return { name: mname, params, returnType, returnTypes, mutability, signature, selector };
+  }
+
+  /** The callable external methods named `methodName` visible on a value of contract type `typeName`,
+   *  walking the class + its base chain most-derived-first (an override's signature shadows the base's; a
+   *  contract value exposes inherited external methods too). Dedup by canonical signature. */
+  private lookupContractMethods(typeName: string, methodName: string): InterfaceMethod[] {
+    const out: InterfaceMethod[] = [];
+    const sigs = new Set<string>();
+    const seenClass = new Set<string>();
+    const walk = (nm: string): void => {
+      if (seenClass.has(nm)) return;
+      seenClass.add(nm);
+      for (const m of this.contractMethodsByName.get(nm)?.get(methodName) ?? []) {
+        if (!sigs.has(m.signature)) {
+          sigs.add(m.signature);
+          out.push(m);
+        }
+      }
+      const cls = this.classByName.get(nm);
+      if (cls) for (const hb of heritageBases(cls)) walk(hb.name);
+    };
+    walk(typeName);
+    return out;
+  }
+
+  /** Resolve `t.methodName(args)` on a contract-ref VALUE (`t` typed `__ctref:<typeName>`) to the lowered
+   *  external message-call, reusing buildIfaceExtCall - byte-identical to the interface `IFoo(addr).m()`
+   *  path (same selector / calldata / STATICCALL-vs-CALL / decode) and to solc's contract-value call. A
+   *  trailing `{ value?, gas? }` object supplies the call options (value only on a payable method), mirroring
+   *  the @external self-call surface. Returns the extCall + declared return shape, or 'handled' when a
+   *  precise diagnostic was emitted. `pa` is the call's PropertyAccess callee (receiver `.method`). */
+  private resolveContractValueCall(
+    node: ts.CallExpression,
+    pa: ts.PropertyAccessExpression,
+    methodName: string,
+    typeName: string,
+  ): { call: Expr & { kind: 'extCall' }; returnType: JethType; returnTypes?: JethType[] } | 'handled' {
+    const overloads = this.lookupContractMethods(typeName, methodName);
+    if (overloads.length === 0) {
+      this.diags.error(
+        pa,
+        'JETH491',
+        `member '${methodName}' is not found or not visible on a ${typeName} contract value (only its @external methods are callable; solc: 'Member "${methodName}" not found or not visible after argument-dependent lookup in contract ${typeName}')`,
+      );
+      return 'handled';
+    }
+
+    // A trailing `{ value?, gas? }` object literal is call OPTIONS (not an argument) only when NO overload can
+    // consume the full node (with the object in place) - matching the @external self-call disambiguation.
+    let optNode: ts.ObjectLiteralExpression | undefined;
+    let effNode: ts.CallExpression = node;
+    {
+      const last = node.arguments.length > 0 ? node.arguments[node.arguments.length - 1] : undefined;
+      if (
+        last &&
+        ts.isObjectLiteralExpression(last) &&
+        last.properties.length > 0 &&
+        last.properties.every(
+          (p) =>
+            (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) &&
+            ts.isIdentifier(p.name) &&
+            (p.name.text === 'value' || p.name.text === 'gas'),
+        ) &&
+        !overloads.some((c) => c.params.length === node.arguments.length && this.ifaceOverloadArgsMatch(node, c))
+      ) {
+        optNode = last as ts.ObjectLiteralExpression;
+        effNode = this.synth(
+          ts.factory.updateCallExpression(
+            node,
+            node.expression,
+            node.typeArguments,
+            ts.factory.createNodeArray(node.arguments.slice(0, node.arguments.length - 1)),
+          ),
+          node,
+        );
+      }
+    }
+
+    // Overload resolution (arity, then argument-dependent lookup), mirroring resolveIfaceMethod.
+    let method: InterfaceMethod;
+    if (overloads.length === 1) {
+      method = overloads[0]!;
+    } else {
+      const applicable = overloads.filter((c) => c.params.length === effNode.arguments.length);
+      if (applicable.length === 0) {
+        this.diags.error(
+          effNode,
+          'JETH354',
+          `no overload of '${typeName}.${methodName}' takes ${effNode.arguments.length} argument(s)`,
+        );
+        return 'handled';
+      }
+      const viable =
+        applicable.length === 1 ? applicable : applicable.filter((c) => this.ifaceOverloadArgsMatch(effNode, c));
+      if (viable.length === 0) {
+        this.diags.error(effNode, 'JETH355', `no overload of '${typeName}.${methodName}' matches the argument types`);
+        return 'handled';
+      }
+      if (viable.length > 1) {
+        this.diags.error(
+          effNode,
+          'JETH434',
+          `call to '${typeName}.${methodName}' is ambiguous (matches ${viable.length} overloads; solc: 'Member "${methodName}" not unique after argument-dependent lookup')`,
+        );
+        return 'handled';
+      }
+      method = viable[0]!;
+    }
+
+    // Commit the receiver evaluation (an address value branded __ctref:<typeName>).
+    const recvVal = this.checkExpr(pa.expression);
+    if (!recvVal) return 'handled';
+
+    let value: Expr | undefined;
+    let gas: Expr | undefined;
+    if (optNode) {
+      const opts = this.parseCallOptions(optNode, method.mutability === 'payable', `${typeName}.${methodName}`);
+      if (!opts) return 'handled';
+      value = opts.value;
+      gas = opts.gas;
+    }
+
+    return this.buildIfaceExtCall(typeName, methodName, method, recvVal, effNode, value, gas);
   }
 
   /** `let [ok, ret] = addr.tryCall/tryStaticcall({...})`: resolve the destructuring source +
