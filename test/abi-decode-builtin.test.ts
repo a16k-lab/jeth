@@ -152,6 +152,70 @@ describe('abi.decode: byte-identical vs solc', () => {
     ]);
   });
 
+  it('step 3b: multi-value abi.decode in DIRECT-RETURN position (byte-identical to solc + to the bind-first twin)', async () => {
+    // `return abi.decode(b, [T, U, ...])` forwards its components through the SAME abiDecode-tuple
+    // source + tupleDecl/returnTuple machinery the bind-first twin already uses.
+    const J = `class D {
+      get t2(b: bytes): External<[u256, address]> { return abi.decode(b, [u256, address]); }
+      get t3(b: bytes): External<[u256, bool, bytes32]> { return abi.decode(b, [u256, bool, bytes32]); }
+      get td(b: bytes): External<[bytes, u256]> { return abi.decode(b, [bytes, u256]); }
+      get tsa(b: bytes): External<[string, address]> { return abi.decode(b, [string, address]); }
+      get tna(b: bytes): External<[u256[], address]> { return abi.decode(b, [u256[], address]); }
+      get tmem(b: bytes): External<[u256, address]> { let m: bytes = b; return abi.decode(m, [u256, address]); }
+      get tsug(b: bytes): External<[u256, address]> { return b.decode([u256, address]); }
+    }`;
+    const S = `contract D {
+      function t2(bytes calldata b) external pure returns (uint256, address){ return abi.decode(b,(uint256,address)); }
+      function t3(bytes calldata b) external pure returns (uint256, bool, bytes32){ return abi.decode(b,(uint256,bool,bytes32)); }
+      function td(bytes calldata b) external pure returns (bytes memory, uint256){ return abi.decode(b,(bytes,uint256)); }
+      function tsa(bytes calldata b) external pure returns (string memory, address){ return abi.decode(b,(string,address)); }
+      function tna(bytes calldata b) external pure returns (uint256[] memory, address){ return abi.decode(b,(uint256[],address)); }
+      function tmem(bytes calldata b) external pure returns (uint256, address){ bytes memory m = b; return abi.decode(m,(uint256,address)); }
+      function tsug(bytes calldata b) external pure returns (uint256, address){ return abi.decode(b,(uint256,address)); }
+    }`;
+    const addr = 0xabcdef1234567890abcdef1234567890abcdef12n;
+    const b32 = 'ab'.repeat(32);
+    const str = Buffer.from('hello').toString('hex');
+    await rtDecode(J, S, [
+      { sig: 't2(bytes)', payload: P(7n) + P(addr), label: 'direct [u256,address]' },
+      { sig: 't3(bytes)', payload: P(42n) + P(1n) + b32, label: 'direct [u256,bool,bytes32]' },
+      { sig: 'td(bytes)', payload: P(0x40n) + P(99n) + P(4n) + 'deadbeef'.padEnd(64, '0'), label: 'direct [bytes,u256] dyn' },
+      { sig: 'tsa(bytes)', payload: P(0x40n) + P(addr) + P(5n) + str.padEnd(64, '0'), label: 'direct [string,address] dyn' },
+      { sig: 'tna(bytes)', payload: P(0x40n) + P(addr) + P(3n) + P(1n) + P(2n) + P(3n), label: 'direct [u256[],address] nested' },
+      { sig: 'tmem(bytes)', payload: P(7n) + P(addr), label: 'direct memory-source' },
+      { sig: 'tsug(bytes)', payload: P(9n) + P(addr), label: 'direct <bytes>.decode sugar' },
+    ]);
+
+    // internal-consistency: the DIRECT-RETURN form lowers BYTE-IDENTICALLY to the bind-first twin.
+    const twin = `class D {
+      get t2(b: bytes): External<[u256, address]> { let [x, y]: [u256, address] = abi.decode(b, [u256, address]); return [x, y]; }
+      get t3(b: bytes): External<[u256, bool, bytes32]> { let [x, y, z]: [u256, bool, bytes32] = abi.decode(b, [u256, bool, bytes32]); return [x, y, z]; }
+      get td(b: bytes): External<[bytes, u256]> { let [x, y]: [bytes, u256] = abi.decode(b, [bytes, u256]); return [x, y]; }
+      get tsa(b: bytes): External<[string, address]> { let [x, y]: [string, address] = abi.decode(b, [string, address]); return [x, y]; }
+      get tna(b: bytes): External<[u256[], address]> { let [x, y]: [u256[], address] = abi.decode(b, [u256[], address]); return [x, y]; }
+      get tmem(b: bytes): External<[u256, address]> { let m: bytes = b; let [x, y]: [u256, address] = abi.decode(m, [u256, address]); return [x, y]; }
+      get tsug(b: bytes): External<[u256, address]> { let [x, y]: [u256, address] = b.decode([u256, address]); return [x, y]; }
+    }`;
+    const direct = compile(J, { fileName: 'D.jeth' }).creationBytecode;
+    const bindFirst = compile(twin, { fileName: 'D.jeth' }).creationBytecode;
+    expect(direct, 'direct-return lowers byte-identically to bind-first twin').toBe(bindFirst);
+
+    // GUARDS (no over-acceptance): arity / type mismatch vs the declared tuple return still rejects.
+    expect(
+      jethRejects(`class D { get d(b: bytes): External<[u256, address]> { return abi.decode(b, [u256, address, bool]); } }`),
+    ).toBe(true);
+    expect(
+      jethRejects(`class D { get d(b: bytes): External<[u256, address, bool]> { return abi.decode(b, [u256, address]); } }`),
+    ).toBe(true);
+    expect(
+      jethRejects(`class D { get d(b: bytes): External<[u256, address]> { return abi.decode(b, [u256, u256]); } }`),
+    ).toBe(true);
+    // a single-type decode into a multi-value return rejects (not silently accepted).
+    expect(
+      jethRejects(`class D { get d(b: bytes): External<[u256, address]> { return abi.decode(b, u256); } }`),
+    ).toBe(true);
+  });
+
   it('step 4: <bytes>.decode(T) / <bytes>.decode([...]) sugar equals abi.decode', async () => {
     const J = `class D {
       get m1(b: bytes): External<string> { return b.decode(string); }

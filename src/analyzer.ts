@@ -10270,6 +10270,27 @@ export class Analyzer {
           if (!tc) return;
           r = { types: tc.types, source: { kind: 'call', fn: tc.fn, args: tc.args } };
         }
+        // `return abi.decode(b, [T1, ...])` (or the `<bytes>.decode([...])` sugar): a multi-value
+        // abi.decode in DIRECT-RETURN position forwards its components through the SAME
+        // abiDecode-tuple DestructureSource + tupleDecl/returnTuple machinery the BIND-FIRST twin
+        // (`let [x, y] = abi.decode(...); return [x, y]`) already uses - byte-identical to solc's
+        // `return abi.decode(b, (...));`. A single-value decode return type never sets
+        // currentReturnTypes, so it stays on the normal checkExpr path (unchanged); an arity
+        // mismatch vs the declared tuple return rejects loudly (JETH060).
+        if (!r && node.expression) {
+          const ad = this.resolveAbiDecodeTuple(node.expression);
+          if (ad) {
+            if (ad.types.length !== rts.length) {
+              this.diags.error(
+                node.expression,
+                'JETH060',
+                `abi.decode returns ${ad.types.length} value(s), expected a ${rts.length}-tuple [${rts.map(displayName).join(', ')}]`,
+              );
+              return;
+            }
+            r = { types: ad.types, source: ad.source };
+          }
+        }
         if (r) {
           for (let i = 0; i < rts.length; i++) {
             if (!typesEqual(r.types[i]!, rts[i]!) && !isImplicitWiden(r.types[i]!, rts[i]!)) {
