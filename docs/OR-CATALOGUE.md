@@ -1144,3 +1144,35 @@ compile identically to solc.
 REMAINING KNOWN LIFTABLE (found in passing, next): the tuple-ASSIGNMENT trailing hole `[a, ] = two()` (no
 `let`) still over-rejects JETH066 while solc accepts `(a, ) = two()` - symmetric to the TRAILING-HOLE let-decl
 lift, same machinery on the assignment path.
+
+### 2026-07-15 FINAL-AUDIT tail lifts (4 lifts across 2 rounds; audit convergence)
+
+A final read-only exhaustion audit (~140 cases, canonical-syntax discipline, classifying on compile-acceptance
+directly since the harness runtime class masks accept-but-revert) found the liftable set effectively exhausted:
+zero over-acceptances, and a thin tail of same-family routing/reorder micro-gaps, each lifted byte-identical:
+- **DECODE-DIRECT-RETURN** (`7bc10d2`, JETH060): multi-value `return abi.decode(b, [T,U])` now feeds the
+  multi-value return path (a routing gap - it was a tuple producer in destructure-assign but not direct-return);
+  byte-identical to the bind-first twin + solc. Implicit-widen route lifted soundly too.
+- **LIB-NAMEDARG** (`37d92c7`, JETH148/130): a NAMED-arg raise of a LIBRARY-scoped event/error is reordered to
+  declaration order (reusing the positional lowering, byte-identical). RE-EXAMINED the stale "deliberate" label
+  (it had no miscompile witness) and found it was merely unwired - not miscompile-bound.
+- **FILE-LEVEL-NAMEDARG-IN-LIB** (`13198dd`, JETH148/130): the file-level-owner analogue - a `type Ev = event<{}>`
+  / `type Bad = error<{}>` raised with named args inside a library body, same reorder; scope-leak + shadow hunts
+  clean.
+- **DECODE-SINGLE-RETURN** (`46456e7`, JETH323): `return abi.decode(b, [T])` (single-element list) routes to the
+  canonical single-value `abi.decode(b, T)`, byte-identical.
+
+ADDITIONAL STALE ROWS (SUPPORTED.md "Still gated" section lags; all re-probed ACCEPT + byte-identical at HEAD):
+`this.g[i] = arr` whole fixed-array element assign; `this.dd[i] = xs` whole-inner dyn-array assign (cd source);
+ternary over a dynamic storage struct/array read; aggregate array/bytes params+returns through an internal call
+(was JETH242); struct-with-dyn-array-field cd->storage; packed element of a nested dyn array `this.m[k].arr[i]`;
+whole static calldata aggregate as a multi-value-return component; modifier gates (multiple `_`, aggregate param,
+post-code on multi-return/dyn-param); MEMBER-SHADOWS-FILE-EVENT same-signature. These are safe over-rejections
+that were closed by later work and never un-gated in SUPPORTED.md.
+
+REMAINING (sub-marginal, documented, NOT auto-lifted - non-canonical spellings / declaration-scope asymmetries
+no real program hits): contract-body bare file-level named raise (native form is `this.E({...})`); a file-level
+error + same-named CONTRACT-member error coexisting (JETH128, distinct scopes in solc); same-key-set overloaded
+library event (JETH434, a deliberate ambiguity reject). Plus the standing DELIBERATE miscompile-avoiding rejects
+(rec-struct mem-local/indexing, the pointer-headed fixed-array memory family, TYPED-CATCH, MULTI-CONTRACT-FILE,
+FUNCREF-PURE, LT5, L2-MOBILE, LIB-CREATION-VALUE, FALLBACK-EXTERNAL-MARKER). No MATERIAL solc-coverage gap remains.
