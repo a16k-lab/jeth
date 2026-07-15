@@ -744,6 +744,13 @@ export class Analyzer {
     const lin = this.linearize(classes[0]!);
     if (!lin) return undefined; // a C3-impossible base order was reported
     const ir = this.analyzeContract(classes[0]!, lin);
+    // DUP-ID-ABSTRACT: the deployed contract + its linearization were member-checked by analyzeContract;
+    // run the own-body duplicate-identifier check over the top-level classes NOT in that set (a stray /
+    // sibling abstract off the deployed chain), which the merged path never touches (solc rejects a
+    // duplicate at the declaring contract regardless of use).
+    const analyzed = new Set(lin);
+    analyzed.add(classes[0]!);
+    this.checkStandaloneClassMemberDuplicates(analyzed);
     // LAST: if the analyzer accepted the source but TS saw a (non-1011) syntax error, the AST was
     // silently error-recovered into something else (BYTE-SLICE-MC) - reject instead of miscompiling.
     this.rejectSilentlyAcceptedSyntaxErrors();
@@ -2215,6 +2222,131 @@ export class Analyzer {
       ts.forEachChild(n, visit);
     };
     ts.forEachChild(this.sourceFile, visit);
+  }
+
+  /** DUP-ID-ABSTRACT: solc's within-contract duplicate-identifier rules ("Identifier already declared" /
+   *  "Function with same name and parameter types defined twice.") apply to EVERY contract in a file, not
+   *  just the deployed one. The deployed contract and its C3 linearization are member-checked by
+   *  analyzeContract (JETH373 same-name state, JETH133 cross-kind field/function, JETH044 same-signature
+   *  function); a top-level class NOT in that linearization - a stray/unextended abstract base, a sibling
+   *  abstract off the deployed chain - was never member-checked, so a duplicate field / field-vs-method /
+   *  same-signature method on it silently ACCEPTED (solc rejects at the declaring contract regardless of
+   *  whether it is used). This purely-SYNTACTIC per-class pass runs over exactly those un-analyzed classes
+   *  and mirrors the three own-body collision rules. It is SOUND-BY-OMISSION: ambiguous members
+   *  (@modifier applications, native error/event field declarations, constructors, receive/fallback) are
+   *  skipped, so it only ever reports a CLEAR duplicate - it never over-rejects a legit overload (distinct
+   *  parameter types) or a cross-class override (a base method + a derived @override live in DIFFERENT
+   *  class bodies, never one). Native `interface` duplicates are already rejected in
+   *  collectNativeInterfaces (JETH342), and interface nodes are ts.InterfaceDeclaration, so they are out of
+   *  scope here. `analyzed` is the deployed contract plus its linearization (fed the exact node objects),
+   *  so no class the merged path already checks is re-reported. */
+  private checkStandaloneClassMemberDuplicates(analyzed: Set<ts.ClassDeclaration>): void {
+    const probe = new DiagnosticBag(this.sourceFile, 'dup-probe'); // silent type resolution for signatures
+    const visit = (n: ts.Node): void => {
+      if (ts.isClassDeclaration(n) && n.name && !analyzed.has(n) && this.isDupCheckableClass(n)) {
+        this.checkOneClassMemberDuplicates(n, probe);
+      }
+      ts.forEachChild(n, visit);
+    };
+    ts.forEachChild(this.sourceFile, visit);
+  }
+
+  /** A class whose OWN body shares solc's contract-member identifier namespace: a bare / @contract-family
+   *  contract or an abstract base. A library (static class / @library), a @struct object-type, a legacy
+   *  @interface class, and a @diamond carry their own (or no) member namespace and are excluded. */
+  private isDupCheckableClass(cls: ts.ClassDeclaration): boolean {
+    if (this.hasStaticClassModifier(cls)) return false; // a `static class` is a library
+    const decs = decoratorNames(cls);
+    return (
+      !decs.includes('library') && !decs.includes('struct') && !decs.includes('interface') && !decs.includes('diamond')
+    );
+  }
+
+  /** Report the three own-body duplicate-identifier collisions for ONE un-analyzed class. Field-like =
+   *  a state / @constant / @immutable / @storage / Visible property (NOT a native error/event field
+   *  DECLARATION). Function-like = a method or `get` accessor that is not a @modifier application. */
+  private checkOneClassMemberDuplicates(cls: ts.ClassDeclaration, probe: DiagnosticBag): void {
+    const cname = cls.name?.text ?? '<anonymous>';
+    const fieldNames = new Set<string>();
+    const fns = new Map<string, (ts.MethodDeclaration | ts.GetAccessorDeclaration)[]>();
+    for (const m of cls.members) {
+      if (ts.isPropertyDeclaration(m) && ts.isIdentifier(m.name)) {
+        if (this.isErrorEventFieldDecl(m)) continue; // an error/event field is a declaration, not storage
+        const nm = m.name.text;
+        if (fieldNames.has(nm)) {
+          // field + field: two same-named state/const/immutable/Visible properties (solc: "Identifier
+          // already declared"). Same code family as the deployed merged path (JETH373).
+          this.diags.error(
+            m,
+            'JETH373',
+            `identifier '${nm}' is already declared in '${cname}' (a field with the same name is declared more than once; solc rejects this as "Identifier already declared")`,
+          );
+        } else fieldNames.add(nm);
+      } else if ((ts.isMethodDeclaration(m) || ts.isGetAccessorDeclaration(m)) && ts.isIdentifier(m.name)) {
+        if (decoratorNames(m).includes('modifier')) continue; // a modifier's namespace overlap is left unflagged (sound)
+        const nm = m.name.text;
+        const list = fns.get(nm);
+        if (list) list.push(m);
+        else fns.set(nm, [m]);
+      }
+    }
+    for (const [nm, list] of fns) {
+      // field + method: a field and a function share a name (solc: "Identifier already declared"; a public
+      // field's auto-getter likewise collides with a same-named function). Same code family as JETH133.
+      if (fieldNames.has(nm)) {
+        this.diags.error(
+          list[0]!,
+          'JETH133',
+          `identifier '${nm}' is already declared in '${cname}' (a field and a function share the name; solc reuses a name only among overloaded functions or events)`,
+        );
+      }
+      // method + method: two functions with the SAME name AND parameter types are a duplicate, not an
+      // overload (a differing return type does not disambiguate). Same code family as JETH044.
+      if (list.length > 1) {
+        const seenSig = new Set<string>();
+        for (const fn of list) {
+          const sig = this.memberParamSig(fn, probe);
+          if (seenSig.has(sig)) {
+            this.diags.error(
+              fn,
+              'JETH044',
+              `duplicate function '${nm}${sig}' in '${cname}' (a function with the same name and parameter types is already declared)`,
+            );
+          } else seenSig.add(sig);
+        }
+      }
+    }
+  }
+
+  /** Is this property a native error/event FIELD declaration (`E: error<{...}>` / `E: event<{...}>`)? Such
+   *  a field is a declaration, not storage - the same predicate isStateField uses to keep it out of the
+   *  state-owner collision pre-pass. Excluded from the dup pass so an overloaded event set is never
+   *  spuriously flagged (its event-vs-event dup is JETH128, its event-vs-function clash JETH133 on the
+   *  merged path). */
+  private isErrorEventFieldDecl(member: ts.PropertyDeclaration): boolean {
+    return !!(
+      member.type &&
+      ts.isTypeReferenceNode(member.type) &&
+      ts.isIdentifier(member.type.typeName) &&
+      (member.type.typeName.text === 'error' || member.type.typeName.text === 'event')
+    );
+  }
+
+  /** A parameter-type signature `(t1,t2,...)` for same-signature duplicate detection. A param resolves
+   *  through the SAME resolver the deployed path uses (so a branded newtype / enum stays nominally
+   *  distinct via displayName, exactly like internalSig in analyzeContract); an unresolved type falls
+   *  back to its whitespace-stripped source text, so two textually identical unresolved params still
+   *  collide while two textually distinct ones never do (no FALSE collision -> no over-rejection). */
+  private memberParamSig(fn: ts.MethodDeclaration | ts.GetAccessorDeclaration, probe: DiagnosticBag): string {
+    const parts = fn.parameters.map((p) => {
+      const t = resolveType(p.type, probe, this.structsByName, this.namedDim, this.interfacesByName, this.contractRefNames());
+      return t
+        ? `${canonicalName(t)}|${displayName(t)}`
+        : p.type
+          ? p.type.getText(this.sourceFile).replace(/\s+/g, '')
+          : '<none>';
+    });
+    return `(${parts.join(',')})`;
   }
 
   /** OA-ABSTRACT (declarer rule): solc rejects ANY contract that declares a function without an
