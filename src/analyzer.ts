@@ -26417,8 +26417,73 @@ export class Analyzer {
       return this.buildBinary(op, left, right, node);
     }
 
+    // DELIBERATE-REJECT diagnostics: three shapes that solc accepts but JETH intentionally does not
+    // support (see deliberateRejectDiag). They otherwise fall to the generic JETH074 catch-all below;
+    // give them a CLEAR, targeted message instead. Reached only after every real resolver has declined,
+    // so accepted programs are byte-identical - this only reclassifies an already-guaranteed reject.
+    if (ts.isCallExpression(node) && this.deliberateRejectDiag(node)) return undefined;
+
     this.diags.error(node, 'JETH074', `unsupported expression: ${ts.SyntaxKind[node.kind]}`);
     return undefined;
+  }
+
+  /** DELIBERATE-REJECT diagnostics (JETH492/493/494): three shapes solc accepts but JETH intentionally
+   *  does NOT support, given a CLEAR targeted message instead of the generic JETH074 catch-all. Each
+   *  shape stays REJECTED (this only improves the message). Called at the tail of checkExpr, i.e. only
+   *  after every real resolver (interface/contract dispatch, low-level `.call`, attached library, the
+   *  array-mutator STATEMENT path) has declined, so no accepted program is affected. Returns true iff it
+   *  emitted a targeted diagnostic.
+   *   - `<address>.transfer(v)` / `<address>.send(v)`: solc's ETH send with a fixed 2300-gas stipend (a
+   *     footgun since EIP-1884 repriced SLOAD). GATED on a PLAIN (non-nominal) address receiver so a real
+   *     contract/interface-value `.transfer`/`.send` DISPATCH (resolved earlier) is never mis-flagged.
+   *   - `selfdestruct(a)`: deprecated and neutered by EIP-6780.
+   *   - `arr.push()` (no argument) in VALUE position: solc returns a STORAGE REFERENCE to the appended
+   *     element, which conflicts with JETH's deliberate "no storage-reference locals" design. The no-arg
+   *     push STATEMENT (append a zero element) is fully supported and handled earlier; only the value use
+   *     lands here. */
+  private deliberateRejectDiag(node: ts.CallExpression): boolean {
+    // selfdestruct(a): a bare identifier call that resolved to nothing else.
+    if (ts.isIdentifier(node.expression) && node.expression.text === 'selfdestruct') {
+      this.diags.error(
+        node,
+        'JETH493',
+        `selfdestruct is not supported (deprecated; neutered by EIP-6780, which removed contract self-destruction except within the same transaction as creation)`,
+      );
+      return true;
+    }
+    if (ts.isPropertyAccessExpression(node.expression)) {
+      const member = node.expression.name.text;
+      // <address>.transfer(v) / <address>.send(v): ONLY for a PLAIN address/payable receiver. A nominal
+      // (contract/interface) receiver value keeps the generic reject - its real `.transfer` dispatch is
+      // resolved earlier and never reaches here; the gate is belt-and-suspenders against mis-flagging.
+      if (member === 'transfer' || member === 'send') {
+        const recvType = this.trialExprType(node.expression.expression);
+        if (recvType && recvType.kind === 'address' && !this.isNominalAddressValue(recvType)) {
+          this.diags.error(
+            node,
+            'JETH492',
+            `address .${member} is not supported (a fixed 2300-gas stipend, a known footgun since EIP-1884); use a checked low-level send \`t.call({ data: "0x", value: amt, success: {...} })\``,
+          );
+          return true;
+        }
+      }
+      // arr.push() with no argument in VALUE position, on a STORAGE dynamic array (the storage-reference
+      // form). resolveArrayExpr calls checkExpr, so restore the diag length after the trial resolve.
+      if (member === 'push' && node.arguments.length === 0) {
+        const dl = this.diags.items.length;
+        const arr = this.resolveArrayExpr(node.expression.expression);
+        this.diags.items.length = dl;
+        if (arr && (arr.base.kind === 'stateArray' || arr.base.kind === 'mapArray' || arr.base.kind === 'placeArray')) {
+          this.diags.error(
+            node,
+            'JETH494',
+            `push() with no argument (a storage-reference local) is not supported; use push(value) - e.g. arr.push(P(...))`,
+          );
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   private checkUnary(node: ts.PrefixUnaryExpression, expected?: JethType): Expr | undefined {

@@ -135,6 +135,21 @@ Likely-deliberate singleton: trailing-hole destructure `let [p, ] = g(a, b)` (JE
 parses `[p,]` as 1 element, so JETH sees an arity mismatch; the leading-hole form `let [, q]` is
 lifted and byte-identical).
 
+### Deliberate DESIGN rejects (footgun / deprecated / no-storage-ref locals): JETH492 / JETH493 / JETH494
+
+Three shapes solc ACCEPTS but JETH intentionally does NOT support - not because a lift would miscompile,
+but because each is a deliberate LANGUAGE-DESIGN choice (a USER RULING: never lift). They were given
+targeted diagnostics (replacing the generic `JETH074 unsupported expression` catch-all) so a future
+exhaustion audit sees them on the deliberate list and never re-flags them as material liftable. Each stays
+REJECTED and accepted programs are byte-identical (the diagnostic only reclassifies an already-guaranteed
+reject). Regression net: `test/deliberate-reject-diagnostics.test.ts`.
+
+| ID | Shape | Code | Why it must stay (deliberate) |
+|----|-------|------|-------------------------------|
+| ADDR-TRANSFER-SEND | `<address>.transfer(v)` / `<address>.send(v)` on a PLAIN address/payable receiver | JETH492 | solc's ETH send forwards a FIXED 2300-gas stipend, a known footgun since EIP-1884 repriced SLOAD (a recipient's receive/fallback can then run out of gas). JETH's canonical value transfer is the checked low-level `t.call({ data, value, success })`. RECEIVER-TYPE-GATED (`trialExprType` + `isNominalAddressValue`): a contract/interface-VALUE `.transfer`/`.send` is real external DISPATCH (resolved earlier, byte-identical) and is UNAFFECTED, as are a contract's OWN transfer/send method and a user field/local named transfer/send |
+| SELFDESTRUCT | `selfdestruct(a)` (bare or `selfdestruct(payable(a))`) | JETH493 | deprecated; neutered by EIP-6780 (contract self-destruction now only within the same transaction as creation), so it no longer does what code written against the old semantics expects |
+| PUSH-NOARG-VALUE | `arr.push()` (no argument) used as a VALUE, e.g. `let r: P = this.arr.push()` | JETH494 | solc returns a STORAGE REFERENCE to the appended element; JETH deliberately has NO storage-reference locals. The no-arg push STATEMENT (append a zero element) IS supported and byte-identical; `arr.push(value)` is the supported value form. Fires for state / mapping-value / struct-field dynamic storage arrays |
+
 ## RETIRED 2026-07-10: the two v3-sweep liftables are LIFTED (both byte-identical, adversarially verified)
 
 - **ICE-LIB-SIG - LIFTED** (`7b144e9`): the cross-library delegatecall entry is no longer pulled
@@ -1176,3 +1191,23 @@ error + same-named CONTRACT-member error coexisting (JETH128, distinct scopes in
 library event (JETH434, a deliberate ambiguity reject). Plus the standing DELIBERATE miscompile-avoiding rejects
 (rec-struct mem-local/indexing, the pointer-headed fixed-array memory family, TYPED-CATCH, MULTI-CONTRACT-FILE,
 FUNCREF-PURE, LT5, L2-MOBILE, LIB-CREATION-VALUE, FALLBACK-EXTERNAL-MARKER). No MATERIAL solc-coverage gap remains.
+
+### 2026-07-15 DELIBERATE-REJECT DIAGNOSTICS (3 targeted messages replacing a generic JETH074; no shape lifted)
+
+A diagnostic-quality pass over three shapes solc accepts but JETH deliberately rejects (a USER RULING: never lift).
+Each previously fell to the generic `JETH074 unsupported expression` catch-all and now emits a clear, targeted
+message. No shape was made to compile and no accepted program changed: a byte-identity sweep of the whole guard
+matrix (interface + contract-value `.transfer` DISPATCH, a contract's OWN transfer/send method, `push(value)`,
+the no-arg push STATEMENT, `t.call({ value })`, and field/local named transfer/send) is IDENTICAL to base at
+c9a277c. The three new codes (see the "Deliberate DESIGN rejects" table above):
+- **JETH492** `<address>.transfer/.send`: solc's fixed 2300-gas-stipend ETH send (a footgun since EIP-1884).
+  RECEIVER-TYPE-GATED (`trialExprType` + `isNominalAddressValue`) so ONLY a PLAIN address/payable receiver is
+  flagged; a nominal contract/interface receiver dispatches exactly as before.
+- **JETH493** `selfdestruct(...)`: deprecated, neutered by EIP-6780.
+- **JETH494** `arr.push()` no-arg used as a VALUE (a storage-reference local): the no-arg push STATEMENT stays
+  supported; `push(value)` is the value form. Fires on state / mapping-value / struct-field storage arrays.
+
+Implemented as `Analyzer.deliberateRejectDiag`, called at the tail of `checkExpr` immediately before the JETH074
+catch-all - so every real resolver (interface/contract dispatch, low-level `.call`, attached library, the
+array-mutator STATEMENT path) runs first and accepted programs cannot be reached. Regression net:
+`test/deliberate-reject-diagnostics.test.ts` (8 tests, including runtime byte-identity of the guards vs solc 0.8.35).
