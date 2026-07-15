@@ -1239,3 +1239,17 @@ it never reached main.
 FOLLOW-UP (in flight): the multi-file analogue - an IMPORTED file-level event/error colliding with a same-named
 contract member - bypasses the member shadow via the V3 per-file alpha-rename (a bare raise routes to the
 imported symbol), a pre-existing OVER-ACCEPTANCE surfaced by the Group-C verify; being fixed separately.
+
+### 2026-07-16 Group A addition (USER RULING): method-vs-type/error/event name collision is a DELIBERATE accepted reject
+
+A method sharing a name with a same-named type/error/event (`class C { get Bad(): External<u256> {...} }` where
+`type Bad = error<{...}>` / `type Bad = { ... }` / `type Bad = event<{...}>` exists) rejects JETH133 while solc
+accepts (solc keeps a function name and a same-named type/error/event in ONE overload set, resolving by reference
+context). This is NOT a gap to lift - it is a DELIBERATE accepted reject (Group A), per the JETH naming
+convention: types/errors/events are PascalCase, methods are camelCase, so the two namespaces never collide in
+idiomatic code. A collision only arises when a method is (mis)named PascalCase; JETH rejecting it ENFORCES the
+convention. Workaround is trivial + idiomatic: name the method camelCase (`bad()`), which never collides.
+Lifting it would require true overload-set resolution (a name being both a callable and a type in one scope,
+disambiguated by context) with its own miscompile risk - deliberately declined. Applies single-file and to the
+multi-file import variant (JETH133/074/085). REMOVES this from the "liftable" set: it is now a Group A deliberate
+reject alongside .transfer/.send (JETH492), selfdestruct (JETH493), push-no-arg (JETH494).
