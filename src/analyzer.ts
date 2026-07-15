@@ -25847,6 +25847,36 @@ export class Analyzer {
     // Comparisons -> bool. Allowed on enums (compares the underlying uint8); two DIFFERENT enums
     // are rejected by the brand-mismatch path inside unifyOperands.
     if (this.isComparison(op)) {
+      // NOMINAL-ADDRESS COMPARISON gate (solc parity): a contract/interface reference is a NOMINAL branded
+      // address (brand `__ctref:<Name>` or the interface name). solc has NO implicit conversion between such
+      // a reference and a plain `address`, nor between two DIFFERENT nominal brands, so `address(0) == t`,
+      // `t == addr`, `msg.sender == t`, `t == u` (contract T vs contract U / interface I) are all rejected:
+      // "Built-in binary operator == cannot be applied to types address and contract T." Fire when at least
+      // one operand is a nominal address, BOTH operands are addresses, and their brands differ. The SAME
+      // brand (t == t2), plain==plain, and an explicit `address(t)` cast (which strips the brand) all fall
+      // through to the normal unify and stay ACCEPTED, byte-identical to solc. A nominal vs a NON-address
+      // operand (t == 5) is not an address pair here, so it keeps its existing reject (JETH083/JETH084).
+      // Without this gate a LITERAL address operand (address(0)) silently fails retypeLiteral, so buildBinary
+      // returned undefined with NO diagnostic and the return-site error-recovery ACCEPTED it (an OA).
+      if (
+        left.type.kind === 'address' &&
+        right.type.kind === 'address' &&
+        left.type.brand !== right.type.brand &&
+        (this.isNominalAddressValue(left.type) || this.isNominalAddressValue(right.type))
+      ) {
+        const clean = (t: JethType): string => {
+          const br = (t as { brand?: string }).brand;
+          if (typeof br === 'string' && this.isNominalAddressValue(t))
+            return `contract ${br.startsWith(CTREF_PREFIX) ? br.slice(CTREF_PREFIX.length) : br}`;
+          return displayName(t);
+        };
+        this.diags.error(
+          node,
+          'JETH083',
+          `operator '${op}' cannot be applied to ${clean(left.type)} and ${clean(right.type)} (no implicit conversion between a contract/interface reference and address; unwrap with address(<value>) to compare as plain addresses)`,
+        );
+        return undefined;
+      }
       // solc allows comparing an integer variable to an out-of-range literal by widening BOTH to the
       // smallest common type of the same signedness that holds the literal (a legal, usually-
       // degenerate comparison: e.g. `uint8 == 256` -> compare in uint16). Try that before the normal
