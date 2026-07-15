@@ -1081,3 +1081,42 @@ corpus; cross-products - contract-type aggregate in diamond/proxy/library, recur
 field; a 16-program combinatorial matrix). Verdict CLEAN: zero MC, zero OA, zero new OR. Every over-rejection
 observed is a PRE-EXISTING documented safe reject (proven base==merged). Suite 470/4362, tsc clean, flake gate
 green (deterministic across repeated runs).
+
+### 2026-07-15 EXHAUSTION-AUDIT round (2 lifts + 8 stale rows retired + 1 false-premise)
+
+A read-only exhaustion audit (~98 differential cases, canonical corpus syntax) re-probed the full residual
+surface at HEAD to determine whether the liftable set was empty. It found 2 genuine liftables (now lifted),
+8 STALE rows (accept byte-identically at HEAD - the catalogue had drifted), 1 FALSE-PREMISE row, and ZERO
+over-acceptances.
+
+LIFTED byte-identical:
+- **USING-ON-LIBRARY** (`8b263ff`, JETH074): `@using(M)` inside a `static class` (library) body is now
+  consumed - a per-library lexical @using map keyed by library name (mirroring the USING-ON-ABSTRACT
+  per-class maps); `x.dbl()` in library L resolves to `M.dbl(x)`, the emitted call byte-identical to writing
+  `M.dbl(x)` directly (a resolution layer only). Proven across u256/struct/bytesN receivers, multi-method,
+  internal + external/delegatecall libraries; leaks all fail closed (JETH393 ambiguous / JETH391 non-library
+  / JETH074 not-found). Suite 475/4407.
+- **TRAILING-HOLE** (`126b8bb`, JETH066/072): a `let`-declaration tuple destructure with an elided trailing
+  hole `let [p, ] = g()` (TS drops the trailing comma) now binds a truncated pattern, treating the missing
+  tail as discarded holes - byte-identical to solc `(uint p, ) = g()` and the leading-hole twin. The discarded
+  component is still EVALUATED (raw-storage witness under populated state proved side effects run), the exact
+  reverted-sibling failure mode, and it holds. Genuine arity mismatches still both-reject.
+
+FALSE-PREMISE (NOT an OR - both-reject at solc parity, no lift, test-only pin `234e809`):
+- **MEM-STRUCT-DYNARRAY-FIELD**: `let s: S = { arr: [3n, 4n] }` (a memory struct with a dynamic-array field
+  built from a FIXED-array literal) - solc REJECTS this too ("Invalid implicit conversion from uint256[2] to
+  uint256[]"); JETH's JETH226 is correct parity. The CORRECTLY-constructed feature (`new Array<u256>(n)` then
+  element writes, then the whole read/write/copy/alias/delete surface under populated multi-element state) was
+  found to ALREADY work byte-identically today. LESSON: a fixed-array literal `[a,b]` is `T[K]`, not `T[]`; an
+  audit/probe that assigns one to a dynamic field manufactures a false liftable (solc rejects it too).
+
+STALE ROWS RETIRED (re-probed accept + byte-identical at HEAD): JETH387 receive/fallback internal-call gate;
+JETH065 accessor property-read (`this.val` == solc `val()`); funcref-struct element bound-to-local
+(`let e: Fd = a[i]; e.f(v)`); funcref-struct ternary `(c ? a[0] : a[1]).f(v)`; calldata struct-array element
+byte access `xs[i].b[j]`; nested-array whole-inner assignment `m[i] = [...]`; `bytes[][]` nested dynamic-leaf
+array; array/struct of function pointers (fixed + dynamic). These earlier catalogue/SUPPORTED.md "rejects" now
+compile identically to solc.
+
+REMAINING KNOWN LIFTABLE (found in passing, next): the tuple-ASSIGNMENT trailing hole `[a, ] = two()` (no
+`let`) still over-rejects JETH066 while solc accepts `(a, ) = two()` - symmetric to the TRAILING-HOLE let-decl
+lift, same machinery on the assignment path.
