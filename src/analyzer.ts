@@ -13288,14 +13288,52 @@ export class Analyzer {
     this.diags.items.length = save; // side-effect-free: discard any trial diagnostics from resolveType
   }
 
-  /** Build the InterfaceMethod twin for ONE contract member IF it is an EXTERNAL method (the callable
-   *  surface of a contract VALUE) - a `get` accessor with an External/View/Pure marker (external read-only,
-   *  a STATICCALL) or a method with an External/Payable/View/Pure marker (external writer / view / payable).
-   *  A bare method or a bare `get` is INTERNAL (no ABI selector) and returns undefined (a call to it rejects
-   *  as "not visible", matching solc). Returns undefined for any non-method member or an unsupported
-   *  param/return type (best-effort; the caller omits it). The mutability drives ONLY the STATICCALL-vs-CALL
-   *  op and the payable value-option gate, so a read-only accessor's inferred view/pure both map to `view`. */
+  /** Build the InterfaceMethod twin for ONE contract member IF it is externally callable on a contract VALUE
+   *  - a `get` accessor with an External/View/Pure marker (external read-only, a STATICCALL), a method with an
+   *  External/Payable/View/Pure marker (external writer / view / payable), or a `Visible<T>` PUBLIC FIELD (its
+   *  synthesized auto-getter, always a view STATICCALL). A bare method / bare `get` / non-Visible field is
+   *  INTERNAL (no ABI selector) and returns undefined (a call to it rejects as "not visible", matching solc).
+   *  Returns undefined for any other member or an unsupported param/return type (best-effort; the caller omits
+   *  it). The mutability drives ONLY the STATICCALL-vs-CALL op and the payable value-option gate, so a
+   *  read-only accessor's inferred view/pure - and a getter's constant/immutable/state kind - all map to `view`. */
   private buildContractCallMethod(member: ts.ClassElement): InterfaceMethod | undefined {
+    // A `Visible<T>` PUBLIC FIELD's SYNTHESIZED auto-getter is externally callable on a contract value too
+    // (solc: a `public` state var / constant / immutable IS an external getter). This pre-pass runs BEFORE
+    // unwrapVisibleFieldMarker mutates the node, so the marker is read straight from the AST here. The getter's
+    // ABI shape is the EXACT one synthPublicGetter emits (getterSignatureShape): mapping keys / array indices
+    // become params, the leaf value (or a flattened struct tuple) becomes the return. A getter is ALWAYS view
+    // (a STATICCALL), never payable - a constant getter is `pure` in solc but view/pure both map to view for
+    // the op choice. Best-effort: an unsupported key / return type simply omits the entry (a call then rejects
+    // cleanly at the call site with JETH491, matching solc's "not found"), never a spurious reject.
+    if (ts.isPropertyDeclaration(member) && ts.isIdentifier(member.name)) {
+      const ft = member.type;
+      if (!ft || !ts.isTypeReferenceNode(ft) || !ts.isIdentifier(ft.typeName) || ft.typeName.text !== 'Visible') {
+        return undefined; // a bare / non-Visible field is internal storage - no public getter
+      }
+      const targs = ft.typeArguments;
+      if (!targs || targs.length !== 1) return undefined; // malformed Visible<> - unwrapVisibleFieldMarker rejects it
+      const fname = member.name.text;
+      if (fname.startsWith('$p$') || fname.startsWith('#')) return undefined; // a #-private field has no public getter
+      const stored = resolveType(targs[0]!, this.diags, this.structsByName, this.namedDim, this.interfacesByName);
+      if (!stored) return undefined;
+      const shape = this.getterSignatureShape(fname, stored);
+      if (!shape || (shape.returnType.kind === 'void' && !shape.returnTypes?.length)) return undefined;
+      // best-effort ABI support (mirrors the method branch): omit an unsupported key / return component.
+      for (const pt of shape.paramTypes) if (this.typeHasMapping(pt) || !this.interfaceAbiTypeSupported(pt)) return undefined;
+      const rtList = shape.returnTypes ?? (shape.returnType.kind === 'void' ? [] : [shape.returnType]);
+      for (const rt of rtList) if (!this.decodeSupported(rt)) return undefined;
+      const gparams: Param[] = shape.paramTypes.map((t, i) => ({ name: `k${i}`, type: t }));
+      const gsignature = functionSignature(fname, shape.paramTypes);
+      return {
+        name: fname,
+        params: gparams,
+        returnType: shape.returnTypes ? VOID : shape.returnType,
+        returnTypes: shape.returnTypes,
+        mutability: 'view',
+        signature: gsignature,
+        selector: functionSelector(gsignature),
+      };
+    }
     let mname: string;
     let paramNodes: readonly ts.ParameterDeclaration[];
     let retNode: ts.TypeNode | undefined;
