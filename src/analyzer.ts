@@ -12542,10 +12542,12 @@ export class Analyzer {
     const thisErr = this.desugarThisRaise(node, 'error');
     if (thisErr === null) return undefined;
     if (thisErr) return this.checkErrorConstructor(thisErr);
-    // LIB-NAMEDARG: a NAMED-argument raise of a BARE library-scoped error `revert(Bad({ ... }))` inside the
-    // owning library's body. Reorder the single object literal to the declaration's param order and reuse
-    // the shared positional error-arg check (byte-identical to the positional twin). Only the current
-    // library's OWN errors; a contract / file-level bare error named raise falls through unchanged.
+    // LIB-NAMEDARG: a NAMED-argument raise of a BARE error `revert(Bad({ ... }))` inside a library body,
+    // where Bad is the current library's OWN error OR a FILE-LEVEL error (FILE-LEVEL-NAMEDARG-IN-LIB).
+    // Reorder the single object literal to the declaration's param order and reuse the shared positional
+    // error-arg check (byte-identical to the positional twin). resolveErrorDeclInScope, gated on being
+    // inside a library, returns the library-own error first then the file-level fallback (never the
+    // using-contract's); a bare named raise in a CONTRACT body still falls through unchanged.
     if (
       ts.isCallExpression(node) &&
       ts.isIdentifier(node.expression) &&
@@ -12553,7 +12555,7 @@ export class Analyzer {
       ts.isObjectLiteralExpression(node.arguments[0]!) &&
       this.currentLibrary !== undefined
     ) {
-      const decl = this.libraryErrorsByName.get(this.currentLibrary)?.get(node.expression.text);
+      const decl = this.resolveErrorDeclInScope(node.expression.text);
       if (decl) {
         const r = this.reorderNamedRaiseArgs(node.arguments[0]!, [decl.params.map((p) => p.name)], 'error', node.expression.text);
         if (!r) return undefined;
@@ -14042,16 +14044,18 @@ export class Analyzer {
       this.diags.error(inner.expression, 'JETH147', `unknown event '${evName}'`);
       return;
     }
-    // LIB-NAMEDARG: a NAMED-argument raise of a LIBRARY-scoped event - `emit(L.E({ ... }))` (qualified,
-    // rebuilt to a bare-name call above) or `emit(E({ ... }))` inside the owning library's body. Reorder
-    // the single object literal to the declaration's param order, then run the shared positional
-    // overload/emit logic on the reordered arg nodes (byte-identical to the positional twin). Scoped to
-    // library events only: a contract / file-level event named raise is left untouched (its own JETH148
-    // path / this.X desugar).
+    // LIB-NAMEDARG: a NAMED-argument raise of an event reorderable inside a library body - `emit(L.E({ ... }))`
+    // (qualified, rebuilt to a bare-name call above), `emit(E({ ... }))` where E is the owning library's OWN
+    // event, or `emit(E({ ... }))` where E is a FILE-LEVEL event raised from a library fn
+    // (FILE-LEVEL-NAMEDARG-IN-LIB). Reorder the single object literal to the declaration's param order, then
+    // run the shared positional overload/emit logic on the reordered arg nodes (byte-identical to the
+    // positional twin). A named raise in a CONTRACT body is left untouched (its own JETH148 path / this.X
+    // desugar) - only a library body reorders a bare file-level event.
     let evArgs: readonly ts.Expression[] = inner.arguments;
     const libScopedEvent =
       libEventCandidates !== undefined ||
-      (this.currentLibrary !== undefined && this.libraryEventsByName.get(this.currentLibrary)?.has(evName) === true);
+      (this.currentLibrary !== undefined &&
+        (this.libraryEventsByName.get(this.currentLibrary)?.has(evName) === true || this.fileLevelErrorEvents.has(evName)));
     if (libScopedEvent && evArgs.length === 1 && ts.isObjectLiteralExpression(evArgs[0]!)) {
       const r = this.reorderNamedRaiseArgs(
         evArgs[0]!,

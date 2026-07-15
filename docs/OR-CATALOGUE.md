@@ -527,9 +527,10 @@ pre-existing at `750d262` - byte-for-byte identical on the pre-lift parent):**
 - **PAREN-CALLEE** (JETH074): `(C.dbl)(4n)` / `(this.dbl)(4n)`; drop the parens.
 - **DEFAULT-ARG-CONST** (JETH250): `b: u256 = C.K` default param (JETH-only feature; C.K is foldable,
   a plausible lift).
-- **NAMED-RAISE-EXCLUSIVITY** (JETH227/148): named-arg raise only via the member `this.X({...})`
-  form; file-level named `revert(Bad({...}))`/`emit(T({...}))` reject (bare object literals mean
-  struct literals - deliberate). Positional file-level raise is byte-identical.
+- **NAMED-RAISE-EXCLUSIVITY** (JETH227/148, CONTRACT body only): a bare file-level named
+  `revert(Bad({...}))`/`emit(T({...}))` in a CONTRACT body still rejects - only the member `this.X({...})`
+  form is native there (bare object literals mean struct literals - deliberate). Positional file-level raise
+  is byte-identical. LIFTED inside a LIBRARY body: see FILE-LEVEL-NAMEDARG-IN-LIB below.
 - **JETH434-DISAMBIGUABLE**: named-arg emit of an overloaded event rejects even when the key SET
   uniquely selects an overload; the blanket is sound but narrowable.
 - **MEMBER-SHADOWS-FILE-EVENT** (JETH353): same-name different-signature member vs file-level event;
@@ -824,6 +825,18 @@ that a lift newly exposed. All three fixed; bar (0 MC / 0 OA) re-proven.
   is native), and `this.E` inside a library stays a correct both-reject (solc: "Member E not found in
   library L", JETH394). Verified byte-identical (logs + revert data) across scrambled key orders, indexed
   + non-indexed fields, and overloaded events.
+- **FILE-LEVEL-NAMEDARG-IN-LIB - LIFTED** (was JETH148 event / JETH130 error): a bare NAMED-argument raise
+  `emit(Ev({...}))` / `revert(Bad({...}))` of a FILE-LEVEL event/error (`type X = event<{...}>` /
+  `error<{...}>`) inside a LIBRARY body now reorders the keys to the declaration's param order and lowers
+  through the positional path, byte-identical to the positional twin (verified: logs + revert data across
+  scrambled key orders, indexed / all-indexed / dynamic-string fields, forwarded through a contract call).
+  Extends the LIB-EVENT-NAMEDARG lift: `checkEmit`'s reorder gate now fires for a file-level event inside a
+  library (`fileLevelErrorEvents.has(evName)`), and the `checkRevertReason` library-error block resolves the
+  decl via `resolveErrorDeclInScope` (library-own OR file-level) instead of the library-own table alone.
+  A bare file-level named raise in a CONTRACT body is UNCHANGED (still NAMED-RAISE-EXCLUSIVITY); positional
+  file-level-in-lib and the library-scoped named raise are untouched; unknown-key / wrong-arity / duplicate-key
+  reject at solc parity (JETH130); a single-struct-param event with field-name keys stays a both-reject (no
+  over-acceptance). Regression: test/lib-member-decls.test.ts (FILE-LEVEL-NAMEDARG-IN-LIB describe).
 - **LIB-CREATION-VALUE** (out of scope): deploying a standalone external-library OBJECT with value reverts
   in JETH (creation-code callvalue guard) while solc's library creation accepts value. Library objects are
   not asserted byte-identical to solc (different runtime), no JETH source construct controls this, and the
