@@ -384,6 +384,10 @@ export class Analyzer {
   // internal-call path and are byte-identical to solc's internal library functions for free. The
   // registry holds each library's RawFunctions (decl order) for overload resolution at the call site.
   private libraryByName = new Map<string, RawFunction[]>();
+  // USING-ON-LIBRARY: each library's own ts.ClassDeclaration node, so buildLibraryAttachments can scan
+  // its `@using(M)` decorators. A library body is served by its OWN @using map (lexical, like a
+  // contract's), not the deployed contract's - see ownerUsingAttachments' currentLibrary branch.
+  private libraryClassByName = new Map<string, ts.ClassDeclaration>();
   // LIB-CONST / LIB-MEMBER-EVENT / LIB-MEMBER-ERROR: a library may declare constants, events, and errors
   // (solc parity). These are PER-LIBRARY (keyed libName -> memberName), NOT merged into the global
   // constant/event/error tables: solc scopes them to the library (two libraries may share a name, a
@@ -2719,6 +2723,9 @@ export class Analyzer {
       fns.push(fn);
     }
     this.libraryByName.set(name, fns);
+    // USING-ON-LIBRARY: remember the declaration node so buildLibraryAttachments can scan THIS library's
+    // own `@using(M)` decorators into a per-library attachment map (served only to its own bodies).
+    this.libraryClassByName.set(name, cls);
 
     // LIB-MODIFIER: register each collected library @modifier into modifiersByName under a QUALIFIED
     // `L.name` key (unique across contracts/libraries: `.` is illegal in an identifier). Its
@@ -2850,6 +2857,16 @@ export class Analyzer {
       this.collectUsingDecorators(c, m);
       if (m.size > 0) this.usingAttachmentsByClass.set(c.name.text, m);
     }
+    // USING-ON-LIBRARY: a static-class (library) is NOT in the deployed contract's linearization, but its
+    // OWN `@using(M)` directives serve its own bodies exactly like a contract's - solc scopes `using M for T`
+    // lexically to the DECLARING scope (a library counts). Register a per-library attachment map keyed by the
+    // library name; ownerUsingAttachments serves it while a body of THAT library is checked (currentLibrary),
+    // never the deployed contract's map. A library name never collides with a contract/base name (JETH386).
+    for (const [libName, libCls] of this.libraryClassByName) {
+      const m = new Map<string, RawFunction[]>();
+      this.collectUsingDecorators(libCls, m);
+      if (m.size > 0) this.usingAttachmentsByClass.set(libName, m);
+    }
     // Native `self` convention: FILE-WIDE by design (see the field comment). Registered for every
     // library regardless of any @using naming it; attachedFnsFor deduplicates by identity, so a
     // self-named fn also reachable through the owner's @using cannot self-collide as a spurious
@@ -2867,13 +2884,15 @@ export class Analyzer {
     }
   }
 
-  /** The @using attachment map of the class that DECLARED the body currently being checked. A body
-   *  with no class owner (a @library function body - solc scopes a contract's using directives away
-   *  from library bodies too) has no @using map; only the file-wide self convention applies there. */
+  /** The @using attachment map of the class that DECLARED the body currently being checked. A contract/
+   *  abstract-base body is served by its own class map (bodyOwnerContract). A @library body has no contract
+   *  owner (bodyOwnerContract undefined) but IS served by ITS OWN @using(M) map (USING-ON-LIBRARY): solc
+   *  scopes `using M for T` lexically to the declaring library too, so a library body sees its own
+   *  directives (never the deployed contract's). Beyond that, only the file-wide self convention applies. */
   private ownerUsingAttachments(): Map<string, RawFunction[]> | undefined {
-    return this.bodyOwnerContract !== undefined
-      ? this.usingAttachmentsByClass.get(this.bodyOwnerContract)
-      : undefined;
+    if (this.bodyOwnerContract !== undefined) return this.usingAttachmentsByClass.get(this.bodyOwnerContract);
+    if (this.currentLibrary !== undefined) return this.usingAttachmentsByClass.get(this.currentLibrary);
+    return undefined;
   }
 
   /** Fast gate: does ANY attachment source apply to the body being checked? True when the body

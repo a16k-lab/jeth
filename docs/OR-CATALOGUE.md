@@ -171,8 +171,15 @@ lifted and byte-identical).
 
 Safe over-rejections seen in passing during these lifts (pre-existing, clean, uncatalogued before):
 
-- **USING-ON-LIBRARY (JETH074)**: `@using(M)` on a `static class` library is not consumed (solc accepts `using`
-  inside a library body). In-file, a library body's only attachment source is the self-convention.
+- **USING-ON-LIBRARY - LIFTED**: `@using(M)` on a `static class` library IS now consumed for that library's
+  own bodies (`x.f()` inside library L under `@using(M)` -> `M.f(x, ...)`), matching solc's lexical scoping
+  of `using M for T` to the declaring scope (a library counts). Pure resolution layer: the attached form is
+  byte-identical JETH-vs-JETH to the explicit `M.f(x)` form, which is already byte-identical to solc.
+  buildLibraryAttachments registers a per-library @using map keyed by the library name; ownerUsingAttachments
+  serves it via currentLibrary (bodyOwnerContract is undefined in a library body). Guards intact: a contract's
+  @using does NOT leak into a library body, one library's @using does NOT leak into another, @using naming a
+  non-library rejects (JETH391), an unattached method rejects (JETH074). Regression net:
+  `test/using-on-library.test.ts` (11 cells, incl. an external delegatecall library, run+decode + raw storage).
 - **JETH387 receive/fallback internal-call gate**: a `receive()`/`fallback()` body may not call ANY
   internal fn (attachment calls included); solc accepts. Placement-independent, fully gates that
   surface.
@@ -723,11 +730,13 @@ GET-PROPERTY-READ, LIB-CONST, LIB-MEMBER-ERROR, LIB-MEMBER-EVENT. MANGLE-INJECT 
 (this.$p$B$x rejects JETH036 at decl + access; parity both-reject).
 
 Additional STALE rows the audit found already-lifted (catalogue text was behind):
-- **USING-ON-LIBRARY - already LIFTED** (`@using(M)` inside a static-class library body accepts,
-  runtime byte-identical). NON-FINDING clarified: an attached call `a.dbl()` with a first param named
-  `self` and NO `@using` is the deliberate native SELF-CONVENTION (a JETH-only superset ergonomic, like
-  default args - no solc equivalent); a NON-`self` first param without `@using` correctly rejects
-  JETH074, so there is no global attachment leak.
+- **USING-ON-LIBRARY - NOW LIFTED** (`@using(M)` inside a static-class library body accepts, runtime +
+  bytecode byte-identical - see the LIFTED entry above). CORRECTION: this row previously claimed the
+  `@using(M)` case was already lifted; it was not - only the native SELF-CONVENTION (a first param named
+  `self`, no `@using`, a JETH-only superset ergonomic) worked file-wide, while an EXPLICIT `@using(M)` on a
+  library body still rejected JETH074 at the base. The `@using(M)` resolution inside a library body is lifted
+  by extending the per-class @using ownership maps to register a library as an owner. A NON-`self` first param
+  without `@using` still correctly rejects JETH074 (no global attachment leak), unchanged.
 - **IMM-INIT-SHADOW - already LIFTED** (a ctor param/local named like the contract class binds the
   local; runtime byte-identical incl. the wrong-bind trap - reads the local, not a same-named static).
 - **MEMBER-SHADOWS-FILE-EVENT - different-signature case LIFTED** (a member event shadows a same-named
