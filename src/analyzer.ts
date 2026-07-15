@@ -13163,6 +13163,7 @@ export class Analyzer {
   private resolveExternalSelfTupleSource(
     node: ts.Expression,
     n: number,
+    hasTrail = false,
   ): { types: JethType[]; source: DestructureSource } | 'handled' | undefined {
     const sc = this.resolveExternalSelfCall(node);
     if (sc === 'handled') return 'handled';
@@ -13179,7 +13180,7 @@ export class Analyzer {
       return 'handled';
     }
     const rts = sc.returnTypes;
-    if (rts.length !== n) {
+    if (!this.tupleArityMatch(n, hasTrail, rts.length)) {
       this.diags.error(node, 'JETH356', `this.${fnName}(...) returns ${rts.length} value(s), expected ${n}`);
       return 'handled';
     }
@@ -17396,6 +17397,11 @@ export class Analyzer {
   private checkTupleAssign(e: ts.BinaryExpression, out: Stmt[]): void {
     const lhs = e.left as ts.ArrayLiteralExpression;
     const n = lhs.elements.length;
+    // TRAILING-HOLE (assignment twin of the `let [p, ] = g()` decl fix): TS drops the empty slot after a
+    // trailing comma, so `[a, ] = g()` parses to `n` one short. tupleArityMatch folds that dropped final
+    // slot back in as a DISCARDED trailing component (the source is still fully evaluated by the lowering,
+    // so its side effects run), exactly like solc's `(a, ) = g()`. See tupleArityMatch's doc-comment.
+    const hasTrail = lhs.elements.hasTrailingComma === true;
     const targets: (LValue | null)[] = [];
     for (const el of lhs.elements) {
       if (ts.isOmittedExpression(el)) {
@@ -17445,7 +17451,7 @@ export class Analyzer {
       }
       return true;
     };
-    const selfTuple = this.resolveExternalSelfTupleSource(e.right, n);
+    const selfTuple = this.resolveExternalSelfTupleSource(e.right, n, hasTrail);
     if (selfTuple === 'handled') return;
     // Phase 6: `[a, b] = IFoo(addr).method(args)` with a >=2-component tuple return: decode the call's
     // bytes returndata into the N components (the same abi.decode source the DECLARATION form uses).
@@ -17459,7 +17465,7 @@ export class Analyzer {
       if (!checkTupleTypes(selfTuple.types)) return;
       source = selfTuple.source;
     } else if (ifaceCall) {
-      if (!ifaceCall.returnTypes || ifaceCall.returnTypes.length !== n) {
+      if (!ifaceCall.returnTypes || !this.tupleArityMatch(n, hasTrail, ifaceCall.returnTypes.length)) {
         this.diags.error(
           e.right,
           'JETH066',
@@ -17470,24 +17476,29 @@ export class Analyzer {
       if (!checkTupleTypes(ifaceCall.returnTypes)) return;
       source = { kind: 'abiDecode', data: ifaceCall.call, types: ifaceCall.returnTypes };
     } else if (abiDecodeTuple) {
-      if (abiDecodeTuple.types.length !== n) {
+      if (!this.tupleArityMatch(n, hasTrail, abiDecodeTuple.types.length)) {
         this.diags.error(e.right, 'JETH066', `abi.decode tuple has ${abiDecodeTuple.types.length} type(s), expected ${n} target(s)`);
         return;
       }
       if (!checkTupleTypes(abiDecodeTuple.types)) return;
       source = abiDecodeTuple.source;
     } else if (callName) {
-      const r = this.resolveTupleCall(e.right as ts.CallExpression, callName, n);
+      const r = this.resolveTupleCall(e.right as ts.CallExpression, callName, n, hasTrail);
       if (!r) return;
       if (!checkTupleTypes(r.types)) return;
       source = { kind: 'call', fn: r.fn, args: r.args };
     } else if (ts.isArrayLiteralExpression(e.right)) {
-      if (e.right.elements.length !== n) {
-        this.diags.error(e.right, 'JETH066', `tuple has ${e.right.elements.length} value(s), expected ${n}`);
+      // A tuple-literal RHS has its OWN component count `m` (= e.right.elements.length); the trailing hole
+      // means the pattern is one target short. Iterate over `m` so EVERY RHS component is evaluated (the
+      // discarded trailing one included - `targets[i]` is undefined past the pattern, so it is coerced by
+      // no target and simply not stored), matching solc's evaluate-all-then-assign-named semantics.
+      const m = e.right.elements.length;
+      if (!this.tupleArityMatch(n, hasTrail, m)) {
+        this.diags.error(e.right, 'JETH066', `tuple has ${m} value(s), expected ${n}`);
         return;
       }
       const values: Expr[] = [];
-      for (let i = 0; i < n; i++) {
+      for (let i = 0; i < m; i++) {
         const el = e.right.elements[i]!;
         const tgt = targets[i];
         const v = this.checkExpr(el, tgt?.type);
@@ -17498,7 +17509,7 @@ export class Analyzer {
     } else {
       // L10b: `[p, q] = g(a, b)` through a MULTI-RETURN function pointer (the assignment twin of the
       // declaration form; the LHS targets were already checked value-compatible via checkTupleTypes).
-      const fr = this.resolveFuncRefTupleCall(e.right, n);
+      const fr = this.resolveFuncRefTupleCall(e.right, n, hasTrail);
       if (fr === 'no') {
         this.diags.error(
           e.right,
