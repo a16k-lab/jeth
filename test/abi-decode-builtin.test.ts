@@ -216,6 +216,76 @@ describe('abi.decode: byte-identical vs solc', () => {
     ).toBe(true);
   });
 
+  it('step 3c: SINGLE-element decode-list [T] in single-value return (byte-identical to solc + to the abi.decode(b, T) twin)', async () => {
+    // DECODE-SINGLE-RETURN: `return abi.decode(b, [T])` (a 1-element type-list) in a SINGLE-VALUE return
+    // is exact sugar for `return abi.decode(b, T)` (solc's `return abi.decode(b, (T));`; a 1-element
+    // parenthesized type is one value). Previously rejected JETH323 (the multi-value return path never ran
+    // for a single-value return type, so it fell to the value-position tuple-decode reject). Both calldata
+    // and memory decode sources, across value / address / bytes32 / dynamic-bytes / struct targets.
+    const J = `type P = { a: u256; b: address };
+    class D {
+      get c_u256(b: bytes): External<u256> { return abi.decode(b, [u256]); }
+      get c_addr(b: bytes): External<address> { return abi.decode(b, [address]); }
+      get c_b32(b: bytes): External<bytes32> { return abi.decode(b, [bytes32]); }
+      get c_struct(b: bytes): External<P> { return abi.decode(b, [P]); }
+      get c_bytes(b: bytes): External<bytes> { return abi.decode(b, [bytes]); }
+      get m_u256(x: u256): External<u256> { let m: bytes = abi.encode(x); return abi.decode(m, [u256]); }
+      get m_bytes(x: bytes): External<bytes> { let m: bytes = abi.encode(x); return abi.decode(m, [bytes]); }
+      get m_struct(a: u256, bb: address): External<P> { let p: P = { a: a, b: bb }; let m: bytes = abi.encode(p); return abi.decode(m, [P]); }
+      get sug(b: bytes): External<u256> { return b.decode([u256]); }
+    }`;
+    const S = `contract D {
+      struct P { uint256 a; address b; }
+      function c_u256(bytes calldata b) external pure returns (uint256) { return abi.decode(b, (uint256)); }
+      function c_addr(bytes calldata b) external pure returns (address) { return abi.decode(b, (address)); }
+      function c_b32(bytes calldata b) external pure returns (bytes32) { return abi.decode(b, (bytes32)); }
+      function c_struct(bytes calldata b) external pure returns (P memory) { return abi.decode(b, (P)); }
+      function c_bytes(bytes calldata b) external pure returns (bytes memory) { return abi.decode(b, (bytes)); }
+      function m_u256(uint256 x) external pure returns (uint256) { bytes memory m = abi.encode(x); return abi.decode(m, (uint256)); }
+      function m_bytes(bytes calldata x) external pure returns (bytes memory) { bytes memory m = abi.encode(x); return abi.decode(m, (bytes)); }
+      function m_struct(uint256 a, address bb) external pure returns (P memory) { P memory p = P(a, bb); bytes memory m = abi.encode(p); return abi.decode(m, (P)); }
+      function sug(bytes calldata b) external pure returns (uint256) { return abi.decode(b, (uint256)); }
+    }`;
+    const addr = 0xabcdef1234567890abcdef1234567890abcdef12n;
+    const b32 = 'ab'.repeat(32);
+    const innerBytes = P(0x20n) + P(2n) + '1234'.padEnd(64, '0'); // abi.encode(bytes 0x1234)
+    await rtDecode(J, S, [
+      { sig: 'c_u256(bytes)', payload: P(42n), label: '[u256] calldata' },
+      { sig: 'c_addr(bytes)', payload: P(addr), label: '[address] calldata' },
+      { sig: 'c_b32(bytes)', payload: b32, label: '[bytes32] calldata' },
+      { sig: 'c_struct(bytes)', payload: P(7n) + P(addr), label: '[P] struct calldata' },
+      { sig: 'c_bytes(bytes)', payload: innerBytes, label: '[bytes] dynamic calldata' },
+      { sig: 'm_u256(uint256)', payload: P(99n), label: '[u256] memory-source' },
+      { sig: 'm_bytes(bytes)', payload: P(0x20n) + P(2n) + '1234'.padEnd(64, '0'), label: '[bytes] memory-source' },
+      { sig: 'm_struct(uint256,address)', payload: P(5n) + P(addr), label: '[P] struct memory-source' },
+      { sig: 'sug(bytes)', payload: P(123n), label: '<bytes>.decode([u256]) sugar' },
+    ]);
+
+    // internal-consistency: the [T] list form lowers BYTE-IDENTICALLY to the canonical abi.decode(b, T) twin.
+    const twin = J
+      .replace(/\[u256\]/g, 'u256')
+      .replace(/\[address\]/g, 'address')
+      .replace(/\[bytes32\]/g, 'bytes32')
+      .replace(/\[P\]/g, 'P')
+      .replace(/\[bytes\]/g, 'bytes');
+    const list = compile(J, { fileName: 'D.jeth' }).creationBytecode;
+    const single = compile(twin, { fileName: 'D.jeth' }).creationBytecode;
+    expect(list, 'single-element [T] return lowers byte-identically to the abi.decode(b, T) twin').toBe(single);
+
+    // GUARDS (no over-acceptance): a genuine type mismatch [u256] into External<address> rejects; a
+    // NON-return single-element decode (value position) stays a JETH323 reject; a 2+-element list into a
+    // single-value return stays a JETH323 arity reject.
+    expect(
+      jethRejects(`class D { get d(b: bytes): External<address> { return abi.decode(b, [u256]); } }`),
+    ).toBe(true);
+    expect(
+      jethRejects(`class D { get d(b: bytes): External<u256> { let x: u256 = abi.decode(b, [u256]); return x; } }`),
+    ).toBe(true);
+    expect(
+      jethRejects(`class D { get d(b: bytes): External<u256> { return abi.decode(b, [u256, address]); } }`),
+    ).toBe(true);
+  });
+
   it('step 4: <bytes>.decode(T) / <bytes>.decode([...]) sugar equals abi.decode', async () => {
     const J = `class D {
       get m1(b: bytes): External<string> { return b.decode(string); }

@@ -10405,6 +10405,26 @@ export class Analyzer {
         out.push({ kind: 'return' });
         return;
       }
+      // DECODE-SINGLE-RETURN: `return abi.decode(b, [T])` - a SINGLE-element decode type-list in a
+      // SINGLE-VALUE return position (currentReturnTypes is undefined here, so the multi-value branch
+      // above never ran) - is exact sugar for the single-value `return abi.decode(b, T)` (solc's
+      // `return abi.decode(b, (T));`; a 1-element parenthesized type is one value, not a tuple). Left to
+      // checkExpr the array form rejects JETH323 (a value-position tuple decode needs a destructuring).
+      // Build the SAME single-value abiDecode Expr the `abi.decode(b, T)` twin produces - byte-identical
+      // - and coerce it to the return type (a genuine type mismatch, e.g. [u256] into External<address>,
+      // still rejects via coerce/JETH085). A 2+-element list keeps its JETH323 arity reject (arity !== 1
+      // falls through to checkExpr); non-return single-element decode positions are unchanged (this only
+      // runs in return position).
+      if (this.abiDecodeListArity(node.expression) === 1) {
+        const ad = this.resolveAbiDecodeTuple(node.expression);
+        if (ad && ad.source.kind === 'abiDecode') {
+          const decoded: Expr = { kind: 'abiDecode', type: ad.types[0]!, data: ad.source.data };
+          out.push({ kind: 'return', value: this.coerce(decoded, returnType, node.expression) });
+        }
+        // Handled fully whether it resolved or resolveAbiDecode already emitted a data/type diagnostic
+        // (JETH320/321/322) - do not fall through to a second evaluation of the same call.
+        return;
+      }
       const value = this.checkExpr(node.expression, returnType);
       if (value) {
         const coerced = this.coerce(value, returnType, node.expression);
@@ -13962,6 +13982,37 @@ export class Analyzer {
     const r = this.resolveAbiDecode(node, dataNode, typeNode);
     if (!r) return undefined;
     return { source: { kind: 'abiDecode', data: r.data, types: r.types }, types: r.types };
+  }
+
+  /** DECODE-SINGLE-RETURN: the ARITY of a tuple-form abi.decode's type-list (`abi.decode(b, [T1, ...])`
+   *  or the `<bytes>.decode([T1, ...])` sugar), or undefined when `node` is not a tuple-form abi.decode.
+   *  A purely SYNTACTIC peek (the sugar form confirms a bytes receiver via the rollback-only
+   *  isBytesValueExpr, which emits nothing) that mirrors resolveAbiDecodeTuple's shape detection, so a
+   *  caller can decide to route a SINGLE-element list to the single-value decode WITHOUT evaluating the
+   *  call a second time. */
+  private abiDecodeListArity(node: ts.Expression): number | undefined {
+    if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return undefined;
+    const pa = node.expression;
+    if (
+      ts.isIdentifier(pa.expression) &&
+      pa.expression.text === 'abi' &&
+      !this.isVisibleLocal('abi') &&
+      !this.stateByName.has('abi') &&
+      pa.name.text === 'decode'
+    ) {
+      if (node.arguments.length === 2 && ts.isArrayLiteralExpression(node.arguments[1]!))
+        return node.arguments[1]!.elements.length;
+      return undefined;
+    }
+    if (
+      pa.name.text === 'decode' &&
+      node.arguments.length === 1 &&
+      ts.isArrayLiteralExpression(node.arguments[0]!) &&
+      this.isBytesValueExpr(pa.expression)
+    ) {
+      return node.arguments[0]!.elements.length;
+    }
+    return undefined;
   }
 
   /** `revertWith(b)`: bubble raw bytes as the revert payload (revert(add(b,0x20), mload(b))). */
