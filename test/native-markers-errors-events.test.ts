@@ -222,10 +222,12 @@ contract C { function f(uint256 a) external { if (a == 0) revert Insufficient(1,
     const DEP = `export type Insufficient = error<{ need: u256; have: u256 }>;\nexport type Whoops = error<{ code: u256 }>;`;
     expect(diag(`import { Insufficient } from "./errs.jeth";\nclass V { x: u256; f(a: u256): External<void> { if (a == 0n) { revert(Insufficient(1n, a)); } this.x = a; } }`, { 'errs.jeth': DEP })).toEqual([]);
     expect(diag(`import { Insufficient } from "./errs.jeth";\nclass V { x: u256; f(a: u256): External<void> { if (a == 0n) { revert(Whoops(1n)); } this.x = a; } }`, { 'errs.jeth': DEP })).toEqual(['JETH039@vault.jeth:2']);
-    // this.X is the MEMBER spelling - a file-level declaration is raised bare.
+    // this.X is the MEMBER spelling - a file-level declaration with NO member owner is raised bare.
     expect(codes(`type E = error<{ a: u256 }>;\nclass C { f(): External<void> { throw this.E({ a: 1n }); } }`)).toContain('JETH353');
-    // duplicate (file-level + member) hits the normal duplicate check; decorator mode is unchanged.
-    expect(codes(`type E = error<{ a: u256 }>;\nclass C { E: error<{ a: u256 }>; f(): External<void> { revert(E(1n)); } }`)).toContain('JETH128');
+    // CROSS-SCOPE-NAME: a file-level `E` and a contract-member `E` are DIFFERENT scopes (solc), so they
+    // COEXIST - the member shadows the file-level inside the contract; a bare `revert(E(...))` resolves to
+    // the member. (Full resolution + byte-identity is proven in test/cross-scope-name.test.ts.)
+    expect(codes(`type E = error<{ a: u256 }>;\nclass C { E: error<{ a: u256 }>; f(): External<void> { revert(E(1n)); } }`)).toEqual([]);
     expect(codes(`// use @decorators\ntype E = error<{ a: u256 }>;\nclass C { f(): External<void> { } }`)).toContain('JETH480'); // pragma banned
   });
 });

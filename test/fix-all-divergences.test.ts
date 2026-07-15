@@ -603,11 +603,17 @@ describe('re-sweep over-acceptance fixes (solc rejects, JETH must too)', () => {
     ).toBe(true);
   });
   it('cross-kind identifier collisions are rejected; function/event overloading is allowed', () => {
+    // MEMBER-scope cross-kind clashes still reject (solc "Identifier already declared").
     expect(
       jethRejects(`class C { X: error<{ a: u256 }>; X: event<{ a: u256 }>; f(): External<void> { revert(X(1n)); } }`),
     ).toBe(true);
-    expect(jethRejects(`type X = { a: u256; }; class C { X(): External<void> {} }`)).toBe(true);
     expect(jethRejects(`class C { x: u256; x(): External<void> {} }`)).toBe(true);
+    // CROSS-SCOPE-NAME (correct scope): a FILE-LEVEL TYPE (struct / enum / interface) sharing a name with a
+    // contract member stays REJECTED (JETH133). solc's member shadows the type name, so any use of it as a
+    // type is "Name has to refer to a user-defined type"; keeping the whole pair rejected is a safe proxy
+    // (base 99a8b59 rejects it, and only matching error/error + event/event coexist - see
+    // test/cross-scope-name.test.ts). Lifting this to accept was an over-acceptance (struct/enum-vs-member).
+    expect(jethRejects(`type X = { a: u256; }; class C { X(): External<void> {} }`)).toBe(true);
     expect(jethRejects(`enum X { A, B } class C { X: event<{ a: u256 }>; f(): External<void> {} }`)).toBe(true);
     expect(jethAccepts(`class C { f(): External<void> {} f(a: u256): External<void> {} }`)).toBe(true);
     expect(

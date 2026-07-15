@@ -342,10 +342,17 @@ export class Analyzer {
   private modifierInstanceKeys = new Set<string>();
   // @struct declarations (name -> resolved struct type), collected before contracts
   private structsByName = new Map<string, JethType>();
-  // contract-level custom error and event tables (collected before function bodies)
+  // CONTRACT-MEMBER custom error and event tables (collected before function bodies). File-level
+  // errors/events (`type X = error<{...}>`) live in the SEPARATE fileLevel* maps below: they are a
+  // DIFFERENT scope, so a file-level `X` and a contract-member `X` may coexist and a member SHADOWS the
+  // same-named file-level owner inside the contract (solc's file-vs-contract scoping - witnessed).
   private errorsByName = new Map<string, ErrorDecl>();
   private errors: ErrorDecl[] = [];
   private eventsByName = new Map<string, EventIR[]>(); // source name -> all overloads (solc allows event overloading by signature)
+  // FILE-LEVEL error/event tables (file scope). A contract-member of the same name shadows these inside
+  // the contract; a bare name with NO member owner resolves here; a library body sees these as a fallback.
+  private fileLevelErrorsByName = new Map<string, ErrorDecl>();
+  private fileLevelEventsByName = new Map<string, EventIR[]>();
   // JETH434-DISAMBIGUABLE: when a NAMED-arg emit of an overloaded event is disambiguated by its key set,
   // desugarThisRaise picks the overload and FORCES it through to checkEmit here (so the type-based overload
   // resolution can never re-pick a different overload than the one used to reorder the args). Set+captured
@@ -3486,51 +3493,56 @@ export class Analyzer {
       if (!this.funcsByName.has(rf.name)) this.funcsByName.set(rf.name, rf);
     }
 
-    // Cross-kind identifier collision (solc: "Identifier already declared"). Every contract-level
-    // declaration shares one identifier namespace; a name may carry MULTIPLE declarations ONLY if
-    // they are all functions (overloading) or all events (overloading). A name used by two DIFFERENT
-    // kinds - function / event / error / type (struct or enum) / storage (state/@constant/@immutable)
-    // - collides. Intra-kind duplicates are handled elsewhere (JETH046 immutable, JETH128 error,
-    // JETH272 enum/struct, the overload resolver), so this only catches cross-kind reuse.
-    const idKinds = new Map<string, Set<string>>();
-    const addId = (nm: string, kind: string): void => {
-      const s = idKinds.get(nm) ?? new Set<string>();
+    // Cross-kind identifier collision (solc: "Identifier already declared"). solc has TWO relevant scopes:
+    // the FILE scope (structs, enums, interfaces, file-level errors/events, contract/library names) and each
+    // contract's MEMBER scope (functions, member events/errors, state/@constant/@immutable storage,
+    // modifiers). A clash is two declarations of DIFFERENT kinds in the SAME scope; a name may carry
+    // multiple declarations only if they are all functions (overloading) or all events (overloading).
+    // CROSS-SCOPE-NAME: a FILE-level name and a same-named MEMBER coexist in solc ONLY when the member
+    // SHADOWS the file-level so cleanly that the file-level is never usable-yet-wrong inside the contract -
+    // witnessed on 0.8.35, that is EXACTLY a matching error/error or event/event pair. Every OTHER
+    // file-vs-member same-name pair is REJECTED (the cross-scope loop below): a file-level TYPE
+    // (struct/enum/interface) shadowed by a member makes the type name resolve to the member -> "Name has to
+    // refer to a user-defined type" the moment it is used as a type; a file-level error/event shadowed by a
+    // member of a DIFFERENT kind makes a raise of the file-level's name resolve to the shadowing member (a
+    // type error). Intra-kind duplicates are handled elsewhere (JETH046 immutable, JETH128 error, JETH272
+    // enum/struct + contract-name, the overload resolver), so this only catches cross-kind reuse.
+    const memberKinds = new Map<string, Set<string>>();
+    const fileKinds = new Map<string, Set<string>>();
+    const addTo = (m: Map<string, Set<string>>, nm: string, kind: string): void => {
+      const s = m.get(nm) ?? new Set<string>();
       s.add(kind);
-      idKinds.set(nm, s);
+      m.set(nm, s);
     };
-    for (const nm of this.candidatesByName.keys()) addId(nm, 'function');
-    for (const nm of this.genericsByName.keys()) addId(nm, 'function');
-    for (const nm of this.eventsByName.keys()) addId(nm, 'event');
-    for (const nm of this.errorsByName.keys()) addId(nm, 'error');
-    for (const nm of this.structsByName.keys()) addId(nm, 'type'); // structs + enums share the type namespace
-    for (const nm of this.interfacesByName.keys()) addId(nm, 'type'); // interfaces share the type namespace too
-    for (const v of stateVars) addId(v.name, 'storage');
-    for (const nm of this.constantsByName.keys()) addId(nm, 'storage');
-    for (const nm of this.immutableOrder) addId(nm, 'storage');
-    // W8B: a @modifier shares the CONTRACT-level identifier namespace with @state/@constant/@immutable
+    // MEMBER-scope declarations (contract-scoped identifiers).
+    for (const nm of this.candidatesByName.keys()) addTo(memberKinds, nm, 'function');
+    for (const nm of this.genericsByName.keys()) addTo(memberKinds, nm, 'function');
+    for (const nm of this.eventsByName.keys()) addTo(memberKinds, nm, 'event');
+    for (const nm of this.errorsByName.keys()) addTo(memberKinds, nm, 'error');
+    for (const v of stateVars) addTo(memberKinds, v.name, 'storage');
+    for (const nm of this.constantsByName.keys()) addTo(memberKinds, nm, 'storage');
+    for (const nm of this.immutableOrder) addTo(memberKinds, nm, 'storage');
+    // W8B: a @modifier shares the MEMBER-level identifier namespace with @state/@constant/@immutable
     // (storage), @function, @event and @error - solc rejects a modifier reusing any of those names as
-    // "Identifier already declared" (same contract) or a cross-inheritance clash (a base modifier vs a
-    // derived state/event/error/function, or vice-versa). modifiersByName is the C3-merged winner set
-    // (resolveModifierOverrides ran above), so this covers same-contract, inherited, and diamond shapes.
-    // A modifier-vs-modifier duplicate is JETH046 (collectModifier) and stays there. Modifiers do NOT
-    // collide with a TYPE (a JETH @struct/enum/@interface is FILE-scoped, like a solc file-level type, so
-    // a file-level type never clashes with a contract modifier - solc accepts it); the modifier-vs-type
-    // pair is excluded below so this fix does not widen the pre-existing type-vs-member over-rejection.
-    for (const nm of this.modifiersByName.keys()) addId(nm, 'modifier');
-    // L15: a generic @modifier TEMPLATE shares the same contract-level identifier namespace.
-    for (const nm of this.genericModifiersByName.keys()) addId(nm, 'modifier');
-    for (const [nm, kinds] of idKinds) {
+    // "Identifier already declared" (same contract) or a cross-inheritance clash. modifiersByName is the
+    // C3-merged winner set (resolveModifierOverrides ran above), so this covers same-contract, inherited,
+    // and diamond shapes. A modifier-vs-modifier duplicate is JETH046 (collectModifier) and stays there. A
+    // modifier does NOT collide with a file-scoped TYPE - they are in different scopes (below).
+    for (const nm of this.modifiersByName.keys()) addTo(memberKinds, nm, 'modifier');
+    // L15: a generic @modifier TEMPLATE shares the same member-level identifier namespace.
+    for (const nm of this.genericModifiersByName.keys()) addTo(memberKinds, nm, 'modifier');
+    // FILE-scope declarations (file-level types + file-level errors/events). A same-name pair here IS a
+    // clash (e.g. a file-level struct + a file-level error), matching solc's file-scope "already declared".
+    for (const nm of this.structsByName.keys()) addTo(fileKinds, nm, 'type'); // structs + enums share the type namespace
+    for (const nm of this.interfacesByName.keys()) addTo(fileKinds, nm, 'type'); // interfaces share the type namespace too
+    for (const nm of this.fileLevelErrorsByName.keys()) addTo(fileKinds, nm, 'error');
+    for (const nm of this.fileLevelEventsByName.keys()) addTo(fileKinds, nm, 'event');
+    for (const [nm, kinds] of memberKinds) {
       // P1-4: a validated getter var override (uint256 public override x;) legitimately reuses the name of
       // the base @virtual function it implements (storage + function share `x`). solc treats the getter AS
       // that function, so the storage/function name clash is expected - suppress JETH133 for exactly that
       // name (the clash is only the getter-var storage vs the base function; any OTHER collision still fires).
       if (nm && this.validGetterOverrides.has(nm) && kinds.size === 2 && kinds.has('storage') && kinds.has('function')) {
-        continue;
-      }
-      // W8B: a `{modifier, type}`-ONLY pair does not clash (the type is FILE-scoped in JETH, and solc
-      // does not collide a file-level type with a contract modifier). Any OTHER kind alongside `modifier`
-      // (storage/function/event/error) IS a real contract-scope clash and still fires below.
-      if (kinds.size === 2 && kinds.has('modifier') && kinds.has('type')) {
         continue;
       }
       if (kinds.size > 1) {
@@ -3540,6 +3552,39 @@ export class Analyzer {
           `identifier '${nm}' is already declared (a ${[...kinds].join(' and a ')} share the name; solc reuses a name only among overloaded functions or events)`,
         );
       }
+    }
+    for (const [nm, kinds] of fileKinds) {
+      if (kinds.size > 1) {
+        this.diags.error(
+          cls,
+          'JETH133',
+          `identifier '${nm}' is already declared (a ${[...kinds].join(' and a ')} share the name; solc reuses a name only among overloaded functions or events)`,
+        );
+      }
+    }
+    // CROSS-SCOPE-NAME (correct scope): a FILE-level declaration and a same-named CONTRACT MEMBER coexist
+    // in solc ONLY for a matching error/error or event/event pair - the member shadows the file-level and,
+    // being the same kind, its signature is enforced at every raise (resolution never silently falls to the
+    // shadowed file-level overload, so no over-acceptance). Any OTHER file-vs-member same-name pair is a real
+    // clash, because solc's shadow makes the file-level unusable inside the contract: a file-level TYPE
+    // (struct/enum/interface) shadowed by a member is "Name has to refer to a user-defined type" at the first
+    // type use (the OA guard - base 99a8b59 already rejects it), and a file-level error/event shadowed by a
+    // member of a DIFFERENT kind resolves a raise of its name to the shadowing member (a type error).
+    // The ONE base exclusion kept: a file-level type + a contract MODIFIER of the same name do not clash (a
+    // modifier name is never used in a type position; solc and the base both accept it). Only the clean
+    // 1-vs-1 cross-scope case is inspected here; a within-scope multi-kind clash already fired JETH133 above.
+    for (const [nm, mk] of memberKinds) {
+      const fk = fileKinds.get(nm);
+      if (!fk || mk.size !== 1 || fk.size !== 1) continue;
+      const bothError = mk.has('error') && fk.has('error');
+      const bothEvent = mk.has('event') && fk.has('event');
+      const modifierType = mk.has('modifier') && fk.has('type');
+      if (bothError || bothEvent || modifierType) continue;
+      this.diags.error(
+        cls,
+        'JETH133',
+        `identifier '${nm}' is already declared (a file-level ${[...fk].join('/')} and a contract-member ${[...mk].join('/')} share the name; solc's member shadow leaves the file-level unusable inside the contract - only a matching error/error or event/event pair may coexist)`,
+      );
     }
     // Assign each function a UNIQUE key: the bare name when that name is unique, else `name__ovN`
     // (decl order). This keys the effects map / Yul `userfn_` name / call-graph identity so two
@@ -7081,7 +7126,7 @@ export class Analyzer {
 
   // ---- @error / @event declarations ----------------------------------------
 
-  private collectErrorDecl(member: ts.MethodDeclaration, libScope?: string): void {
+  private collectErrorDecl(member: ts.MethodDeclaration, libScope?: string, fileLevel = false): void {
     if (!ts.isIdentifier(member.name)) {
       this.diags.error(member, 'JETH049', 'error name must be a plain identifier');
       return;
@@ -7168,7 +7213,12 @@ export class Analyzer {
     // `revert(Bad(a))` inside the library and `revert(L.Bad(a))` from a contract both revert byte-identically.
     const libErrors = libScope !== undefined ? (this.libraryErrorsByName.get(libScope) ?? new Map<string, ErrorDecl>()) : undefined;
     if (libScope !== undefined) this.libraryErrorsByName.set(libScope, libErrors!);
-    if (libErrors ? libErrors.has(name) : this.errorsByName.has(name)) {
+    // CROSS-SCOPE-NAME: the duplicate check is per SCOPE. A member error dups only another MEMBER error; a
+    // file-level error dups only another FILE-LEVEL error; a library error dups only its own library's. A
+    // file-level `X` and a contract-member `X` sit in DIFFERENT maps, so they coexist (solc scoping - the
+    // member shadows the file-level inside the contract), instead of the old global-table JETH128 collision.
+    const scopeMap = libErrors ?? (fileLevel ? this.fileLevelErrorsByName : this.errorsByName);
+    if (scopeMap.has(name)) {
       this.diags.error(member, 'JETH128', `duplicate @error declaration '${name}'`);
       return;
     }
@@ -7178,12 +7228,8 @@ export class Analyzer {
     );
     const selector = functionSelector(signature);
     const decl: ErrorDecl = { name, params, signature, selector };
-    if (libErrors) {
-      libErrors.set(name, decl);
-    } else {
-      this.errorsByName.set(name, decl);
-      this.errors.push(decl);
-    }
+    scopeMap.set(name, decl);
+    if (!libErrors) this.errors.push(decl);
   }
 
   private collectEvent(member: ts.MethodDeclaration, libScope?: string, fileLevel = false): void {
@@ -7328,19 +7374,19 @@ export class Analyzer {
     // contract's global events/ABI are untouched.
     const libEvents = libScope !== undefined ? (this.libraryEventsByName.get(libScope) ?? new Map<string, EventIR[]>()) : undefined;
     if (libScope !== undefined) this.libraryEventsByName.set(libScope, libEvents!);
-    const overloads = libEvents ? (libEvents.get(name) ?? []) : (this.eventsByName.get(name) ?? []);
+    // CROSS-SCOPE-NAME: overload/duplicate resolution is per SCOPE (member / file-level / library). A member
+    // event and a same-named file-level event live in DIFFERENT maps, so they coexist (member shadows the
+    // file-level inside the contract) - even at the SAME signature, which solc accepts (witnessed).
+    const scopeEvents = libEvents ?? (fileLevel ? this.fileLevelEventsByName : this.eventsByName);
+    const overloads = scopeEvents.get(name) ?? [];
     if (overloads.some((e) => e.signature === signature)) {
       this.diags.error(member, 'JETH144', `duplicate @event declaration '${signature}'`);
       return;
     }
     const topic0 = eventTopic0(signature);
     const ev: EventIR = { name, params, signature, topic0, anonymous, fileLevel: fileLevel || undefined };
-    if (libEvents) {
-      libEvents.set(name, [...overloads, ev]);
-    } else {
-      this.eventsByName.set(name, [...overloads, ev]);
-      this.events.push(ev);
-    }
+    scopeEvents.set(name, [...overloads, ev]);
+    if (!libEvents) this.events.push(ev);
   }
 
   /** Native error/event field declarations. Returns true when the field IS an `error<{...}>` /
@@ -7429,7 +7475,7 @@ export class Analyzer {
       f.createMethodDeclaration([kindDec, ...anonDec], undefined, nameNode, undefined, undefined, params, undefined, undefined),
       anchor,
     );
-    if (kind === 'error') this.collectErrorDecl(synthDecl, libScope);
+    if (kind === 'error') this.collectErrorDecl(synthDecl, libScope, fileLevel);
     else this.collectEvent(synthDecl, libScope, fileLevel);
   }
 
@@ -12489,6 +12535,17 @@ export class Analyzer {
     return { args: paramNameSets[chosen]!.map((n2) => entries.get(n2)!), chosen };
   }
 
+  /** A `this.X` raise/emit of a name that is ONLY a FILE-LEVEL error/event (no contract member of that
+   *  name): a file-level declaration is not a contract member, so `this.X` is wrong - raise it bare. */
+  private rejectFileLevelThisRaise(node: ts.Node, name: string, kind: 'error' | 'event'): null {
+    this.diags.error(
+      node,
+      'JETH353',
+      `'${name}' is a file-level ${kind}; raise it bare and positionally: ${kind === 'error' ? `revert(${name}(...))` : `emit(${name}(...))`}`,
+    );
+    return null;
+  }
+
   /** Native raise/emit sugar: `this.X({ name: v, ... })` (or positional `this.X(a, b)`) where X is a
    *  declared custom error / event (typically a field declaration). Desugars to the bare-name constructor
    *  call the existing checkers consume; NAMED arguments are reordered to the DECLARED parameter order
@@ -12500,24 +12557,24 @@ export class Analyzer {
     if (node.expression.expression.kind !== ts.SyntaxKind.ThisKeyword) return undefined;
     if (!ts.isIdentifier(node.expression.name)) return undefined;
     const name = node.expression.name.text;
-    // a FILE-LEVEL error/event is not a contract member: `this.X` is the member spelling; raise it bare.
-    if (this.fileLevelErrorEvents.has(name)) {
-      this.diags.error(
-        node.expression,
-        'JETH353',
-        `'${name}' is a file-level ${kind}; raise it bare and positionally: ${kind === 'error' ? `revert(${name}(...))` : `emit(${name}(...))`}`,
-      );
-      return null;
-    }
+    // CROSS-SCOPE-NAME: `this.X` is the CONTRACT-MEMBER spelling, so it resolves to the MEMBER owner even
+    // when a same-named FILE-LEVEL error/event also exists (the member shadows it). Only when there is NO
+    // member owner but a file-level one does `this.X` reject (JETH353: a file-level decl is raised bare).
     let paramNameSets: string[][];
     let evOverloads: EventIR[] | undefined;
     if (kind === 'error') {
-      const d = this.resolveErrorDeclInScope(name);
-      if (!d) return undefined;
+      const d = this.errorsByName.get(name);
+      if (!d) {
+        if (this.fileLevelErrorsByName.has(name)) return this.rejectFileLevelThisRaise(node.expression, name, kind);
+        return undefined;
+      }
       paramNameSets = [d.params.map((p) => p.name)];
     } else {
-      const evs = this.resolveEventOverloadsInScope(name);
-      if (!evs || evs.length === 0) return undefined;
+      const evs = this.eventsByName.get(name);
+      if (!evs || evs.length === 0) {
+        if (this.fileLevelEventsByName.has(name)) return this.rejectFileLevelThisRaise(node.expression, name, kind);
+        return undefined;
+      }
       evOverloads = evs;
       paramNameSets = evs.map((e) => e.params.map((p) => p.name));
     }
@@ -12540,18 +12597,19 @@ export class Analyzer {
     return Sn(f.createCallExpression(Sn(f.createIdentifier(name)), undefined, [...args]));
   }
 
-  /** LIB-MEMBER-ERROR: resolve a bare error name in the CURRENT scope. Inside a library fn, its own
-   *  errors first, then FILE-LEVEL errors (globally visible) - never the using-contract's (solc scopes a
-   *  library's errors to the library). Inside a contract fn (currentLibrary undefined), the global table
-   *  unchanged (contract member + file-level errors). */
+  /** LIB-MEMBER-ERROR / CROSS-SCOPE-NAME: resolve a bare error name in the CURRENT scope. Inside a library
+   *  fn, its own errors first, then FILE-LEVEL errors (globally visible) - never the using-contract's (solc
+   *  scopes a library's errors to the library). Inside a contract fn (currentLibrary undefined), a
+   *  CONTRACT-MEMBER error SHADOWS a same-named file-level error (solc's file-vs-contract scoping); a bare
+   *  name with no member owner resolves to the file-level error. */
   private resolveErrorDeclInScope(name: string): ErrorDecl | undefined {
     if (this.currentLibrary) {
       return (
         this.libraryErrorsByName.get(this.currentLibrary)?.get(name) ??
-        (this.fileLevelErrorEvents.has(name) ? this.errorsByName.get(name) : undefined)
+        this.fileLevelErrorsByName.get(name)
       );
     }
-    return this.errorsByName.get(name);
+    return this.errorsByName.get(name) ?? this.fileLevelErrorsByName.get(name);
   }
 
   private checkRevertReason(node: ts.Expression): RevertReason | undefined {
@@ -12564,16 +12622,21 @@ export class Analyzer {
     if (thisErr) return this.checkErrorConstructor(thisErr);
     // LIB-NAMEDARG: a NAMED-argument raise of a BARE error `revert(Bad({ ... }))` inside a library body,
     // where Bad is the current library's OWN error OR a FILE-LEVEL error (FILE-LEVEL-NAMEDARG-IN-LIB).
-    // Reorder the single object literal to the declaration's param order and reuse the shared positional
-    // error-arg check (byte-identical to the positional twin). resolveErrorDeclInScope, gated on being
-    // inside a library, returns the library-own error first then the file-level fallback (never the
-    // using-contract's); a bare named raise in a CONTRACT body still falls through unchanged.
+    // C1-CONTRACT-FILELEVEL-NAMEDARG extends the SAME reorder to a FILE-LEVEL error raised BARE with named
+    // args from a CONTRACT body `revert(Bad({ ... }))` (currentLibrary undefined). Reorder the single object
+    // literal to the declaration's param order and reuse the shared positional error-arg check (byte-identical
+    // to the positional twin `revert(Bad(a))`). resolveErrorDeclInScope, gated on being inside a library,
+    // returns the library-own error first then the file-level fallback (never the using-contract's); in a
+    // contract body it returns the same decl the positional path resolves. A bare-name error that is neither
+    // library-scoped nor file-level (a plain contract-member error) still falls through unchanged. NOTE: the
+    // `throw Bad(...)` form is unsupported for a bare/file-level error (JETH025, both named and positional),
+    // so this lift targets only the `revert(...)` / `require(..., ...)` reason path.
     if (
       ts.isCallExpression(node) &&
       ts.isIdentifier(node.expression) &&
       node.arguments.length === 1 &&
       ts.isObjectLiteralExpression(node.arguments[0]!) &&
-      this.currentLibrary !== undefined
+      (this.currentLibrary !== undefined || this.fileLevelErrorEvents.has(node.expression.text))
     ) {
       const decl = this.resolveErrorDeclInScope(node.expression.text);
       if (decl) {
@@ -14036,20 +14099,21 @@ export class Analyzer {
 
   // ---- events --------------------------------------------------------------
 
-  /** LIB-MEMBER-EVENT: resolve an event name's overloads in the CURRENT scope. Inside a library fn, its
-   *  own events first, then FILE-LEVEL events - never the using-contract's (solc scopes a library's events
-   *  to the library). Inside a contract fn, the global table unchanged. */
+  /** LIB-MEMBER-EVENT / CROSS-SCOPE-NAME: resolve an event name's overloads in the CURRENT scope. Inside a
+   *  library fn, its own events first, then FILE-LEVEL events - never the using-contract's (solc scopes a
+   *  library's events to the library). Inside a contract fn, a CONTRACT-MEMBER event SHADOWS a same-named
+   *  file-level event ENTIRELY by name (solc: the file-level overloads are invisible once a member exists),
+   *  so member overloads are returned alone; a bare name with no member owner resolves to the file-level. */
   private resolveEventOverloadsInScope(name: string): EventIR[] | undefined {
     if (this.currentLibrary) {
       const own = this.libraryEventsByName.get(this.currentLibrary)?.get(name);
       if (own && own.length) return own;
-      // the file-level fallback must return ONLY the file-level overloads: eventsByName mixes file-level
-      // and same-named CONTRACT overloads (different signatures coexist, no dedup across scopes), and a
-      // library fn must NOT see the using-contract's events (the per-library scope invariant).
-      const global = this.eventsByName.get(name)?.filter((e) => e.fileLevel);
-      return global && global.length ? global : undefined;
+      const fl = this.fileLevelEventsByName.get(name);
+      return fl && fl.length ? fl : undefined;
     }
-    return this.eventsByName.get(name);
+    const member = this.eventsByName.get(name);
+    if (member && member.length) return member;
+    return this.fileLevelEventsByName.get(name);
   }
 
   private checkEmit(call: ts.CallExpression, out: Stmt[]): void {
@@ -14098,16 +14162,19 @@ export class Analyzer {
     // LIB-NAMEDARG: a NAMED-argument raise of an event reorderable inside a library body - `emit(L.E({ ... }))`
     // (qualified, rebuilt to a bare-name call above), `emit(E({ ... }))` where E is the owning library's OWN
     // event, or `emit(E({ ... }))` where E is a FILE-LEVEL event raised from a library fn
-    // (FILE-LEVEL-NAMEDARG-IN-LIB). Reorder the single object literal to the declaration's param order, then
-    // run the shared positional overload/emit logic on the reordered arg nodes (byte-identical to the
-    // positional twin). A named raise in a CONTRACT body is left untouched (its own JETH148 path / this.X
-    // desugar) - only a library body reorders a bare file-level event.
+    // (FILE-LEVEL-NAMEDARG-IN-LIB). C1-CONTRACT-FILELEVEL-NAMEDARG additionally reorders a FILE-LEVEL event
+    // raised BARE with named args from a CONTRACT body `emit(E({ ... }))` (currentLibrary undefined). Reorder
+    // the single object literal to the declaration's param order, then run the shared positional overload/emit
+    // logic on the reordered arg nodes (byte-identical to the positional twin `emit(E(a))`). A member-event
+    // named raise `emit(this.E({ ... }))` is desugared earlier (desugarThisRaise) and a bare contract-member
+    // event (not file-level) is left untouched at its JETH227 path - only a library-scoped or file-level bare
+    // event reorders here.
     let evArgs: readonly ts.Expression[] = inner.arguments;
-    const libScopedEvent =
+    const reorderNamedRaise =
       libEventCandidates !== undefined ||
-      (this.currentLibrary !== undefined &&
-        (this.libraryEventsByName.get(this.currentLibrary)?.has(evName) === true || this.fileLevelErrorEvents.has(evName)));
-    if (libScopedEvent && evArgs.length === 1 && ts.isObjectLiteralExpression(evArgs[0]!)) {
+      this.fileLevelErrorEvents.has(evName) ||
+      (this.currentLibrary !== undefined && this.libraryEventsByName.get(this.currentLibrary)?.has(evName) === true);
+    if (reorderNamedRaise && evArgs.length === 1 && ts.isObjectLiteralExpression(evArgs[0]!)) {
       const r = this.reorderNamedRaiseArgs(
         evArgs[0]!,
         candidates.map((e) => e.params.map((p) => p.name)),

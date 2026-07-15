@@ -224,8 +224,9 @@ describe('LIB-NAMEDARG: a named-argument raise of a library-scoped event/error',
 // (`type X = event<{...}>` / `error<{...}>`) raised BARE inside a LIBRARY body now reorders the keys to the
 // declaration's param order and lowers through the positional path - byte-identical to its positional twin,
 // exactly like the LIBRARY-scoped (member) named raise above. Before this lift these over-rejected (JETH148
-// for events, JETH130 for errors) while solc accepts them. The reorder is scoped to a LIBRARY body: a bare
-// file-level named raise in a CONTRACT body stays a deliberate reject (NAMED-RAISE-EXCLUSIVITY), and the
+// for events, JETH130 for errors) while solc accepts them. C1-CONTRACT-FILELEVEL-NAMEDARG (below) extends the
+// SAME reorder to the CONTRACT-body owner (a file-level event/error raised bare with named args from a
+// contract method), so the exclusivity that once made a contract-body raise a deliberate reject is gone; the
 // positional file-level raise (already byte-identical) is untouched. Scrambled key orders + distinct values
 // make the reorder load-bearing: a no-op reorder would log/revert the WRONG bytes and diverge from solc.
 describe('FILE-LEVEL-NAMEDARG-IN-LIB: a bare named-argument raise of a file-level event/error inside a library body', () => {
@@ -313,11 +314,7 @@ describe('FILE-LEVEL-NAMEDARG-IN-LIB: a bare named-argument raise of a file-leve
     expect(codes(`type Bad = error<{ a: u256; b: address }>;\nstatic class L { chk(x: u256, y: address): void { revert(Bad({ a: x, a: x, b: y })); } }\nclass C { f(x: u256, y: address): External<void> { L.chk(x, y); } }`)).toContain('JETH130');
   });
 
-  it('GUARD: a file-level named raise in a CONTRACT body stays a deliberate reject (JETH148 event / JETH130 error); positional file-level-in-lib is untouched', async () => {
-    // NAMED-RAISE-EXCLUSIVITY in a contract body is unchanged - only a LIBRARY body reorders a bare file-level raise
-    expect(codes(`type Ev = event<{ a: u256; b: address }>;\nclass C { f(x: u256, y: address): External<void> { emit(Ev({ a: x, b: y })); } }`)).toContain('JETH148');
-    expect(codes(`type Bad = error<{ a: u256; b: address }>;\nclass C { f(x: u256, y: address): External<void> { revert(Bad({ a: x, b: y })); } }`)).toContain('JETH130');
-    // the positional file-level raise inside a lib is unchanged (already byte-identical)
+  it('GUARD: the positional file-level raise inside a lib is untouched (already byte-identical)', async () => {
     await sameRun(
       `type Ev = event<{ a: u256; b: address }>;\nstatic class L { lg(x: u256, y: address): void { emit(Ev(x, y)); } }\nclass C { f(x: u256, y: address): External<void> { L.lg(x, y); } }`,
       `event Ev(uint256 a, address b);\nlibrary L { function lg(uint256 x, address y) internal { emit Ev(x, y); } }\ncontract C { function f(uint256 x, address y) external { L.lg(x, y); } }`,
@@ -333,6 +330,140 @@ describe('FILE-LEVEL-NAMEDARG-IN-LIB: a bare named-argument raise of a file-leve
       `type P = { a: u256; b: u256 };\ntype Ev = event<{ s: P }>;\nstatic class L { lg(v: P): void { emit(Ev({ s: v })); } }\nclass C { f(): External<void> { let v: P = { a: 3n, b: 4n }; L.lg(v); } }`,
       `struct P { uint256 a; uint256 b; }\nevent Ev(P s);\nlibrary L { function lg(P memory v) internal { emit Ev({s: v}); } }\ncontract C { function f() external { P memory v = P(3, 4); L.lg(v); } }`,
       [['f()']],
+    );
+  });
+});
+
+// C1-CONTRACT-FILELEVEL-NAMEDARG: a NAMED-argument raise of a FILE-LEVEL event/error raised BARE from a
+// CONTRACT method body - `emit(Ev({ ... }))` / `revert(Bad({ ... }))` - reorders the keys to the declaration's
+// param order and lowers through the positional path, byte-identical to its positional twin (`emit(Ev(a))` /
+// `revert(Bad(a))`). Before this lift these over-rejected (JETH227 / JETH148 for events depending on arity,
+// JETH130 / JETH227 for errors) while solc accepts them; the reorder machinery already covered the
+// library-body owner (FILE-LEVEL-NAMEDARG-IN-LIB above) - this extends the identical reorder to the
+// contract-body owner. Scrambled key orders + distinct field values make the reorder load-bearing.
+describe('C1-CONTRACT-FILELEVEL-NAMEDARG: a bare named-argument raise of a file-level event/error from a contract body', () => {
+  it('EVENT: bare emit(Ev({...})) in a contract fn, byte-identical to solc + the positional twin (scrambled keys; non-indexed / indexed / all-indexed / dynamic string)', async () => {
+    // 2-field, non-indexed, keys scrambled { b, a }
+    await sameRun(
+      `type Ev = event<{ a: u256; b: address }>;\nclass C { f(x: u256, y: address): External<void> { emit(Ev({ b: y, a: x })); } }`,
+      `event Ev(uint256 a, address b);\ncontract C { function f(uint256 x, address y) external { emit Ev({b: y, a: x}); } }`,
+      [['f(uint256,address)', AB]],
+    );
+    // one INDEXED field first (topic ordering is load-bearing), keys scrambled
+    await sameRun(
+      `type Ev = event<{ a: indexed<u256>; b: address }>;\nclass C { f(x: u256, y: address): External<void> { emit(Ev({ b: y, a: x })); } }`,
+      `event Ev(uint256 indexed a, address b);\ncontract C { function f(uint256 x, address y) external { emit Ev({b: y, a: x}); } }`,
+      [['f(uint256,address)', AB]],
+    );
+    // ALL-indexed, 3 fields, keys scrambled { c, a, b } - the whole topic order rides on the reorder
+    await sameRun(
+      `type Ev = event<{ a: indexed<u256>; b: indexed<address>; c: indexed<bool> }>;\nclass C { f(x: u256, y: address, z: bool): External<void> { emit(Ev({ c: z, a: x, b: y })); } }`,
+      `event Ev(uint256 indexed a, address indexed b, bool indexed c);\ncontract C { function f(uint256 x, address y, bool z) external { emit Ev({c: z, a: x, b: y}); } }`,
+      [['f(uint256,address,bool)', W(0x2a) + W(0xaan) + W(1)]],
+    );
+    // a DYNAMIC-STRING field (non-indexed), keys scrambled { b, a }
+    await sameRun(
+      `type Ev = event<{ a: u256; b: string }>;\nclass C { f(x: u256): External<void> { emit(Ev({ b: "hello world", a: x })); } }`,
+      `event Ev(uint256 a, string b);\ncontract C { function f(uint256 x) external { emit Ev({b: "hello world", a: x}); } }`,
+      [['f(uint256)', W(3)]],
+    );
+  });
+
+  it('ERROR: bare revert(Bad({...})) in a contract fn, byte-identical revert data to solc + the positional twin (scrambled keys; 2-field / 3-field / dynamic string)', async () => {
+    // 2-field, keys scrambled { b, a }
+    await sameRun(
+      `type Bad = error<{ a: u256; b: address }>;\nclass C { f(x: u256, y: address): External<void> { revert(Bad({ b: y, a: x })); } }`,
+      `error Bad(uint256 a, address b);\ncontract C { function f(uint256 x, address y) external pure { revert Bad({b: y, a: x}); } }`,
+      [['f(uint256,address)', AB]],
+    );
+    // 3-field, keys scrambled { c, a, b }
+    await sameRun(
+      `type Bad = error<{ a: u256; b: address; c: bool }>;\nclass C { f(x: u256, y: address, z: bool): External<void> { revert(Bad({ c: z, a: x, b: y })); } }`,
+      `error Bad(uint256 a, address b, bool c);\ncontract C { function f(uint256 x, address y, bool z) external pure { revert Bad({c: z, a: x, b: y}); } }`,
+      [['f(uint256,address,bool)', W(0x0b) + W(0xbbn) + W(1)]],
+    );
+    // a DYNAMIC-STRING field, keys scrambled { b, a }
+    await sameRun(
+      `type Bad = error<{ a: u256; b: string }>;\nclass C { f(x: u256): External<void> { revert(Bad({ b: "boom", a: x })); } }`,
+      `error Bad(uint256 a, string b);\ncontract C { function f(uint256 x) external pure { revert Bad({b: "boom", a: x}); } }`,
+      [['f(uint256)', W(99)]],
+    );
+  });
+
+  it('require(cond, Bad({...})) with a file-level error from a contract body reorders + is byte-identical to solc', async () => {
+    await sameRun(
+      `type Bad = error<{ a: u256; b: address }>;\nclass C { f(x: u256, y: address): External<void> { require(false, Bad({ b: y, a: x })); } }`,
+      `error Bad(uint256 a, address b);\ncontract C { function f(uint256 x, address y) external pure { require(false, Bad({b: y, a: x})); } }`,
+      [['f(uint256,address)', AB]],
+    );
+  });
+
+  it('NON-VACUITY: a scrambled-key contract-body file-level named raise emits log data / revert data in DECLARATION order (checked independently of solc)', async () => {
+    const h = await Harness.create();
+    // event: `{ b: y, a: x }` must log a (0x07) then b (0xaa)
+    const ae = await h.deploy(
+      compile(
+        `type Ev = event<{ a: u256; b: address }>;\nclass C { f(x: u256, y: address): External<void> { emit(Ev({ b: y, a: x })); } }`,
+        { fileName: 'C.jeth' },
+      ).creationBytecode,
+    );
+    const re = await h.call(ae, sel('f(uint256,address)') + AB);
+    expect(re.success).toBe(true);
+    expect(re.logs.length).toBe(1);
+    expect(re.logs[0]!.topics.length).toBe(1); // topic0 only (no indexed fields)
+    expect(re.logs[0]!.data).toBe('0x' + W(7) + W(0xaan)); // declaration order despite scrambled keys
+    // error: `{ b: y, a: x }` must revert with Bad selector then a (0x07) then b (0xaa)
+    const ar = await h.deploy(
+      compile(
+        `type Bad = error<{ a: u256; b: address }>;\nclass C { f(x: u256, y: address): External<void> { revert(Bad({ b: y, a: x })); } }`,
+        { fileName: 'C.jeth' },
+      ).creationBytecode,
+    );
+    const rr = await h.call(ar, sel('f(uint256,address)') + AB);
+    expect(rr.success).toBe(false);
+    const badSel = functionSelector('Bad(uint256,address)');
+    expect(rr.returnHex).toBe('0x' + badSel + W(7) + W(0xaan)); // declaration order despite scrambled keys
+  });
+
+  it('REJECTS at solc parity: an unknown key, wrong arity, and a duplicate key (event + error) in a contract body', () => {
+    // reorderNamedRaiseArgs emits JETH130 for a key-set / duplicate mismatch on both the event and error path
+    expect(codes(`type Ev = event<{ a: u256; b: address }>;\nclass C { f(x: u256, y: address): External<void> { emit(Ev({ a: x, z: y })); } }`)).toContain('JETH130');
+    expect(codes(`type Ev = event<{ a: u256; b: address }>;\nclass C { f(x: u256): External<void> { emit(Ev({ a: x })); } }`)).toContain('JETH130');
+    expect(codes(`type Ev = event<{ a: u256; b: address }>;\nclass C { f(x: u256, y: address): External<void> { emit(Ev({ a: x, a: x, b: y })); } }`)).toContain('JETH130');
+    expect(codes(`type Bad = error<{ a: u256; b: address }>;\nclass C { f(x: u256, y: address): External<void> { revert(Bad({ a: x, zzz: y })); } }`)).toContain('JETH130');
+    expect(codes(`type Bad = error<{ a: u256; b: address }>;\nclass C { f(x: u256): External<void> { revert(Bad({ a: x })); } }`)).toContain('JETH130');
+    expect(codes(`type Bad = error<{ a: u256; b: address }>;\nclass C { f(x: u256, y: address): External<void> { revert(Bad({ a: x, a: x, b: y })); } }`)).toContain('JETH130');
+  });
+
+  it('GUARD: the positional file-level raise from a contract body is untouched (already byte-identical); `throw Bad({...})` stays a deliberate reject (JETH025)', async () => {
+    await sameRun(
+      `type Ev = event<{ a: u256; b: address }>;\nclass C { f(x: u256, y: address): External<void> { emit(Ev(x, y)); } }`,
+      `event Ev(uint256 a, address b);\ncontract C { function f(uint256 x, address y) external { emit Ev(x, y); } }`,
+      [['f(uint256,address)', AB]],
+    );
+    await sameRun(
+      `type Bad = error<{ a: u256; b: address }>;\nclass C { f(x: u256, y: address): External<void> { revert(Bad(x, y)); } }`,
+      `error Bad(uint256 a, address b);\ncontract C { function f(uint256 x, address y) external pure { revert Bad(x, y); } }`,
+      [['f(uint256,address)', AB]],
+    );
+    // the `throw Bad(...)` form is unsupported for a bare/file-level error (both named and positional) - the
+    // reorder lift targets only the `revert(...)` / `require(..., ...)` reason path, so this stays JETH025.
+    expect(codes(`type Bad = error<{ a: u256; b: address }>;\nclass C { f(x: u256, y: address): External<void> { throw Bad({ b: y, a: x }); } }`)).toContain('JETH025');
+    expect(codes(`type Bad = error<{ a: u256; b: address }>;\nclass C { f(x: u256, y: address): External<void> { throw Bad(x, y); } }`)).toContain('JETH025');
+  });
+
+  it('GUARD: a bare contract-MEMBER event/error named raise is NOT reordered here (member events reorder only via the this.X desugar)', async () => {
+    // a member-event named raise goes through the this.X desugar; the bare form emit(E({...})) is a separate
+    // over-rejection out of this item's scope and stays untouched (E is not a file-level name).
+    await sameRun(
+      `class C { E: event<{ a: u256; b: address }>; f(x: u256, y: address): External<void> { emit(this.E({ b: y, a: x })); } }`,
+      `contract C { event E(uint256 a, address b); function f(uint256 x, address y) external { emit E({b: y, a: x}); } }`,
+      [['f(uint256,address)', AB]],
+    );
+    await sameRun(
+      `class C { Bad: error<{ a: u256; b: address }>; f(x: u256, y: address): External<void> { revert(this.Bad({ b: y, a: x })); } }`,
+      `contract C { error Bad(uint256 a, address b); function f(uint256 x, address y) external pure { revert Bad({b: y, a: x}); } }`,
+      [['f(uint256,address)', AB]],
     );
   });
 });
