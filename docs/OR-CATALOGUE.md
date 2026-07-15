@@ -1211,3 +1211,31 @@ Implemented as `Analyzer.deliberateRejectDiag`, called at the tail of `checkExpr
 catch-all - so every real resolver (interface/contract dispatch, low-level `.call`, attached library, the
 array-mutator STATEMENT path) runs first and accepted programs cannot be reached. Regression net:
 `test/deliberate-reject-diagnostics.test.ts` (8 tests, including runtime byte-identity of the guards vs solc 0.8.35).
+
+### 2026-07-15 Group-C resolution (C1/C2 lifted, C3 retired, MEMBER-SHADOWS OA closed)
+
+The three "Group C" catalogue rows were re-probed live and resolved (89c8bfa, suite 480/4467):
+- **C1 LIFTED** (JETH227/130): a NAMED-arg raise of a FILE-LEVEL event/error from a CONTRACT body
+  (`emit(Ev({a:x}))` / `revert(Bad({a:x}))`) reorders to declaration order, byte-identical to the positional
+  twin + solc (extends the named-arg reorder machinery to the contract-body owner). Scrambled-key non-vacuity,
+  decoded topic0/selector.
+- **C2 LIFTED** (JETH128): a file-level EVENT or ERROR may coexist with a same-named contract-MEMBER
+  event/error; the member SHADOWS the file-level inside the contract (`this.Bad`/bare `Bad` -> member; a raise
+  fitting the file-level sig but not the member REJECTS at solc parity). Event/error only.
+- **C3 RETIRED - was never an OR**: "same-key-set overloaded library event -> JETH434" was miscatalogued. A
+  genuinely-ambiguous overloaded event emit is a BOTH-REJECT (solc rejects "not unique" too - verified live
+  across positional literal/library/named-arg cases); JETH434 is a sound ambiguity guard, not an over-rejection.
+- **MEMBER-SHADOWS-FILE-EVENT OA CLOSED**: the pre-existing over-acceptance (a same-named contract member did
+  NOT shadow the file-level event on the positional channel, so a raise matching the file-level sig picked the
+  file-level) is closed on BOTH positional + named channels.
+
+GUARD (a broken isolated attempt was caught by the adversarial verify before landing): a file-level
+STRUCT/ENUM/INTERFACE sharing a name with a contract member STAYS rejected (JETH133) - solc has one namespace
+for types (the member shadows the type name, making it unusable); only event/error cross-scope-coexist. The
+first C2 attempt over-broadened this and introduced a struct/enum over-acceptance (JETH accepts + deploys a
+contract using the shadowed struct as a type; solc rejects) - the merged verify's decoded witness caught it and
+it never reached main.
+
+FOLLOW-UP (in flight): the multi-file analogue - an IMPORTED file-level event/error colliding with a same-named
+contract member - bypasses the member shadow via the V3 per-file alpha-rename (a bare raise routes to the
+imported symbol), a pre-existing OVER-ACCEPTANCE surfaced by the Group-C verify; being fixed separately.
