@@ -178,3 +178,71 @@ describe('CROSS-SCOPE-NAME: file-level error/event vs same-named contract member
     expect(codes(`type Bad = { a: u256 };\ntype Bad = error<{ b: u256 }>;\nclass C { f(): External<void> {} }`)).toContain('JETH133');
   });
 });
+
+// CROSS-SCOPE-NAME (multi-file): the member shadow must also WIN over an IMPORTED file-level error/event.
+// The v3 per-file alpha-rename ($mN$Bad) used to mangle a bare `revert(Bad(...))` / `emit(Bad(...))` to the
+// IMPORTED file-level Bad and route AROUND a same-named contract member (a pre-existing over-acceptance: a
+// raise fitting the imported signature but not the member's was accepted, where solc rejects because the
+// member shadows the import). rewriteModuleScopes now leaves a reference shadowed by a member error/event
+// UNRENAMED, so resolution binds it to the member - matching solc. Each cell decodes the revert selector /
+// event topic0 so a wrong pick (imported Bad(uint256)=a2f43130 vs member Bad(address)=830c4ac2) is decodable.
+describe('CROSS-SCOPE-NAME multi-file: a contract MEMBER error/event shadows a same-named IMPORTED file-level one', () => {
+  const DEP_E = `export type Bad = error<{ a: u256 }>;`;
+  const DEP_V = `export type Bad = event<{ a: u256 }>;`;
+  const mcodes = (src: string, sources: Record<string, string>): string[] => {
+    try { compile(src, { fileName: 'entry.jeth', sources }); return []; } catch (e: any) { return e?.diagnostics?.map((d: any) => d.code) ?? ['THROW']; }
+  };
+  async function raiseMF(entry: string, sources: Record<string, string>, S: string, callSig = 'f()', args = ''): Promise<{ j: any; s: any }> {
+    const h = await Harness.create();
+    const aj = await h.deploy(compile(entry, { fileName: 'entry.jeth', sources }).creationBytecode);
+    const as = await h.deploy(compileSolidity(SPDX + S, 'C').creation);
+    const shape = async (addr: typeof aj) => {
+      const r = await h.call(addr, '0x' + sel(callSig) + args);
+      return { success: r.success, ret: r.returnHex, topic0: r.logs[0]?.topics[0] ?? null };
+    };
+    return { j: await shape(aj), s: await shape(as) };
+  }
+
+  it('OA CLOSED: import Bad(uint256) + member Bad(address); a bare raise fitting the IMPORT but not the member REJECTS (member shadows) - error + event', () => {
+    // The exact over-acceptance: `revert(Bad(1n))` / `emit(Bad(1n))` used to route to the imported file-level
+    // Bad(uint256), ignoring the member Bad(address). solc rejects (member shadows; 1 -> address fails).
+    expect(mcodes(`import { Bad } from "./e.jeth";\nclass C { Bad: error<{ b: address }>; f(): External<void> { revert(Bad(1n)); } }`, { 'e.jeth': DEP_E })).toContain('JETH084');
+    expect(mcodes(`import { Bad } from "./e.jeth";\nclass C { Bad: event<{ b: address }>; f(): External<void> { emit(Bad(1n)); } }`, { 'e.jeth': DEP_V })).toContain('JETH084');
+  });
+
+  it('NON-VACUOUS: the member-bearing raise resolves to the MEMBER selector/topic0 (not the import), byte-identical to solc', async () => {
+    // member Bad(address) with a fitting address arg -> the MEMBER selector/topic0 830c4ac2 wins (decoded from
+    // the revert data / event topic0). A wrong pick to the imported Bad(uint256) a2f43130 would be decodable.
+    const arg = '11'.padStart(64, '0');
+    const err = await raiseMF(
+      `import { Bad } from "./e.jeth";\nclass C { Bad: error<{ b: address }>; f(a: address): External<void> { revert(Bad(a)); } }`, { 'e.jeth': DEP_E },
+      `error Bad(uint256 a);\ncontract C { error Bad(address b); function f(address a) external { revert Bad(a); } }`, 'f(address)', arg,
+    );
+    expect(err.j).toEqual(err.s);
+    expect(err.j.success).toBe(false);
+    expect(err.j.ret.slice(0, 10)).toBe('0x' + sel('Bad(address)').slice(0, 8));
+    expect(err.j.ret.slice(0, 10)).not.toBe('0x' + sel('Bad(uint256)').slice(0, 8)); // NOT the imported overload
+    const evt = await raiseMF(
+      `import { Bad } from "./e.jeth";\nclass C { Bad: event<{ b: address }>; f(a: address): External<void> { emit(Bad(a)); } }`, { 'e.jeth': DEP_V },
+      `event Bad(uint256 a);\ncontract C { event Bad(address b); function f(address a) external { emit Bad(a); } }`, 'f(address)', arg,
+    );
+    expect(evt.j).toEqual(evt.s);
+    expect(evt.j.topic0!.slice(0, 10)).toBe('0x' + sel('Bad(address)').slice(0, 8));
+    expect(evt.j.topic0!.slice(0, 10)).not.toBe('0x' + sel('Bad(uint256)').slice(0, 8));
+  });
+
+  it('CONTROL: import WITHOUT a member still resolves the file-level import, byte-identical to solc (fix did not change it)', async () => {
+    const err = await raiseMF(
+      `import { Bad } from "./e.jeth";\nclass C { f(): External<void> { revert(Bad(7n)); } }`, { 'e.jeth': DEP_E },
+      `error Bad(uint256 a);\ncontract C { function f() external { revert Bad(7); } }`,
+    );
+    expect(err.j).toEqual(err.s);
+    expect(err.j.ret).toBe('0x' + sel('Bad(uint256)') + '0'.repeat(63) + '7'); // the IMPORTED file-level selector
+    const evt = await raiseMF(
+      `import { Bad } from "./e.jeth";\nclass C { f(): External<void> { emit(Bad(8n)); } }`, { 'e.jeth': DEP_V },
+      `event Bad(uint256 a);\ncontract C { function f() external { emit Bad(8); } }`,
+    );
+    expect(evt.j).toEqual(evt.s);
+    expect(evt.j.topic0!.slice(0, 10)).toBe('0x' + sel('Bad(uint256)').slice(0, 8));
+  });
+});

@@ -275,17 +275,45 @@ function rewriteModuleScopes(
       p.parent === sf
     );
   };
-  const rewrite = (n: ts.Node): void => {
+  // CROSS-SCOPE-NAME (multi-file): a contract-MEMBER error/event (`Bad: error<{...}>` / `Bad: event<{...}>`)
+  // SHADOWS a same-named IMPORTED (or file-level) error/event INSIDE that contract - solc resolves a bare
+  // `revert(Bad(...))` / `emit(Bad(...))` / `Bad(...)` to the member, never to the import. The v3 module
+  // rename would otherwise rewrite that bare reference to the imported `$mN$Bad` and route AROUND the member
+  // (a pre-existing over-acceptance: a raise fitting the imported signature but not the member's was
+  // accepted, where solc rejects). So a reference identifier whose name matches a member error/event of its
+  // enclosing class is left UNRENAMED; downstream name resolution (resolveErrorDeclInScope / the emit
+  // resolver) then binds it to the member and enforces the member's signature, matching solc's shadow. The
+  // member-access spelling `this.Bad(...)` is a property name (not a reference identifier), so it is
+  // untouched and already resolved to the member; only the bare-name references need this guard.
+  const memberRaiseNames = (cls: ts.ClassDeclaration): Set<string> => {
+    const s = new Set<string>();
+    for (const m of cls.members) {
+      if (
+        ts.isPropertyDeclaration(m) &&
+        m.name && ts.isIdentifier(m.name) &&
+        m.type && ts.isTypeReferenceNode(m.type) && ts.isIdentifier(m.type.typeName) &&
+        (m.type.typeName.text === 'error' || m.type.typeName.text === 'event')
+      ) {
+        s.add(m.name.text);
+      }
+    }
+    return s;
+  };
+  const rewrite = (n: ts.Node, shadow: Set<string> | undefined): void => {
+    // entering a class, the shadow set becomes that class's member error/event names (JETH classes do not
+    // nest, so a replace is exact); at file level between classes it is `undefined` again.
+    const inner = ts.isClassDeclaration(n) ? memberRaiseNames(n) : shadow;
     if (ts.isIdentifier(n) && (isReferenceIdentifier(n) || isTopLevelDeclName(n))) {
       const file = fileOf(n);
       const to = file ? renamesByFile.get(file)?.get(n.text) : undefined;
-      if (to) {
+      // skip the rename when a member error/event of the enclosing class shadows this bare-name reference.
+      if (to && !(isReferenceIdentifier(n) && inner?.has(n.text))) {
         (n as unknown as { escapedText: ts.__String }).escapedText = ts.escapeLeadingUnderscores(to);
       }
     }
-    ts.forEachChild(n, rewrite);
+    ts.forEachChild(n, (c) => rewrite(c, inner));
   };
-  ts.forEachChild(sf, rewrite);
+  ts.forEachChild(sf, (c) => rewrite(c, undefined));
 }
 
 /** `$m<N>$` and `$p$` identifiers are reserved for the compiler's internal mangles - the v3
