@@ -16977,6 +16977,7 @@ export class Analyzer {
     node: ts.CallExpression,
     name: string,
     n: number,
+    hasTrail = false,
   ): { fn: string; args: Expr[]; types: JethType[] } | undefined {
     // a qualified internal-library call L.f(...) resolves against the library's overload set (the bare
     // name has no contract-level binding); an @external (DELEGATECALL) library tuple return stays a
@@ -17017,7 +17018,7 @@ export class Analyzer {
       this.diags.error(node, 'JETH066', `'${name}' does not return a tuple; cannot destructure`);
       return undefined;
     }
-    if (callee.returnTypes.length !== n) {
+    if (!this.tupleArityMatch(n, hasTrail, callee.returnTypes.length)) {
       this.diags.error(
         node,
         'JETH066',
@@ -17100,11 +17101,25 @@ export class Analyzer {
     return undefined;
   }
 
+  /** TRAILING-HOLE: does an `n`-element binding pattern (`rawN`, with `hasTrail` = ended in a
+   *  trailing comma) bind an `m`-component tuple? An exact match, OR - when the pattern ended in a
+   *  trailing comma and is EXACTLY ONE component short - the slot TS dropped after that comma is the
+   *  final, DISCARDED component, so `let [p, ] = g()` binds an m=2 tuple exactly like solc's
+   *  `(uint p, ) = g()`. A trailing comma when the pattern already matches (`[ , b, ,]` on a 3-tuple)
+   *  stays decorative, matching JS array semantics; more than one short still fails, matching solc's
+   *  exact component-count rule (`(uint p, ) = g3()` rejects). */
+  private tupleArityMatch(rawN: number, hasTrail: boolean, m: number): boolean {
+    return rawN === m || (hasTrail && rawN === m - 1);
+  }
+
   /** `let [a, , c] = <multi-call | [e1, e2, ...]>`: declare a new local per non-skipped element
    *  (type inferred from the source component), skipping omitted slots. Value components only. */
   private checkTupleDecl(decl: ts.VariableDeclaration, out: Stmt[]): void {
     const pat = decl.name as ts.ArrayBindingPattern;
     const n = pat.elements.length;
+    // A TRAILING elided hole (`[p, ]`): TS drops the empty slot after a trailing comma, so `n` is one
+    // short; tupleArityMatch folds it back in against the resolved tuple arity (see its doc-comment).
+    const hasTrail = pat.elements.hasTrailingComma === true;
     if (!decl.initializer) {
       this.diags.error(decl, 'JETH066', 'a tuple destructuring declaration requires an initializer');
       return;
@@ -17129,11 +17144,11 @@ export class Analyzer {
           return;
         }
         const rts = sc.returnTypes;
-        if (rts.length !== n) {
+        if (!this.tupleArityMatch(n, hasTrail, rts.length)) {
           this.diags.error(decl.name, 'JETH356', `this.${fnName}(...) returns ${rts.length} value(s), expected ${n} name(s)`);
           return;
         }
-        this.bindDestructure(pat, n, rts, { kind: 'abiDecode', data: sc.call, types: rts }, out);
+        this.bindDestructure(pat, rts.length, rts, { kind: 'abiDecode', data: sc.call, types: rts }, out);
         return;
       }
     }
@@ -17145,11 +17160,11 @@ export class Analyzer {
     if (libExtTuple === 'handled') return; // recognized @external library call, already diagnosed
     if (libExtTuple) {
       const rts = libExtTuple.returnTypes;
-      if (rts.length !== n) {
+      if (!this.tupleArityMatch(n, hasTrail, rts.length)) {
         this.diags.error(decl.name, 'JETH356', `this @library method returns ${rts.length} value(s), expected ${n} name(s)`);
         return;
       }
-      this.bindDestructure(pat, n, rts, { kind: 'abiDecode', data: libExtTuple.call, types: rts }, out);
+      this.bindDestructure(pat, rts.length, rts, { kind: 'abiDecode', data: libExtTuple.call, types: rts }, out);
       return;
     }
     // Phase 6: `let [a, b] = IFoo(addr).method(args)` where the method has a >=2-component tuple return:
@@ -17168,7 +17183,7 @@ export class Analyzer {
         return;
       }
       const rts = ifaceCall.returnTypes;
-      if (rts.length !== n) {
+      if (!this.tupleArityMatch(n, hasTrail, rts.length)) {
         this.diags.error(
           decl.name,
           'JETH356',
@@ -17176,7 +17191,7 @@ export class Analyzer {
         );
         return;
       }
-      this.bindDestructure(pat, n, rts, { kind: 'abiDecode', data: ifaceCall.call, types: rts }, out);
+      this.bindDestructure(pat, rts.length, rts, { kind: 'abiDecode', data: ifaceCall.call, types: rts }, out);
       return;
     }
     // `let [ok, signer] = tryRecover(...)` / `const [fe, modulus] = pointEvaluation(...)`: destructure-only
@@ -17217,7 +17232,7 @@ export class Analyzer {
     if (callDecode) {
       // `let [a, b] = addr.call({..., decode: [T1, T2]})`: decode the call's bytes result (same binding
       // path as the abi.decode tuple form below - each component lands in its own register / mem image).
-      if (callDecode.types.length !== n) {
+      if (!this.tupleArityMatch(n, hasTrail, callDecode.types.length)) {
         this.diags.error(
           decl.name,
           'JETH066',
@@ -17230,7 +17245,7 @@ export class Analyzer {
     } else if (abiDecodeTuple) {
       // `let [a, b] = abi.decode(data, [T1, T2])`: each component is decoded into its own register
       // (value -> a word, bytes/string/array/struct -> a memory image pointer), bound below.
-      if (abiDecodeTuple.types.length !== n) {
+      if (!this.tupleArityMatch(n, hasTrail, abiDecodeTuple.types.length)) {
         this.diags.error(
           decl.name,
           'JETH066',
@@ -17253,12 +17268,12 @@ export class Analyzer {
       types = tryCall.types;
       source = tryCall.source;
     } else if (callName) {
-      const r = this.resolveTupleCall(decl.initializer as ts.CallExpression, callName, n);
+      const r = this.resolveTupleCall(decl.initializer as ts.CallExpression, callName, n, hasTrail);
       if (!r) return;
       types = r.types;
       source = { kind: 'call', fn: r.fn, args: r.args };
     } else if (ts.isArrayLiteralExpression(decl.initializer)) {
-      if (decl.initializer.elements.length !== n) {
+      if (!this.tupleArityMatch(n, hasTrail, decl.initializer.elements.length)) {
         this.diags.error(
           decl.initializer,
           'JETH066',
@@ -17286,7 +17301,7 @@ export class Analyzer {
     } else {
       // L10b: `let [p, q] = g(a, b)` where `g` evaluates to a MULTI-RETURN function pointer
       // ((a, b) => [T1, T2]): dispatch through the per-signature multi-return dispatcher.
-      const fr = this.resolveFuncRefTupleCall(decl.initializer, n);
+      const fr = this.resolveFuncRefTupleCall(decl.initializer, n, hasTrail);
       if (fr === 'no') {
         this.diags.error(
           decl.initializer,
@@ -17299,7 +17314,7 @@ export class Analyzer {
       types = fr.types;
       source = fr.source;
     }
-    this.bindDestructure(pat, n, types, source, out);
+    this.bindDestructure(pat, types.length, types, source, out);
   }
 
   /** L10b: resolve `[p, q] = g(a, b)` / `let [p, q] = g(a, b)` where the callee evaluates to a
@@ -17308,13 +17323,14 @@ export class Analyzer {
   private resolveFuncRefTupleCall(
     init: ts.Expression,
     n: number,
+    hasTrail = false,
   ): { types: JethType[]; source: DestructureSource } | undefined | 'no' {
     if (!ts.isCallExpression(init)) return 'no';
     // Batch C: the DEEP resolver also derives a parenthesized-ternary / chained-call callee's
     // signature (let [a, b] = (c ? this.two : this.three)(x)), exactly like the call routing.
     const sig = this.funcrefCalleeSigDeep(init.expression);
     if (!sig || !sig.rets) return 'no';
-    if (sig.rets.length !== n) {
+    if (!this.tupleArityMatch(n, hasTrail, sig.rets.length)) {
       this.diags.error(
         init,
         'JETH066',
@@ -17340,8 +17356,11 @@ export class Analyzer {
   ): void {
     const names: (string | null)[] = [];
     for (let i = 0; i < n; i++) {
-      const el = pat.elements[i]!;
-      if (ts.isOmittedExpression(el)) {
+      // `n` is the tuple component count (>= pat.elements.length): a TRAILING elided hole (`[p, ]`)
+      // has no element node at its index, so `el` is undefined there - a discarded component, exactly
+      // like an explicit OmittedExpression (`[p, , r]`) or the leading hole (`[, q]`).
+      const el = pat.elements[i];
+      if (!el || ts.isOmittedExpression(el)) {
         names.push(null);
         continue;
       }
