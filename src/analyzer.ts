@@ -720,7 +720,7 @@ export class Analyzer {
     this.collectFileLevelIntConsts(); // file-level `const N = <int>` usable as an Arr<T, N> length, before structs
     this.collectStructs();
     this.collectInterfaces(); // @interface declarations: a named type + per-method ABI/selector registry
-    this.collectFileLevelErrorEvents(); // `type X = error<{...}>` / `event<{...}>` (file-level, solc 0.8.4/0.8.22 parity)
+    this.collectFileLevelErrorEventNames(); // `type X = error<{...}>` / `event<{...}>` names (member types resolved in buildFileLevelErrorEvents, after class/interface registration)
     this.collectNativeInterfaces(); // item #6b: native `interface I { m(): View<T> }`
     this.rejectImplementsClauses(); // a silently-ignored `implements` clause skipped interface obligations
     this.checkClassNamespaceCollisions(); // duplicate contract/abstract/library names + builtin-global shadows
@@ -740,6 +740,7 @@ export class Analyzer {
     // member ordering fed to the existing analyze/emit pipeline (only the @contract deploys).
     this.registerContractClasses();
     this.collectContractMethods(); // CONTRACT-VALUE-CALL: external-method registry, BEFORE marker stripping
+    this.buildFileLevelErrorEvents(); // resolve file-level error/event member types now contractRefNames() is complete
     const lin = this.linearize(classes[0]!);
     if (!lin) return undefined; // a C3-impossible base order was reported
     const ir = this.analyzeContract(classes[0]!, lin);
@@ -2027,6 +2028,7 @@ export class Analyzer {
     // linearization work exactly as on the normal path.
     this.registerContractClasses();
     this.collectContractMethods(); // CONTRACT-VALUE-CALL: external-method registry, BEFORE marker stripping
+    this.buildFileLevelErrorEvents(); // resolve file-level error/event member types now contractRefNames() is complete
     // Validate the leaf abstract class's members/bodies as if it were the deployed contract. The emitted
     // IR is discarded (nothing deploys); it names the artifact and supplies an ABI. Analyzing a standalone
     // abstract class fires the same member/override/body diagnostics the normal path fires - an abstract
@@ -7285,6 +7287,16 @@ export class Analyzer {
    *  member `this.X({...})` spelling is rejected for these (they are not contract members). */
   private fileLevelErrorEvents = new Set<string>();
 
+  /** File-level error/event alias decls whose NAMES are registered early (collectFileLevelErrorEventNames,
+   *  for the class/type collision checks) but whose MEMBER types are resolved LATE
+   *  (buildFileLevelErrorEvents). A contract/interface-typed member (CONTRACT-TYPE-PARAM) brands to
+   *  `address` only once contractRefNames() is complete, which needs every native interface
+   *  (collectNativeInterfaces) and contract/abstract class (registerContractClasses) registered - and both
+   *  of those passes run AFTER the early name collection, so a file-level `type Ev = event<{ t: C }>` with
+   *  a contract member would otherwise fail to resolve (JETH013) where the inline `E: event<{ t: C }>`
+   *  field form - resolved during analyzeContract, after registration - already brands correctly. */
+  private fileLevelEventAliasDecls: { kind: 'error' | 'event'; nameNode: ts.PropertyName; lit: ts.TypeLiteralNode; anchor: ts.Node }[] = [];
+
   /** Is this type alias's RHS a native error/event marker (`error<...>` / `event<...>`)? Shared by the
    *  branded-alias skip (collectTypeAliases) and the file-level collector below. */
   private isErrorEventAliasRHS(t: ts.TypeNode): 'error' | 'event' | undefined {
@@ -7296,10 +7308,13 @@ export class Analyzer {
 
   /** FILE-LEVEL error/event declarations (native mode): `type Insufficient = error<{ need: u256 }>;` at
    *  the top level is the native spelling of solc's file-level `error Insufficient(uint256 need);`
-   *  (solc 0.8.4+) and `event ...` (solc 0.8.22+). Collected AFTER structs so parameter types may
-   *  reference any struct/enum regardless of declaration order. In a multi-file build they are exported /
-   *  imported like any type alias. */
-  private collectFileLevelErrorEvents(): void {
+   *  (solc 0.8.4+) and `event ...` (solc 0.8.22+). Two phases: (1) this pass registers the NAMES (needed
+   *  by the class-vs-type collision checks) + validates the `<...>` arity, saving each valid decl; (2)
+   *  buildFileLevelErrorEvents resolves the member types + builds the IR AFTER contractRefNames() is
+   *  complete (so a contract/interface-typed member brands to `address`, matching the inline field form).
+   *  Collected AFTER structs so parameter types may reference any struct/enum regardless of declaration
+   *  order. In a multi-file build they are exported / imported like any type alias. */
+  private collectFileLevelErrorEventNames(): void {
     const visit = (n: ts.Node): void => {
       if (ts.isTypeAliasDeclaration(n)) {
         const kind = this.isErrorEventAliasRHS(n.type);
@@ -7308,7 +7323,7 @@ export class Analyzer {
           if (!args || args.length !== 1 || !ts.isTypeLiteralNode(args[0]!)) {
             this.diags.error(n.type, 'JETH353', `${kind}<...> takes exactly one object type listing the parameters, e.g. \`type X = ${kind}<{ a: u256 }>\` (or \`${kind}<{}>\` for none)`);
           } else {
-            this.synthesizeErrorEventDecl(kind, n.name, args[0] as ts.TypeLiteralNode, n, false, undefined, true);
+            this.fileLevelEventAliasDecls.push({ kind, nameNode: n.name, lit: args[0] as ts.TypeLiteralNode, anchor: n });
             this.fileLevelErrorEvents.add(n.name.text);
           }
         }
@@ -7316,6 +7331,16 @@ export class Analyzer {
       ts.forEachChild(n, visit);
     };
     ts.forEachChild(this.sourceFile, visit);
+  }
+
+  /** Second phase of file-level error/event collection (see collectFileLevelErrorEventNames): resolve each
+   *  member's type + build the error/event IR. Runs AFTER registerContractClasses / collectNativeInterfaces
+   *  so contractRefNames() sees every contract/interface name and a contract-typed member (CTR-EVENT-ARG)
+   *  brands to `address` byte-identically to the inline `E: event<{...}>` field form. */
+  private buildFileLevelErrorEvents(): void {
+    for (const d of this.fileLevelEventAliasDecls) {
+      this.synthesizeErrorEventDecl(d.kind, d.nameNode, d.lit, d.anchor, false, undefined, true);
+    }
   }
 
   /** P0b (native mode): unwrap a `Visible<T>` FIELD type marker - the native spelling of the @external
@@ -12422,6 +12447,15 @@ export class Analyzer {
       // the ABI encoder masks it to 160 bits (proven byte-identical for dirty high bits).
       return { ...inner, type: want } as Expr;
     }
+    // CTR-EVENT-ARG: a bare value ALREADY of the parameter's exact contract-ref type (a param / field /
+    // local / array-elem / mapping-elem of type T, or a T-returning call) is passed directly - it IS a T,
+    // so solc needs no wrapper cast (`emit E(t)` / `revert Bad(t)`). Accept it unchanged (the value is in
+    // the address domain; the encoder masks to 160 bits). A plain address (unbranded) or a DIFFERENT
+    // contract/interface type does not match `want` and still falls through to the JETH085 reject below
+    // (solc rejects the implicit conversion to a contract type).
+    const bare = this.checkExpr(argNode);
+    if (!bare) return undefined;
+    if (typesEqual(bare.type, want)) return bare;
     this.diags.error(
       argNode,
       'JETH085',
