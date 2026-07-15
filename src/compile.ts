@@ -366,26 +366,39 @@ function rewriteModuleScopes(
 }
 
 /**
- * METHOD-vs-IMPORTED-TYPE collision (multi-file only). solc rejects a contract whose METHOD name equals a
- * same-named file-level error / event / struct / enum / interface that is IN SCOPE (declared in the file or
- * imported into it): the member SHADOWS the imported symbol, so any use of that name resolves to the 0-arg
- * method, never the import ("Wrong argument count" for an error/event, "Name has to refer to a user-defined
- * type" for a struct/enum/interface). The SINGLE-FILE analyzer already gives this reject (JETH133, its
- * cross-scope member-vs-file-level gate in analyzeContract). But the v3 module rename mangles the imported
+ * VISIBLE-METHOD-vs-IMPORTED-TYPE collision (multi-file only). solc rejects a contract whose VISIBLE method
+ * name equals a same-named file-level error / event / struct / enum / interface that is IN SCOPE (declared in
+ * the file or imported into it): the member SHADOWS the imported symbol, so any use of that name resolves to
+ * the 0-arg method, never the import ("Wrong argument count" for an error/event, "Name has to refer to a
+ * user-defined type" for a struct/enum/interface). The SINGLE-FILE analyzer already gives this reject
+ * (JETH133, its cross-scope member-vs-file-level gate in analyzeContract, which runs over the deployed
+ * contract's C3 linearization - own AND inherited methods). But the v3 module rename mangles the imported
  * `Bad` to `$mN$Bad` BEFORE the analyzer runs, so the analyzer never sees the method-vs-import collision and
  * a BUNDLE routes AROUND the gate (a pre-existing over-acceptance). This pre-pass restores the reject by
  * mirroring that gate over IMPORTED (cross-file) declarations only, emitting the SAME JETH133 code and
  * message the single-file path produces.
  *
+ * VISIBLE method = the contract's OWN methods UNION every method it INHERITS by walking the `extends` chain
+ * in the merged AST (multi-level, multiple-base / diamond, and interface bases, cycle-guarded), using the
+ * same finalName+classByFinal resolution that rewriteModuleScopes' value-member shadow uses to follow
+ * `extends` across imported files. An override keeps the name visible; a base reached through several paths
+ * is visited once. A base that does not resolve is skipped (fail-safe toward base behavior - never fabricate
+ * a collision). This SUBSUMES the earlier own-methods-only pass (own methods are a subset of visible), so the
+ * inherited case (`class C extends B` where B declares a method colliding with an in-scope imported type) now
+ * rejects exactly as the single-file linearization gate does.
+ *
  * Scope, deliberately narrow: METHODS ONLY (a value-member shadow is handled by rewriteModuleScopes leaving
- * the reference unrenamed; a @modifier is a distinct member kind). CROSS-FILE ONLY - a same-file collision
- * (the entry's own file-level type + a method, i.e. the single-file shape inside a bundle) is left to the
- * analyzer's existing gate so its companion diagnostics are preserved. Runs on PRISTINE identifiers (BEFORE
- * rewriteModuleScopes mutates any name); final (scoped) names are computed from renamesByFile exactly as
- * rewriteModuleScopes does, so each declaration maps to a unique `$mN$`-scoped name and lookups are exact.
- * The reject fires regardless of whether the colliding name is USED - matching the single-file path, which
- * also rejects the no-use collision (solc accepts the no-use shadow, so this is the endorsed, consistent
- * single/multi-file deliberate over-rejection: methods are camelCase, types/errors/events are PascalCase).
+ * the reference unrenamed; a @modifier is a distinct member kind, skipped on every class in the chain).
+ * CROSS-FILE ONLY - a same-file collision (a file-level type + a method in the SAME file) is left to the
+ * analyzer's existing gate: for an ENTRY-file type (unrenamed) the analyzer already fires JETH133 over the
+ * linearization, and a DEP abstract base whose same-file method shadows a same-file type is exactly the pure
+ * shadow solc + the single-file path both accept when that base is not the deployed/inherited contract, so
+ * firing there would over-reject. Runs on PRISTINE identifiers (BEFORE rewriteModuleScopes mutates any name);
+ * final (scoped) names are computed from renamesByFile exactly as rewriteModuleScopes does, so each
+ * declaration maps to a unique `$mN$`-scoped name and lookups are exact. The reject fires regardless of
+ * whether the colliding name is USED - matching the single-file path, which also rejects the no-use collision
+ * (solc accepts the no-use shadow, so this is the endorsed, consistent single/multi-file deliberate
+ * over-rejection: methods are camelCase, types/errors/events are PascalCase).
  */
 function collectImportedMethodTypeCollisions(
   sf: ts.SourceFile,
@@ -456,18 +469,89 @@ function collectImportedMethodTypeCollisions(
     if ((ts.getModifiers(cls) ?? []).some((m) => m.kind === ts.SyntaxKind.StaticKeyword)) return false; // static class = library
     return true;
   };
+  // The INHERITANCE resolver (merged AST). A class/interface declaration is keyed by its FINAL (post-rename)
+  // name, so an entry `extends B` reference and the imported dep `class B` decl land on the SAME key - the
+  // exact resolution rewriteModuleScopes' value-member shadow uses (finalNameOf + classByFinalName). Both
+  // class bases (abstract/contract) and interface bases participate: a method may be inherited from an
+  // abstract-class body or declared by an interface the contract implements, and either shadows an in-scope
+  // file-level type in solc.
+  type BaseNode = ts.ClassDeclaration | ts.InterfaceDeclaration;
+  const classByFinal = new Map<string, ts.ClassDeclaration>();
+  const ifaceByFinal = new Map<string, ts.InterfaceDeclaration>();
+  sf.forEachChild((n) => {
+    if (ts.isClassDeclaration(n) && n.name) {
+      const fn = finalNameIn(fileOf(n.name), n.name.text);
+      if (!classByFinal.has(fn)) classByFinal.set(fn, n);
+    } else if (ts.isInterfaceDeclaration(n) && n.name) {
+      const fn = finalNameIn(fileOf(n.name), n.name.text);
+      if (!ifaceByFinal.has(fn)) ifaceByFinal.set(fn, n);
+    }
+  });
+  // Direct `extends` bases of a class/interface, resolved to their merged-AST declarations. Handles multiple
+  // bases (`extends A, B` -> diamond), the call-form base (`extends A(7)`), and a base that is a native
+  // interface. A base whose expression is not a bare/called identifier, or that resolves to no known
+  // declaration, is dropped (fail-safe - the walk simply does not inherit through it).
+  const basesOf = (node: BaseNode): BaseNode[] => {
+    const out: BaseNode[] = [];
+    for (const clause of node.heritageClauses ?? []) {
+      if (clause.token !== ts.SyntaxKind.ExtendsKeyword) continue;
+      for (const t of clause.types) {
+        let e: ts.Expression = t.expression;
+        if (ts.isCallExpression(e)) e = e.expression;
+        if (!ts.isIdentifier(e)) continue;
+        const fn = finalNameIn(fileOf(e), e.text);
+        const base = classByFinal.get(fn) ?? ifaceByFinal.get(fn);
+        if (base) out.push(base);
+      }
+    }
+    return out;
+  };
+  // Method names declared directly on a class node as a concrete or bodyless-abstract MethodDeclaration
+  // (excluding a @modifier member, which is a distinct member kind - matching the own-methods pass). An
+  // interface's MethodSignatures are deliberately NOT counted: an unimplemented interface signature does not
+  // shadow a free error / event / type in solc, nor in the single-file JETH133 linearization gate (which
+  // ACCEPTS an abstract contract that merely inherits the signature). Counting it would over-reject that
+  // shape. Only class MethodDeclarations - concrete OR bodyless @virtual / abstract, exactly the members the
+  // single-file gate treats as shadowing - are collected (a class base's body and an abstract class's
+  // bodyless method both shadow an in-scope file-level type). An interface base still participates in the
+  // extends walk; it simply contributes no method name.
+  const ownMethodNames = (node: BaseNode): string[] => {
+    const out: string[] = [];
+    for (const m of node.members) {
+      if (ts.isMethodDeclaration(m) && ts.isIdentifier(m.name)) {
+        if (decoratorNames(m).includes('modifier')) continue;
+        out.push(m.name.text);
+      }
+    }
+    return out;
+  };
+  // VISIBLE method names of a contract = own UNION every inherited method, walking the `extends` chain
+  // (cycle-guarded on the declaration node, so a diamond base is counted once and a cyclic `extends` cannot
+  // loop). Runs on pristine identifiers, before any rename mutation.
+  const visibleMethodNames = (cls: ts.ClassDeclaration): Set<string> => {
+    const names = new Set<string>();
+    const seen = new Set<BaseNode>();
+    const stack: BaseNode[] = [cls];
+    while (stack.length > 0) {
+      const cur = stack.pop()!;
+      if (seen.has(cur)) continue;
+      seen.add(cur);
+      for (const nm of ownMethodNames(cur)) names.add(nm);
+      for (const base of basesOf(cur)) stack.push(base);
+    }
+    return names;
+  };
   sf.forEachChild((n) => {
     if (!ts.isClassDeclaration(n) || !n.name || !isContractKindClass(n)) return;
     const cfile = fileOf(n.name);
     const reported = new Set<string>();
-    for (const m of n.members) {
-      if (!ts.isMethodDeclaration(m) || !ts.isIdentifier(m.name)) continue;
-      if (decoratorNames(m).includes('modifier')) continue; // a @modifier is not a plain function member
-      const mname = m.name.text;
+    for (const mname of visibleMethodNames(n)) {
       if (reported.has(mname)) continue;
       const d = declByFinal.get(finalNameIn(cfile, mname));
       // Only a CROSS-FILE (imported) collision is surfaced here; a same-file file-level type + method is the
-      // single-file shape and is left to the analyzer's own gate (so its companion diagnostics survive).
+      // single-file shape and is left to the analyzer's own gate (so its companion diagnostics survive, and a
+      // dep base's own same-file shadow is not over-rejected - solc + the single-file path accept it when the
+      // base is not the deployed/inherited contract).
       if (!d || d.file === cfile) continue;
       reported.add(mname);
       diags.error(
