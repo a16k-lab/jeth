@@ -134,6 +134,92 @@ describe('LIB-MEMBER-EVENT: a library event', () => {
   });
 });
 
+// LIB-NAMEDARG: a NAMED-argument raise `{ name: value }` of a LIBRARY-scoped event/error reorders the
+// keys to the declaration's param order and lowers through the positional path, so it is BYTE-IDENTICAL
+// to its positional twin (which already worked). Covers the qualified `emit(L.E({...}))` /
+// `revert(L.Bad({...}))` (inside a lib fn AND from a contract) and the bare `emit(E({...}))` /
+// `revert(Bad({...}))` inside the owning library. Before this lift these all over-rejected (JETH148 for
+// events, JETH130 for errors) while solc accepts them. Scrambled key orders + distinct values make the
+// reordering load-bearing: a no-op reorder would log/revert the WRONG bytes and diverge from solc.
+const AB = W(7) + W(0xaan); // (uint256 x = 7, address y = 0xaa)
+describe('LIB-NAMEDARG: a named-argument raise of a library-scoped event/error', () => {
+  it('qualified emit(L.E({...})) + bare emit(E({...})) + from-contract log byte-identically to the positional twin (scrambled order, indexed)', async () => {
+    // qualified L.E({ b, a }) inside a lib fn, keys scrambled, an INDEXED field
+    await sameRun(
+      `static class L { E: event<{ a: indexed<u256>; b: address }>; log(x: u256, y: address): void { emit(L.E({ b: y, a: x })); } }\nclass C { f(x: u256, y: address): External<void> { L.log(x, y); } }`,
+      `library L { event E(uint256 indexed a, address b); function log(uint256 x, address y) internal { emit E(x, y); } }\ncontract C { function f(uint256 x, address y) external { L.log(x, y); } }`,
+      [['f(uint256,address)', AB]],
+    );
+    // bare E({ b, a }) inside the owning library's body (the "inside-a-lib-body" form)
+    await sameRun(
+      `static class L { E: event<{ a: u256; b: indexed<address> }>; log(x: u256, y: address): void { emit(E({ b: y, a: x })); } }\nclass C { f(x: u256, y: address): External<void> { L.log(x, y); } }`,
+      `library L { event E(uint256 a, address indexed b); function log(uint256 x, address y) internal { emit E(x, y); } }\ncontract C { function f(uint256 x, address y) external { L.log(x, y); } }`,
+      [['f(uint256,address)', AB]],
+    );
+    // qualified emit(L.E({...})) FROM A CONTRACT (the event is declared in the library)
+    await sameRun(
+      `static class L { E: event<{ a: indexed<u256>; b: address }>; }\nclass C { f(x: u256, y: address): External<void> { emit(L.E({ b: y, a: x })); } }`,
+      `library L { event E(uint256 indexed a, address b); }\ncontract C { function f(uint256 x, address y) external { emit L.E(x, y); } }`,
+      [['f(uint256,address)', AB]],
+    );
+  });
+
+  it('qualified revert(L.Bad({...})) + bare revert(Bad({...})) + from-contract carry byte-identical revert data (scrambled order)', async () => {
+    await sameRun(
+      `static class L { Bad: error<{ a: u256; b: address }>; chk(x: u256, y: address): void { revert(L.Bad({ b: y, a: x })); } }\nclass C { f(x: u256, y: address): External<void> { L.chk(x, y); } }`,
+      `library L { error Bad(uint256 a, address b); function chk(uint256 x, address y) internal pure { revert Bad(x, y); } }\ncontract C { function f(uint256 x, address y) external pure { L.chk(x, y); } }`,
+      [['f(uint256,address)', AB]],
+    );
+    await sameRun(
+      `static class L { Bad: error<{ a: u256; b: address }>; chk(x: u256, y: address): void { revert(Bad({ b: y, a: x })); } }\nclass C { f(x: u256, y: address): External<void> { L.chk(x, y); } }`,
+      `library L { error Bad(uint256 a, address b); function chk(uint256 x, address y) internal pure { revert Bad(x, y); } }\ncontract C { function f(uint256 x, address y) external pure { L.chk(x, y); } }`,
+      [['f(uint256,address)', AB]],
+    );
+    await sameRun(
+      `static class L { Bad: error<{ a: u256; b: address }>; }\nclass C { f(x: u256, y: address): External<void> { revert(L.Bad({ b: y, a: x })); } }`,
+      `library L { error Bad(uint256 a, address b); }\ncontract C { function f(uint256 x, address y) external pure { revert L.Bad(x, y); } }`,
+      [['f(uint256,address)', AB]],
+    );
+  });
+
+  it('NON-VACUITY: a scrambled-key named emit logs data in DECLARATION order (checked independently of solc)', async () => {
+    const h = await Harness.create();
+    const aj = await h.deploy(
+      compile(
+        `static class L { E: event<{ a: u256; b: address }>; log(x: u256, y: address): void { emit(L.E({ b: y, a: x })); } }\nclass C { f(x: u256, y: address): External<void> { L.log(x, y); } }`,
+        { fileName: 'C.jeth' },
+      ).creationBytecode,
+    );
+    const r = await h.call(aj, sel('f(uint256,address)') + AB);
+    expect(r.success).toBe(true);
+    expect(r.logs.length).toBe(1);
+    expect(r.logs[0]!.topics.length).toBe(1); // topic0 only (no indexed fields)
+    // data = a (0x07) then b (0xaa), the DECLARATION order, despite `{ b: y, a: x }` scrambling the keys
+    expect(r.logs[0]!.data).toBe('0x' + W(7) + W(0xaan));
+  });
+
+  it('REJECTS: an unknown key, wrong arity, and a duplicate key (event + error), matching solc', () => {
+    expect(codes(`static class L { E: event<{ a: u256; b: address }>; log(x: u256, y: address): void { emit(L.E({ a: x, z: y })); } }\nclass C { f(x: u256, y: address): External<void> { L.log(x, y); } }`)).toContain('JETH130');
+    expect(codes(`static class L { E: event<{ a: u256; b: address }>; log(x: u256, y: address): void { emit(E({ a: x, b: y, c: x })); } }\nclass C { f(x: u256, y: address): External<void> { L.log(x, y); } }`)).toContain('JETH130');
+    expect(codes(`static class L { E: event<{ a: u256; b: address }>; log(x: u256, y: address): void { emit(L.E({ a: x, a: x, b: y })); } }\nclass C { f(x: u256, y: address): External<void> { L.log(x, y); } }`)).toContain('JETH130');
+    expect(codes(`static class L { Bad: error<{ a: u256; b: address }>; chk(x: u256, y: address): void { revert(L.Bad({ a: x })); } }\nclass C { f(x: u256, y: address): External<void> { L.chk(x, y); } }`)).toContain('JETH130');
+  });
+
+  it('GUARD: a NON-library named raise is unchanged (contract bare-named still rejects; positional + this.X untouched)', async () => {
+    // a contract's OWN event/error: the bare named form stays a reject (only `this.E({...})` is native)
+    expect(codes(`class C { E: event<{ a: u256; b: address }>; f(x: u256, y: address): External<void> { emit(E({ a: x, b: y })); } }`)).toContain('JETH148');
+    expect(codes(`class C { Bad: error<{ a: u256; b: address }>; f(x: u256, y: address): External<void> { revert(Bad({ a: x, b: y })); } }`)).toContain('JETH130');
+    // solc rejects `this.E` inside a library too - the literal this.X-in-lib stays a correct both-reject
+    expect(codes(`static class L { E: event<{ a: u256; b: address }>; log(x: u256, y: address): void { emit(this.E({ a: x, b: y })); } }\nclass C { f(x: u256, y: address): External<void> { L.log(x, y); } }`)).toContain('JETH394');
+    // the working contract `this.E({...})` named form is untouched (byte-identical to solc)
+    await sameRun(
+      `class C { E: event<{ a: u256; b: address }>; f(x: u256, y: address): External<void> { emit(this.E({ b: y, a: x })); } }`,
+      `contract C { event E(uint256 a, address b); function f(uint256 x, address y) external { emit E(x, y); } }`,
+      [['f(uint256,address)', AB]],
+    );
+  });
+});
+
 // Over-acceptances found + fixed by the adversarial sweep (all three are scope/declaration gaps the
 // lifts opened; solc rejects each, so the bar demands a reject).
 describe('library-decls over-acceptance closures', () => {

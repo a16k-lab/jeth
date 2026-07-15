@@ -12413,6 +12413,62 @@ export class Analyzer {
     if (reason) out.push({ kind: 'revert', reason });
   }
 
+  /** Reorder a single NAMED-argument object literal `{ name: value, ... }` into positional args matching
+   *  one of the candidate param-name sets (each a declaration's declared parameter order). Returns the
+   *  reordered arg nodes plus the chosen overload index, or null after a diagnostic (duplicate key, no
+   *  matching set, an ambiguous key set shared by >1 overload, or a non-`name: value` member). Shared by
+   *  the `this.X` desugar and the qualified `L.E(...)` / bare library `E(...)` event/error raises, so all
+   *  named-arg raises reorder identically and stay byte-identical to their positional twin. */
+  private reorderNamedRaiseArgs(
+    obj: ts.ObjectLiteralExpression,
+    paramNameSets: string[][],
+    kind: 'error' | 'event',
+    name: string,
+  ): { args: ts.Expression[]; chosen: number } | null {
+    const entries = new Map<string, ts.Expression>();
+    for (const prop of obj.properties) {
+      if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name)) {
+        if (entries.has(prop.name.text)) {
+          this.diags.error(prop, 'JETH130', `duplicate ${kind} argument '${prop.name.text}'`);
+          return null;
+        }
+        entries.set(prop.name.text, prop.initializer);
+      } else if (ts.isShorthandPropertyAssignment(prop)) {
+        if (entries.has(prop.name.text)) {
+          this.diags.error(prop, 'JETH130', `duplicate ${kind} argument '${prop.name.text}'`);
+          return null;
+        }
+        entries.set(prop.name.text, prop.name);
+      } else {
+        this.diags.error(prop, 'JETH130', `a named ${kind} argument must be a plain \`name: value\` (no spreads or computed keys)`);
+        return null;
+      }
+    }
+    const matchIdxs: number[] = [];
+    for (let i = 0; i < paramNameSets.length; i++) {
+      const ps = paramNameSets[i]!;
+      if (ps.length === entries.size && ps.every((n2) => entries.has(n2))) matchIdxs.push(i);
+    }
+    if (matchIdxs.length === 0) {
+      this.diags.error(
+        obj,
+        'JETH130',
+        `named arguments { ${[...entries.keys()].join(', ')} } do not match ${kind} '${name}' (declared: ${paramNameSets.map((ps) => `(${ps.join(', ')})`).join(' | ')})`,
+      );
+      return null;
+    }
+    if (matchIdxs.length > 1) {
+      this.diags.error(
+        obj,
+        'JETH434',
+        `${kind} '${name}' is overloaded and multiple overloads share these named-argument keys - use the positional form emit(this.${name}(...))`,
+      );
+      return null;
+    }
+    const chosen = matchIdxs[0]!;
+    return { args: paramNameSets[chosen]!.map((n2) => entries.get(n2)!), chosen };
+  }
+
   /** Native raise/emit sugar: `this.X({ name: v, ... })` (or positional `this.X(a, b)`) where X is a
    *  declared custom error / event (typically a field declaration). Desugars to the bare-name constructor
    *  call the existing checkers consume; NAMED arguments are reordered to the DECLARED parameter order
@@ -12449,57 +12505,17 @@ export class Analyzer {
     const Sn = <T extends ts.Node>(n: T): T => this.synth(n, node);
     let args: readonly ts.Expression[] = node.arguments;
     if (node.arguments.length === 1 && ts.isObjectLiteralExpression(node.arguments[0]!)) {
-      const obj = node.arguments[0]!;
       // NAMED args reorder to a declaration's param order - which requires knowing WHICH declaration.
-      // Build the key set first, then disambiguate an OVERLOADED event by it: exactly one overload whose
-      // param-NAME set equals the keys is selected and FORCED (below), so the downstream type-based
-      // resolution cannot re-pick a different overload than the one used to reorder (which would be a
-      // silent wrong-data emit). Zero matches -> the precise field error; 2+ matches (same key set, e.g.
-      // different types under the same names) -> JETH434, the sound residual over-rejection.
-      const entries = new Map<string, ts.Expression>();
-      for (const prop of obj.properties) {
-        if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name)) {
-          if (entries.has(prop.name.text)) {
-            this.diags.error(prop, 'JETH130', `duplicate ${kind} argument '${prop.name.text}'`);
-            return null;
-          }
-          entries.set(prop.name.text, prop.initializer);
-        } else if (ts.isShorthandPropertyAssignment(prop)) {
-          if (entries.has(prop.name.text)) {
-            this.diags.error(prop, 'JETH130', `duplicate ${kind} argument '${prop.name.text}'`);
-            return null;
-          }
-          entries.set(prop.name.text, prop.name);
-        } else {
-          this.diags.error(prop, 'JETH130', `a named ${kind} argument must be a plain \`name: value\` (no spreads or computed keys)`);
-          return null;
-        }
-      }
-      const matchIdxs: number[] = [];
-      for (let i = 0; i < paramNameSets.length; i++) {
-        const ps = paramNameSets[i]!;
-        if (ps.length === entries.size && ps.every((n2) => entries.has(n2))) matchIdxs.push(i);
-      }
-      if (matchIdxs.length === 0) {
-        this.diags.error(
-          obj,
-          'JETH130',
-          `named arguments { ${[...entries.keys()].join(', ')} } do not match ${kind} '${name}' (declared: ${paramNameSets.map((ps) => `(${ps.join(', ')})`).join(' | ')})`,
-        );
-        return null;
-      }
-      if (matchIdxs.length > 1) {
-        this.diags.error(
-          obj,
-          'JETH434',
-          `${kind} '${name}' is overloaded and multiple overloads share these named-argument keys - use the positional form emit(this.${name}(...))`,
-        );
-        return null;
-      }
-      const chosen = matchIdxs[0]!;
+      // The shared reorder builds the key set first, then disambiguates an OVERLOADED event by it: exactly
+      // one overload whose param-NAME set equals the keys is selected and FORCED (below), so the downstream
+      // type-based resolution cannot re-pick a different overload than the one used to reorder (which would
+      // be a silent wrong-data emit). Zero matches -> the precise field error; 2+ matches (same key set,
+      // e.g. different types under the same names) -> JETH434, the sound residual over-rejection.
+      const r = this.reorderNamedRaiseArgs(node.arguments[0]!, paramNameSets, kind, name);
+      if (!r) return null;
       // an OVERLOADED event: force the selected overload through to checkEmit (see forcedEmitEvent).
-      if (kind === 'event' && evOverloads && evOverloads.length > 1) this.forcedEmitEvent = evOverloads[chosen];
-      args = paramNameSets[chosen]!.map((n2) => entries.get(n2)!);
+      if (kind === 'event' && evOverloads && evOverloads.length > 1) this.forcedEmitEvent = evOverloads[r.chosen];
+      args = r.args;
     }
     return Sn(f.createCallExpression(Sn(f.createIdentifier(name)), undefined, [...args]));
   }
@@ -12526,6 +12542,25 @@ export class Analyzer {
     const thisErr = this.desugarThisRaise(node, 'error');
     if (thisErr === null) return undefined;
     if (thisErr) return this.checkErrorConstructor(thisErr);
+    // LIB-NAMEDARG: a NAMED-argument raise of a BARE library-scoped error `revert(Bad({ ... }))` inside the
+    // owning library's body. Reorder the single object literal to the declaration's param order and reuse
+    // the shared positional error-arg check (byte-identical to the positional twin). Only the current
+    // library's OWN errors; a contract / file-level bare error named raise falls through unchanged.
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.arguments.length === 1 &&
+      ts.isObjectLiteralExpression(node.arguments[0]!) &&
+      this.currentLibrary !== undefined
+    ) {
+      const decl = this.libraryErrorsByName.get(this.currentLibrary)?.get(node.expression.text);
+      if (decl) {
+        const r = this.reorderNamedRaiseArgs(node.arguments[0]!, [decl.params.map((p) => p.name)], 'error', node.expression.text);
+        if (!r) return undefined;
+        const rebuilt = this.synth(ts.factory.createCallExpression(node.expression, undefined, [...r.args]), node);
+        return this.checkErrorArgs(rebuilt, decl, node.expression.text);
+      }
+    }
     // a custom-error constructor: a call whose callee is a DECLARED error name (scope-resolved). A call to
     // any other identifier (e.g. the type-conversion `string(b)`) is NOT an error call - it falls through
     // to the runtime-string path below, matching solc which lowers a string-typed reason to Error(string).
@@ -12546,7 +12581,18 @@ export class Analyzer {
       this.libraryBindsInScope(node.expression.expression.text)
     ) {
       const decl = this.libraryErrorsByName.get(node.expression.expression.text)?.get(node.expression.name.text);
-      if (decl) return this.checkErrorArgs(node, decl, node.expression.name.text);
+      if (decl) {
+        // LIB-NAMEDARG: a QUALIFIED library-error raise written with a single NAMED-argument object literal
+        // `revert(L.Bad({ ... }))` reorders to the declaration's param order, then runs the shared
+        // positional error-arg check (byte-identical to the positional twin `revert(L.Bad(a, b))`).
+        let callNode: ts.CallExpression = node;
+        if (node.arguments.length === 1 && ts.isObjectLiteralExpression(node.arguments[0]!)) {
+          const r = this.reorderNamedRaiseArgs(node.arguments[0]!, [decl.params.map((p) => p.name)], 'error', node.expression.name.text);
+          if (!r) return undefined;
+          callNode = this.synth(ts.factory.createCallExpression(node.expression, undefined, [...r.args]), node);
+        }
+        return this.checkErrorArgs(callNode, decl, node.expression.name.text);
+      }
     }
     // a template literal `bad: ${x}` is a runtime string-typed expression (it desugars to string.concat);
     // it falls through to the dynamic Error(string) path below, byte-identical to solc revert(string.concat).
@@ -13964,8 +14010,9 @@ export class Analyzer {
     if (thisEvt === null) return;
     if (thisEvt) inner = thisEvt;
     // JETH434-DISAMBIGUABLE: a named-arg emit of an overloaded event was disambiguated by key set; use the
-    // FORCED overload directly (capture+clear first so it never leaks past an early return).
-    const forcedEv = this.forcedEmitEvent;
+    // FORCED overload directly (capture+clear first so it never leaks past an early return). Reassigned
+    // below when a library-scoped named-arg raise selects an overload while reordering its keys.
+    let forcedEv = this.forcedEmitEvent;
     this.forcedEmitEvent = undefined;
     // LIB-MEMBER-EVENT: a QUALIFIED emit(L.E(a)) from a contract, mirroring the qualified library-error
     // raise revert(L.Bad(a)). Resolve E in library L's per-library event table, then rebuild a bare-name
@@ -13989,10 +14036,32 @@ export class Analyzer {
       this.diags.error(inner, 'JETH146', 'emit(...) argument must be an event constructor, e.g. emit(Transfer(a, b))');
       return;
     }
-    const candidates = libEventCandidates ?? this.resolveEventOverloadsInScope(inner.expression.text);
+    const evName = inner.expression.text;
+    const candidates = libEventCandidates ?? this.resolveEventOverloadsInScope(evName);
     if (!candidates || candidates.length === 0) {
-      this.diags.error(inner.expression, 'JETH147', `unknown event '${inner.expression.text}'`);
+      this.diags.error(inner.expression, 'JETH147', `unknown event '${evName}'`);
       return;
+    }
+    // LIB-NAMEDARG: a NAMED-argument raise of a LIBRARY-scoped event - `emit(L.E({ ... }))` (qualified,
+    // rebuilt to a bare-name call above) or `emit(E({ ... }))` inside the owning library's body. Reorder
+    // the single object literal to the declaration's param order, then run the shared positional
+    // overload/emit logic on the reordered arg nodes (byte-identical to the positional twin). Scoped to
+    // library events only: a contract / file-level event named raise is left untouched (its own JETH148
+    // path / this.X desugar).
+    let evArgs: readonly ts.Expression[] = inner.arguments;
+    const libScopedEvent =
+      libEventCandidates !== undefined ||
+      (this.currentLibrary !== undefined && this.libraryEventsByName.get(this.currentLibrary)?.has(evName) === true);
+    if (libScopedEvent && evArgs.length === 1 && ts.isObjectLiteralExpression(evArgs[0]!)) {
+      const r = this.reorderNamedRaiseArgs(
+        evArgs[0]!,
+        candidates.map((e) => e.params.map((p) => p.name)),
+        'event',
+        evName,
+      );
+      if (!r) return;
+      if (candidates.length > 1) forcedEv = candidates[r.chosen]; // force the key-set-selected overload
+      evArgs = r.args;
     }
     // Emitting a log is a STATE-MODIFYING effect (solc forbids it in view/pure, and a STATICCALL
     // reverts on LOG). Record it like a storage write so the transitive-purity fixpoint propagates
@@ -14006,12 +14075,12 @@ export class Analyzer {
       );
     }
     // Resolve the overload: by argument count, then (for same-arity overloads) by a trial type-match.
-    const byArity = candidates.filter((c) => c.params.length === inner.arguments.length);
+    const byArity = candidates.filter((c) => c.params.length === evArgs.length);
     if (byArity.length === 0) {
       this.diags.error(
         inner,
         'JETH148',
-        `event '${inner.expression.text}' has no overload taking ${inner.arguments.length} argument(s)`,
+        `event '${evName}' has no overload taking ${evArgs.length} argument(s)`,
       );
       return;
     }
@@ -14019,15 +14088,15 @@ export class Analyzer {
     if (forcedEv) ev = forcedEv; // JETH434-DISAMBIGUABLE: the key-set-selected overload
     else if (byArity.length === 1) ev = byArity[0]!;
     else {
-      const viable = byArity.filter((c) => this.eventArgsMatch(inner, c));
+      const viable = byArity.filter((c) => this.eventArgsMatch(evArgs, c));
       if (viable.length === 1) ev = viable[0]!;
       else {
         this.diags.error(
           inner,
           viable.length === 0 ? 'JETH148' : 'JETH434',
           viable.length === 0
-            ? `no overload of event '${inner.expression.text}' matches the argument types`
-            : `emit of '${inner.expression.text}' is ambiguous (matches ${viable.length} overloads)`,
+            ? `no overload of event '${evName}' matches the argument types`
+            : `emit of '${evName}' is ambiguous (matches ${viable.length} overloads)`,
         );
         return;
       }
@@ -14035,29 +14104,30 @@ export class Analyzer {
     const args: Expr[] = [];
     for (let i = 0; i < ev.params.length; i++) {
       const expected = ev.params[i]!.type;
-      const cr = this.checkRaiseArg(inner.arguments[i]!, expected);
+      const cr = this.checkRaiseArg(evArgs[i]!, expected);
       if (cr !== null) {
         if (!cr) return;
         args.push(cr);
         continue;
       }
-      const a = this.checkExpr(inner.arguments[i]!, expected);
+      const a = this.checkExpr(evArgs[i]!, expected);
       if (!a) return;
-      args.push(this.coerce(a, expected, inner.arguments[i]!));
+      args.push(this.coerce(a, expected, evArgs[i]!));
     }
     out.push({ kind: 'emit', event: ev, args });
   }
 
   /** Trial type-check the emit args against an event overload's params, rolling back all side effects
-   *  (diagnostics, effect flags) - used for same-arity event-overload resolution. */
-  private eventArgsMatch(inner: ts.CallExpression, ev: EventIR): boolean {
+   *  (diagnostics, effect flags) - used for same-arity event-overload resolution. `argNodes` are the raise
+   *  argument expressions (already reordered from any named-arg object literal). */
+  private eventArgsMatch(argNodes: readonly ts.Expression[], ev: EventIR): boolean {
     const diagLen = this.diags.items.length;
     const rs = this.currentReadsState,
       ws = this.currentWritesState,
       re = this.currentReadsEnv;
     let ok = true;
     for (let i = 0; i < ev.params.length; i++) {
-      const cr = this.checkRaiseArg(inner.arguments[i]!, ev.params[i]!.type);
+      const cr = this.checkRaiseArg(argNodes[i]!, ev.params[i]!.type);
       if (cr !== null) {
         if (!cr) {
           ok = false;
@@ -14065,12 +14135,12 @@ export class Analyzer {
         }
         continue;
       }
-      const a = this.checkExpr(inner.arguments[i]!, ev.params[i]!.type);
+      const a = this.checkExpr(argNodes[i]!, ev.params[i]!.type);
       if (!a) {
         ok = false;
         break;
       }
-      this.coerce(a, ev.params[i]!.type, inner.arguments[i]!);
+      this.coerce(a, ev.params[i]!.type, argNodes[i]!);
     }
     ok = ok && this.diags.items.length === diagLen;
     this.diags.items.length = diagLen;

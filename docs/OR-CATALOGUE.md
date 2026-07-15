@@ -811,8 +811,19 @@ that a lift newly exposed. All three fixed; bar (0 MC / 0 OA) re-proven.
   a returning fallback. DELIBERATE keep - a fallback is not an ABI function reached by a selector, so the
   `External<T>` marker is meaningless on it; the working native form is `fallback(input: bytes): bytes`
   (bare return), which JETH already accepts. solc has no External<T> marker concept, so nothing to match.
-- **LIB-EVENT-NAMEDARG** (JETH227): `emit(L.E({a}))` (a QUALIFIED library event with NAMED args) rejects;
-  the positional `emit(L.E(a))` works. Niche combo; lift risks the just-touched emit path. Future lift.
+- **LIB-EVENT-NAMEDARG / LIB-NAMEDARG - LIFTED** (was JETH148 event / JETH130 error): a NAMED-argument
+  raise `{ name: value }` of a LIBRARY-scoped event/error now reorders the keys to the declaration's param
+  order and lowers through the positional path, byte-identical to the positional twin. Covers the qualified
+  `emit(L.E({...}))` / `revert(L.Bad({...}))` (inside a lib fn AND from a contract) and the bare
+  `emit(E({...}))` / `revert(Bad({...}))` inside the owning library; event overloads disambiguate by key
+  set (JETH434 residual unchanged). Root cause was a wiring gap: the named-arg reorder lived only in the
+  `this.X` desugar; the qualified/bare library entry points passed the object literal straight to the
+  arity check. FIX: a shared `reorderNamedRaiseArgs` reached from the `this.X` desugar, the `checkEmit`
+  library-event path, and the `checkRevertReason` / `LIB-MEMBER-ERROR` library-error paths. NON-library
+  named raises are UNCHANGED: a contract's own event/error bare-named raise still rejects (only `this.E`
+  is native), and `this.E` inside a library stays a correct both-reject (solc: "Member E not found in
+  library L", JETH394). Verified byte-identical (logs + revert data) across scrambled key orders, indexed
+  + non-indexed fields, and overloaded events.
 - **LIB-CREATION-VALUE** (out of scope): deploying a standalone external-library OBJECT with value reverts
   in JETH (creation-code callvalue guard) while solc's library creation accepts value. Library objects are
   not asserted byte-identical to solc (different runtime), no JETH source construct controls this, and the
