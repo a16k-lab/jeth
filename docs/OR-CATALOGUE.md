@@ -1033,3 +1033,42 @@ over-rejection. This lift threads only the TYPE brand; it does not add dispatch,
 consistent. Suite 468/4340. LESSON: the byte-identity-to-the-address-twin invariant (a branded address must
 produce IDENTICAL codegen to a plain address) is a fast, strong miscompile detector across the whole consumer
 axis - any divergence localizes exactly where the brand leaked into codegen.
+
+### 2026-07-15 FIX-ALL CAMPAIGN completion (DECORATOR-POSITION + == OA + tsc + keep-reject + merged-tree cross-verify)
+
+The fix-all round (user: lift everything liftable, fix anything that comes out - MC/OA/OR/flake/bug). On top of
+the CTR-TYPE-AGG lift above:
+- **DECORATOR-POSITION hardening (JETH490)** - a decorator in CLASS / FIELD / PARAM position was SILENTLY
+  DROPPED, including TYPOS of real decorators (`@storag("ns")` on a class silently lost the storage namespace;
+  `@diamon('array')` silently lost the diamond - byte-identical to a bare class). The METHOD position was
+  already closed (JETH329). A pre-analysis TS-AST scan (collectStrayDecorators, compile.ts) now rejects a
+  decorator whose name is not in the legal per-position allow-set (CLASS = diamond/storage/proxy/beacon/facet/
+  using/uups; FIELD = storage/override/virtual; PARAM = none), derived from the analyzer's real consumption
+  sites. Pure rejection-adder: 17/17 legal keep-list shapes byte-identical, full suite green.
+- **== / != nominal-vs-address OA closed (JETH083)** - `==`/`!=` between a plain address and a nominal-branded
+  (contract/abstract-class/interface ref) value, or between two DIFFERENT nominal brands, was accepted by JETH;
+  solc rejects "operator == cannot be applied to types address and contract T". Root cause: an address-literal
+  operand (`address(0)`) failed retypeLiteral quietly, so buildBinary returned undefined and return-site
+  error-recovery emitted bytecode solc never compiles. A gate in buildBinary now rejects when both operands are
+  address-kind and their brands differ with >=1 nominal. Same-nominal / plain==plain / explicit `address(t)==`
+  stay byte-identical. Found by the CTR-TYPE-AGG adversarial verify in passing (pre-existing, systemic across
+  value/param/interface/aggregate positions).
+- **REC-STRUCT-MEMLOCAL kept a clean reject (JETH200/074)** - a recursive struct as a MEMORY LOCAL
+  (`let m: P = this.p`) is a SAFE over-rejection: solc lowers `P memory m = p` to an UNBOUNDED runtime-recursive
+  DEEP COPY (witnessed on a populated 3-level tree, mutation-independent from storage), which JETH's recursiveRef
+  sentinel cannot reproduce; admitting it would miscompile. Pinned in test/lift-recursive-ref-struct.test.ts.
+- **tsc cleanliness restored** - 5 real `tsc --noEmit` errors had shipped on 3529351 (the suite is green because
+  vitest/esbuild does not typecheck): the decorator `@(m)` unwrap widening, two fixed-array-memory-local
+  diagnostics passing `Expression | undefined`, and a `noUncheckedIndexedAccess` tuple-destructure. All type-only.
+
+STALE CATALOGUE ROWS RETIRED (re-probed live at 3529351, each ALREADY ACCEPTS - the row was stale): the
+recursive-struct BYTES/STRING leaf read (`this.p.s.length`), a const-REFERENCING-const array dim
+(`static M = N; Arr<T,M>`), and the `bytes("a")` string cast. NOT liftable (TS grammar, not a JETH gap): a const
+EXPRESSION array dim (`Arr<u256, N+1>`) is not a valid TS type argument (grammar-phase reject).
+
+MERGED-TREE ADVERSARIAL CROSS-VERIFY: 430 cases across 5 axes (CTR-TYPE-AGG consumers under POPULATED state +
+raw-storage decode; the == gate base-vs-merged-vs-solc isolation; the decorator gate x the legal keep-list
+corpus; cross-products - contract-type aggregate in diamond/proxy/library, recursive struct with a contract
+field; a 16-program combinatorial matrix). Verdict CLEAN: zero MC, zero OA, zero new OR. Every over-rejection
+observed is a PRE-EXISTING documented safe reject (proven base==merged). Suite 470/4362, tsc clean, flake gate
+green (deterministic across repeated runs).
