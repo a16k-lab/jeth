@@ -6237,8 +6237,24 @@ export class Analyzer {
     let payable = kind === 'receive'; // @receive is always payable
     // Native marker on a special entry: `fallback(): Payable<void>` (or `Payable<bytes>` for the
     // data-passing form) = a payable fallback, consistent with the method-marker language. A receive is
-    // ALWAYS payable, so Payable<T> there is redundant (mirrors the @payable JETH385 rule); External<T>
-    // is meaningless on a special entry (it is not an ABI function).
+    // ALWAYS payable, so Payable<T> there is redundant (mirrors the @payable JETH385 rule).
+    //
+    // FALLBACK-EXTERNAL-MARKER lift: External<T> is a REDUNDANT SYNONYM of the bare form, not an error.
+    // solc REQUIRES `external` on both special entries (`fallback() external`, `receive() external
+    // payable` - a non-external one does not compile), so Solidity muscle memory reaches for the marker;
+    // native mode is a permissive superset and accepts it. It is UNWRAPPED to the bare return type here
+    // and adds NOTHING else: no payability change (unlike Payable<T>), no dispatch change. Every form is
+    // therefore byte-identical to its bare twin BY CONSTRUCTION - the identical code path decides it -
+    // and every OA guard comes for free from the bare-form checks that follow, all of which already
+    // match solc (probed at 0.8.35):
+    //   External<u256> on a receive  -> unwraps to `receive(): u256`      -> JETH384 (solc: "Receive
+    //                                   ether function cannot return values")
+    //   External<T> on a param'd receive -> `receive(x: u256)`            -> JETH384 (solc: "Receive
+    //                                   ether function cannot take parameters")
+    //   External<void> on fallback(bytes) -> `fallback(input: bytes): void` -> JETH384 (solc: a fallback
+    //                                   taking bytes MUST return bytes)
+    //   External<Payable<void>>      -> unwraps to a `Payable<void>` RETURN TYPE (the marker block is
+    //                                   not re-entered) -> not a real type -> rejected downstream.
     if (
       member.type &&
       ts.isTypeReferenceNode(member.type) &&
@@ -6247,19 +6263,17 @@ export class Analyzer {
     ) {
       const mk = member.type.typeName.text;
       const args = member.type.typeArguments;
-      if (mk === 'External') {
-        this.diags.error(member.type, 'JETH386', `a @${kind} entry is not an ABI function; External<T> has no meaning here (a ${kind} is reached by the EVM dispatch, not a selector)`);
-        return undefined;
-      }
-      if (kind === 'receive') {
+      // Payable<T> on a receive is redundant-and-rejected BEFORE the arity check (unchanged order):
+      // `receive(): Payable<...>` is JETH385 whatever the argument count.
+      if (mk === 'Payable' && kind === 'receive') {
         this.diags.error(member.type, 'JETH385', '@receive is always payable; drop the redundant Payable<T>');
         return undefined;
       }
       if (!args || args.length !== 1) {
-        this.diags.error(member.type, 'JETH352', `Payable<T> takes exactly one return type (Payable<void>, or Payable<bytes> for the data-passing fallback)`);
+        this.diags.error(member.type, 'JETH352', `${mk}<T> takes exactly one return type (${mk}<void>, or ${mk}<bytes> for the data-passing fallback)`);
         return undefined;
       }
-      payable = true;
+      if (mk === 'Payable') payable = true;
       (member as unknown as { type?: ts.TypeNode }).type = args[0];
     }
     // P1-21: @virtual / @override are ALLOWED on a @receive/@fallback (solc permits `receive() external

@@ -75,10 +75,13 @@ describe('native receive / fallback (a method named receive/fallback = the speci
     // the data-passing payable form too.
     expect(bc(`class C { fallback(input: bytes): Payable<bytes> { return input; } }`))
       .toBe(bc(`class C { fallback(input: bytes): Payable<bytes> { return input; } }`));
-    // a receive is ALWAYS payable - Payable<T> there is redundant (mirrors the @payable JETH385 rule);
-    // External<T> is meaningless on a special entry (not an ABI function).
+    // a receive is ALWAYS payable - Payable<T> there is redundant (mirrors the @payable JETH385 rule).
     expect(codes(`class C { total: u256; receive(): Payable<void> { this.total = msg.value; } }`)).toContain('JETH385');
-    expect(codes(`class C { fallback(): External<void> { } }`)).toContain('JETH386');
+    // FALLBACK-EXTERNAL-MARKER lift: External<T> on a special entry is a REDUNDANT SYNONYM of the bare
+    // form (solc REQUIRES `external` there), accepted and byte-identical to the bare twin - it used to
+    // be JETH386. Full matrix in test/lift-fallback-external-marker.test.ts.
+    expect(codes(`class C { fallback(): External<void> { } }`)).toEqual([]);
+    expect(bc(`class C { fallback(): External<void> { } }`)).toBe(bc(`class C { fallback(): void { } }`));
   });
 
   it('the `// use @decorators` pragma is banned in native-only mode (JETH480)', () => {
