@@ -36,6 +36,7 @@ import {
   isFixedValueWordArray,
   isAggregateLeafArray,
   isStaticStructFixedLeafArray,
+  isStaticStructFixedElemDynArray,
   isDynBytesFixedLeafArray,
   isDynLeafFixedArray,
   isDynStructFixedLeafArray,
@@ -14728,7 +14729,13 @@ export class Analyzer {
         isStaticStructFixedLeafArray(declared) ||
         isDynBytesFixedLeafArray(declared) ||
         isDynStructFixedLeafArray(declared) ||
-        (isStaticStructAnyLeafArray(declared) && declared.length === undefined) ||
+        // Batch A (dynamic outer): `Arr<P,N>[]` - a dyn outer over EXACTLY ONE fixed static-struct-array
+        // level. Formerly `isStaticStructAnyLeafArray(declared) && declared.length === undefined`, which
+        // ALSO admitted a DEEPER fixed level (`Arr<Arr<P,N>,M>[]`) whose read path and ABI encoder disagree
+        // about the memory image - a live MISCOMPILE (all-zero encode payload / a raw 0x140 pointer out of
+        // `m[0][0][0].a`), NOT merely an unlifted shape. isStaticStructFixedElemDynArray is the exact
+        // verified-sound boundary; the deeper chain is the B-21 member-layout family (KEEP THE REJECT).
+        isStaticStructFixedElemDynArray(declared) ||
         // Batch C (F-CONSUMERS c2): a DYNAMIC-outer array of a FUNCREF-BEARING dyn-struct element
         // (Fd[]): the same pointer-headed [len][per-element pointer] image a P[] local uses (each
         // element -> a per-element dyn-struct image; a funcref field is one inline id word, laid out

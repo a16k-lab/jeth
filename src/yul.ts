@@ -6920,6 +6920,22 @@ ${indent(runtime, 6)}
       out.push(`mstore(0x40, add(${p}, ${hw * 32}))`);
       return p;
     }
+    // A FIXED array element whose leaf is a STATIC STRUCT (Arr<P,N>, Arr<Arr<P,N>,M>) is POINTER-HEADED,
+    // NOT a dynamic array: isPointerHeadedStaticElem already routes it here (so `new Array<Arr<P,N>>(n)`
+    // takes zeroInitNestedMemArray's pointer branch), but its zero image is N absolute-pointer words - one
+    // per element, each pointing to a fresh ALL-ZERO P block - with NO [len] header. WITHOUT this case it
+    // fell through to the dynamic tail below and got a single [len=0] word, so every outer slot pointed at
+    // a ONE-WORD image where an N-pointer block was expected: `m[i][j] = P(..)` then stored its fresh P
+    // pointer INTO that word and `m[i][j].f` read the raw POINTER back (the 0x120 witness), a whole-array
+    // return/abi.encode leaked a stale word, and two inner elements ALIASED each other. (The bug was
+    // INVISIBLE whenever every inner was whole-assigned - `m[i] = q` overwrites the bogus pointer outright,
+    // which is why the storage-multihop mc3/mc4w/mc5w tests were already byte-identical.) emptyFixedDynImage
+    // builds exactly this pointer block, recursing for a deeper fixed level and bottoming out on the
+    // static-struct branch above. A VALUE-leaf fixed array (Arr<u256,N>) never reaches here - it is INLINE
+    // (isInlineValueWordElem), and a DYNAMIC array element keeps the [len=0] tail below, which is correct.
+    if (t.kind === 'array' && t.length !== undefined && isStaticStructFixedLeafArray(t)) {
+      return this.emptyFixedDynImage(t as JethType & { kind: 'array' }, out);
+    }
     const p = this.fresh();
     out.push(`let ${p} := mload(0x40)`);
     out.push(`mstore(${p}, 0)`);

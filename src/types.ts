@@ -558,6 +558,30 @@ export function isStaticStructAnyLeafArray(t: JethType): boolean {
   return false;
 }
 
+/** A DYNAMIC-outer array whose element is EXACTLY ONE FIXED static-struct-array level: `Arr<P,N>[]`
+ *  (P a STATIC struct) and nothing deeper. This is the ONLY mixed fixed/dynamic static-struct chain whose
+ *  memory image JETH and solc agree on end-to-end, so it is the exact admitted set of the local-decl gate
+ *  (a GATE predicate - deliberately NOT isStaticStructAnyLeafArray, whose contract restricts it to the codec
+ *  dispatch sites). The image is [len][one absolute-pointer word per element], each pointing to an N-pointer
+ *  Arr<P,N> block whose slots point to per-element P blocks - identical to solc's `P[N][]`, and verified
+ *  byte-identical (deploy+run+decode) across element read/write, whole-struct element assign, elementwise
+ *  field assign, whole-array return, abi.encode, for-of, the storage / calldata / memory-param / array-literal
+ *  producers, and `new Array<Arr<P,N>>(n)` (whose zero image emptyInnerImage builds via emptyFixedDynImage).
+ *
+ *  A DEEPER fixed level (`Arr<Arr<P,N>,M>[]`) is EXCLUDED and must stay rejected: at that depth JETH's element
+ *  READ path and its ABI ENCODER disagree about the image (witness on this base, `In[2][2][] memory m` built by
+ *  `new In[2][2][](1)` with all four leaves written: the chained read `m[0][0][0].a` and abi.encode(m) cannot
+ *  both be right - the encoder emits all-zero payload words where solc emits 7,0,8,8,9,9,6,6, and the storage
+ *  twin `let m: Arr<Arr<In,2>,2>[] = this.st` leaks a raw pointer 0x140 out of `m[0][0][0].a`). That is the
+ *  B-21 member-layout disagreement (abiHeadWords conflating ABI head words with the memory word offset), which
+ *  carries a standing USER RULING to KEEP THE REJECT rather than undertake the ~176-site rework. */
+export function isStaticStructFixedElemDynArray(t: JethType): boolean {
+  if (t.kind !== 'array' || t.length !== undefined) return false; // DYNAMIC outer
+  const e = t.element;
+  if (e.kind !== 'array' || e.length === undefined) return false; // exactly one FIXED level
+  return e.element.kind === 'struct' && isStaticType(e.element); // bottoming out on a STATIC struct
+}
+
 /** True if `t` is a DYNAMIC array whose ultimate leaf (descending through any number of dynamic-array
  *  nesting levels) is a bytes/string byte-sequence: bytes[], string[], bytes[][], string[][][], ...
  *  Used to gate B4 (nested-dynamic-leaf arrays). A value leaf, static-struct leaf, or dyn-struct leaf
