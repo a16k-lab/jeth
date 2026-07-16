@@ -819,6 +819,13 @@ export interface ContractIR {
   // instantiable). When set, the analyzer has ALREADY validated every member/body, and compileUnit skips
   // Yul emission + the backend and returns empty creation/runtime bytecode. Absent for a normal contract.
   nonDeployable?: boolean;
+  // MULTI-CONTRACT FILE: how many DEPLOYABLE contract classes this translation unit declares (the
+  // analyzer's findContractClasses list length). solc compiles such a file into one SEPARATE artifact per
+  // contract; JETH mirrors that by analyzing the unit once PER ROUTE (see compileUnit), and this count is
+  // how the driver learns how many routes to run after analyzing route 0. Always >= 1 on the deployed
+  // path; absent on the non-deployable (abstract/interface-only) path, which stays single-route (its own
+  // multi-leaf JETH041 is retained).
+  routeCount?: number;
 }
 
 /** Phase B: an external (delegatecall) library compiled to its OWN deployable Yul object. `external`

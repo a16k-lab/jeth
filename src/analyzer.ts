@@ -563,6 +563,22 @@ export class Analyzer {
     // with the bundle's segment map for node -> file attribution. Used to scope `self`-convention ATTACHED
     // calls (which name no library identifier) to each file's import edges.
     private readonly importScope?: ImportScope,
+    // MULTI-CONTRACT FILE: which DEPLOYABLE contract class (index into findContractClasses' document-order
+    // list) this run analyzes. solc emits one artifact per contract in a file; the driver re-parses and
+    // re-analyzes the unit once per route, passing the route index here. Defaults to 0 = the first
+    // deployable, i.e. the exact single-contract behaviour.
+    //
+    // *** WHY THE DRIVER MUST RE-PARSE PER ROUTE - DO NOT "OPTIMIZE" THIS AWAY ***
+    // analyzeContract MUTATES THE SHARED AST BY DESIGN: it strips the External/Payable/View/Pure return
+    // markers off the member `type` nodes (and the Visible<T> field marker, and the receive/fallback
+    // markers) IN PLACE. Re-analyzing the SAME ts.SourceFile for a second route therefore sees an
+    // already-stripped tree and silently demotes every marker-carrying member of a SHARED abstract base to
+    // INTERNAL - route 1's contract loses those functions from its dispatcher (wrong ABI, wrong bytes),
+    // while `get` accessors survive (externality comes from the keyword), making the damage SILENT and
+    // PARTIAL. A fresh Analyzer per route does NOT fix this - the hazard is in the TREE, not the instance.
+    // The driver hands each route its OWN freshly-parsed AST; N extra parses are negligible (solc's Yul
+    // backend is ~92% of a compile).
+    private readonly routeIndex: number = 0,
   ) {}
 
   /** Multi-file: the ORIGINAL file containing `node` (via the bundle segment map), or undefined when
@@ -745,24 +761,28 @@ export class Analyzer {
     if (classes.length === 0) {
       return this.analyzeNonDeployableUnit();
     }
-    if (classes.length > 1) {
-      this.diags.error(classes[1]!, 'JETH041', 'multiple @contract classes per file are not supported in the MVP');
-    }
+    // MULTI-CONTRACT FILE (JETH041 lifted on the DEPLOYED path): a file may declare N deployable contracts;
+    // solc compiles it into one SEPARATE artifact per contract. This run analyzes exactly ONE of them - the
+    // route the driver selected - and reports the total so the driver can run the remaining routes, each on
+    // its OWN freshly-parsed AST (see the routeIndex doc for why re-parsing is mandatory). A route index past
+    // the list is clamped to 0 (defensive: the driver derives the count from this same predicate).
+    const route = classes[this.routeIndex] ?? classes[0]!;
     // Inheritance: register EVERY contract class (the deployed @contract + any @abstract bases) so the
     // C3 linearization can be resolved, then flatten the deployed contract's base chain into one merged
     // member ordering fed to the existing analyze/emit pipeline (only the @contract deploys).
     this.registerContractClasses();
     this.collectContractMethods(); // CONTRACT-VALUE-CALL: external-method registry, BEFORE marker stripping
     this.buildFileLevelErrorEvents(); // resolve file-level error/event member types now contractRefNames() is complete
-    const lin = this.linearize(classes[0]!);
+    const lin = this.linearize(route);
     if (!lin) return undefined; // a C3-impossible base order was reported
-    const ir = this.analyzeContract(classes[0]!, lin);
+    const ir = this.analyzeContract(route, lin);
+    if (ir) ir.routeCount = classes.length;
     // DUP-ID-ABSTRACT: the deployed contract + its linearization were member-checked by analyzeContract;
     // run the own-body duplicate-identifier check over the top-level classes NOT in that set (a stray /
     // sibling abstract off the deployed chain), which the merged path never touches (solc rejects a
     // duplicate at the declaring contract regardless of use).
     const analyzed = new Set(lin);
-    analyzed.add(classes[0]!);
+    analyzed.add(route);
     this.checkStandaloneClassMemberDuplicates(analyzed);
     // LAST: if the analyzer accepted the source but TS saw a (non-1011) syntax error, the AST was
     // silently error-recovered into something else (BYTE-SLICE-MC) - reject instead of miscompiling.
@@ -2015,9 +2035,12 @@ export class Analyzer {
     // single-contract path (which likewise calls analyzeContract once).
     const extended = this.extendedClassNames();
     const leaves = abstractClasses.filter((ac) => ac.name && !extended.has(ac.name.text));
-    // MVP scope (mirrors JETH041): two or more INDEPENDENT abstract contracts in one file would require
-    // running analyzeContract more than once, which accumulates shared selector/registry state. solc
-    // accepts such a file, so this is a SAFE over-rejection - a clean reject, never a wrong accept.
+    // MVP scope (mirrors JETH041): two or more INDEPENDENT abstract contracts in one file. The DEPLOYED
+    // path now handles N contracts per file (the driver re-parses and re-analyzes once per route), so the
+    // mechanism to lift this exists - but an abstract-only unit emits NO bytecode, so there is nothing to
+    // emit per route and no artifact to prove byte-identical against solc. Deliberately KEPT as a SAFE
+    // over-rejection (solc accepts such a file): a clean reject, never a wrong accept. Lifting it would be
+    // a separate, independently-verified change.
     if (leaves.length > 1) {
       this.diags.error(leaves[1]!, 'JETH041', 'multiple contract classes per file are not supported in the MVP');
       return undefined;
@@ -28890,6 +28913,10 @@ export function analyze(
   diags: DiagnosticBag,
   diamond?: { name: string; variant: 'array' | 'packed' | 'solidstate' },
   importScope?: ImportScope,
+  // MULTI-CONTRACT FILE: the deployable-contract index to analyze (document order). The caller MUST pass a
+  // FRESHLY PARSED sourceFile for each route - analyzeContract strips return/field markers off the shared
+  // AST in place (see Analyzer's routeIndex doc).
+  routeIndex = 0,
 ): ContractIR | undefined {
-  return new Analyzer(sourceFile, diags, diamond, importScope).analyze();
+  return new Analyzer(sourceFile, diags, diamond, importScope, routeIndex).analyze();
 }

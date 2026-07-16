@@ -90,8 +90,14 @@ describe('mode detection + strictness', () => {
     expect(codes(`class C { get f():External<u256>{ return 1n; } }\n// use @decorators`)).toEqual([]);
   });
 
-  it('exactly-one-contract still holds for native bare classes (two -> JETH041)', () => {
-    expect(codes(`class A { get f():External<u256>{ return 1n; } } class B { g():External<u256>{ return 2n; } }`)).toContain('JETH041');
+  // MULTI-CONTRACT FILE: two unrelated bare classes are two contracts - and that is now ACCEPTED, one
+  // artifact per contract (solc's own model), so the JETH041 this used to assert is gone from the deployed
+  // path. See test/multi-contract-file.test.ts for the full per-contract parity + the gates that remain.
+  // (The old probe's `class B { g(): External<u256> { return 2n; } }` is read-only, so it independently
+  // trips JETH352 - `get` - which JETH041 used to mask; spelled correctly here.)
+  it('two native bare classes are two contracts -> one artifact each', () => {
+    const r = compile(`class A { get f():External<u256>{ return 1n; } } class B { get g():External<u256>{ return 2n; } }`, { fileName: 'C.jeth' });
+    expect(r.contracts?.map((c) => c.contractName)).toEqual(['A', 'B']);
   });
 
   it('#3: `@hidden` is a hard error (JETH440) in native mode; the decorator pragma is banned (JETH480)', () => {
@@ -133,8 +139,12 @@ describe('native-mode hardening (verification sweep)', () => {
     const der = `class C extends Base { constructor(){ this.x=7n; } @override get foo():External<u256>{ return this.x+2n; } }`;
     // a bare concrete base is inlined into its leaf, byte-identical to spelling the base `abstract`.
     expect(bc(`${base('')} ${der}`)).toBe(bc(`${base('abstract')} ${der}`));
-    // two UNRELATED bare classes are still two contracts.
-    expect(codes(`class A { get f():External<u256>{ return 1n; } } class B { g():External<u256>{ return 2n; } }`)).toContain('JETH041');
+    // two UNRELATED bare classes are still two contracts - now emitted as one artifact each (the
+    // multi-contract-file lift), which is exactly what distinguishes them from the inlined base above.
+    const two = compile(`class A { get f():External<u256>{ return 1n; } } class B { get g():External<u256>{ return 2n; } }`, { fileName: 'C.jeth' });
+    expect(two.contracts?.map((c) => c.contractName)).toEqual(['A', 'B']);
+    // ... whereas the extended base above is INLINED into its leaf: one contract, one artifact.
+    expect(compile(`${base('')} ${der}`, { fileName: 'C.jeth' }).contracts).toBeUndefined();
   });
 
   it('F1/F2: the banned decorator pragma is found across line-ending + benign spacing variants', () => {

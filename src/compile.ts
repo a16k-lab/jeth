@@ -53,6 +53,12 @@ export interface CompileResult {
   // address. Absent (undefined) for an ordinary single-contract compile (backward compatible).
   libraries?: CompiledLibrary[];
   linkReferences?: LinkReferences;
+  // MULTI-CONTRACT FILE: present ONLY when the source declares MORE THAN ONE deployable contract, in which
+  // case solc emits one separate artifact per contract and so does JETH. Holds every contract's full
+  // artifact in DOCUMENT ORDER, with `contracts[0] === this result object` (identity) - the singular fields
+  // above are always the FIRST contract's, so an existing single-contract caller is completely unaffected.
+  // Absent (undefined) for a single-contract file: check `contracts` to detect the multi-contract case.
+  contracts?: CompileResult[];
 }
 
 export interface CompileOptions {
@@ -448,6 +454,11 @@ function collectImportedMemberTypeCollisions(
   segments: BundleSegment[],
   renamesByFile: Map<string, Map<string, string>>,
   diags: DiagnosticBag,
+  // MULTI-CONTRACT FILE: which deployable contract is THIS route (document order), mirroring the analyzer's
+  // routeIndex. The scan is scoped to the route's own class + chain, so with N deployables in a bundle each
+  // route must scope from ITS OWN class - a hard-coded classes[0] would judge route 1 against route 0's
+  // member namespace and emit a JETH133 the single-file twin never gives (and miss route 1's real one).
+  routeIndex = 0,
 ): Map<ts.ClassDeclaration, Set<string>> {
   const fired = new Map<ts.ClassDeclaration, Set<string>>();
   if (renamesByFile.size === 0) return fired;
@@ -569,7 +580,13 @@ function collectImportedMemberTypeCollisions(
   const anyDeployed = decoratedDeployables.length > 0 || nativeBareDeployables.length > 0;
   let routeClass: ts.ClassDeclaration | undefined;
   if (anyDeployed) {
-    routeClass = decoratedDeployables[0] ?? nativeBareDeployables[0];
+    // MULTI-CONTRACT FILE: the analyzer's findContractClasses applies the decorated-deployables phase and
+    // ONLY falls back to the native bare classes when that phase found NOTHING - so the route LIST is one
+    // phase or the other, never a concatenation. Index into whichever phase won, exactly as the analyzer's
+    // classes[routeIndex] does. Clamped to [0] for safety (the driver derives the count from routeCount,
+    // which comes from this same predicate).
+    const routes = decoratedDeployables.length > 0 ? decoratedDeployables : nativeBareDeployables;
+    routeClass = routes[routeIndex] ?? routes[0];
   } else {
     const leaves = abstractClasses.filter(
       (ac) => ac.name && !extendedFinal.has(finalNameIn(fileOf(ac.name), ac.name.text)),
@@ -1105,7 +1122,38 @@ function compileGuarded(source: string, opts: CompileOptions = {}): CompileResul
   }
 }
 
+/** MULTI-CONTRACT FILE (JETH041 lifted on the deployed path): solc compiles a file declaring N contracts
+ *  into N SEPARATE artifacts, one per contract, each seeing the same file-level scope. compileUnit is the
+ *  driver: it compiles route 0 (which reports how many deployable contracts the unit declares), then runs
+ *  the remaining routes and returns them in DOCUMENT ORDER.
+ *
+ *  API is ADDITIVE. Every singular field of the returned result stays route 0's artifact (the first
+ *  deployable contract in document order) exactly as before, and `contracts` is:
+ *    - UNDEFINED for a single-contract file (the overwhelmingly common case) - so no existing caller sees
+ *      any change whatsoever;
+ *    - the full document-order list otherwise, with `contracts[0] === the returned result object` itself.
+ *
+ *  *** EACH ROUTE GETS ITS OWN FULL PIPELINE RUN, INCLUDING A FRESH PARSE. *** This is not an accident of
+ *  structure - it is the correctness requirement. The analyzer strips the External/Payable/View/Pure return
+ *  markers (and Visible<T> field markers, and receive/fallback markers) off the AST member nodes IN PLACE,
+ *  so a second route re-analyzing the SAME tree silently demotes every marker-carrying member of a SHARED
+ *  abstract base to internal, dropping those functions from route 1's dispatcher. Re-parsing is the whole
+ *  fix; it is cheap (solc's Yul backend dominates a compile at ~92%). */
 function compileUnit(source: string, opts: CompileOptions): CompileResult {
+  const first = compileRoute(source, opts, 0);
+  const routeCount = first.ir.routeCount ?? 1;
+  if (routeCount <= 1) return first; // single-contract file: `contracts` stays undefined, result unchanged
+  const contracts: CompileResult[] = [first];
+  for (let i = 1; i < routeCount; i++) contracts.push(compileRoute(source, opts, i));
+  // contracts[0] IS `first` (identity, not a copy), so a caller may use either handle interchangeably.
+  first.contracts = contracts;
+  return first;
+}
+
+/** Compile ONE deployable contract (`routeIndex`, document order) out of `source`, front-to-back: parse,
+ *  the full front-end, analysis of that route only, Yul emission and the backend. Every call re-parses, so
+ *  no route can observe another route's in-place AST edits (see compileUnit). */
+function compileRoute(source: string, opts: CompileOptions, routeIndex: number): CompileResult {
   const fileName = opts.fileName ?? 'contract.jeth';
 
   // Stage 2: the legacy `// use @decorators` mode was removed - JETH is native-syntax only. A source still
@@ -1227,7 +1275,7 @@ function compileUnit(source: string, opts: CompileOptions): CompileResult {
   // for exactly those pairs so the companion code list matches the single-file twin's (see the pre-pass doc).
   const memberCollisionRejects =
     bundleSegments && bundleRenames
-      ? collectImportedMemberTypeCollisions(parsed.sourceFile, bundleSegments, bundleRenames, diags)
+      ? collectImportedMemberTypeCollisions(parsed.sourceFile, bundleSegments, bundleRenames, diags, routeIndex)
       : undefined;
   // v3 module scoping FIRST: rename each dep's top-level declarations (and every file's import bindings)
   // to their `$mN$` scoped names, so every later pass (the # mangle, the static-member rewrite, all name
@@ -1261,6 +1309,7 @@ function compileUnit(source: string, opts: CompileOptions): CompileResult {
     diags,
     dia.expanded && dia.name ? { name: dia.name, variant: dia.variant ?? 'array' } : undefined,
     bundleSegments && bundleVisibility ? { segments: bundleSegments, visibleByFile: bundleVisibility } : undefined,
+    routeIndex,
   );
 
   // Surface all front-end diagnostics together.
