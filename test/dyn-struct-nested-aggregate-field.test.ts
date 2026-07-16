@@ -46,9 +46,9 @@ describe('Batch B: dyn-struct with a nested static-aggregate field - byte-identi
   it('static fixed-array field: construct / read p.fa[j] (const + runtime + OOB Panic 0x32) / encode', async () => {
     const J = `type S = { a: u256; fa: Arr<u256, 3>; b: bytes; };
     class C {
-      get enc(): External<bytes> { let s: S = S(1n, [7n, 8n, 9n], bytes("z")); return abi.encode(s); }
-      get rd(): External<u256> { let s: S = S(1n, [7n, 8n, 9n], bytes("z")); return s.fa[0n] + s.fa[2n]; }
-      get dyn(i: u256): External<u256> { let s: S = S(1n, [7n, 8n, 9n], bytes("z")); return s.fa[i]; } }`;
+      get enc(): External<bytes> { let s: S = S(1n, [u256(7n), 8n, 9n], bytes("z")); return abi.encode(s); }
+      get rd(): External<u256> { let s: S = S(1n, [u256(7n), 8n, 9n], bytes("z")); return s.fa[0n] + s.fa[2n]; }
+      get dyn(i: u256): External<u256> { let s: S = S(1n, [u256(7n), 8n, 9n], bytes("z")); return s.fa[i]; } }`;
     const Sol = `struct S { uint256 a; uint256[3] fa; bytes b; }
     contract C {
       function enc() external pure returns(bytes memory){ uint256[3] memory pp;pp[0]=7;pp[1]=8;pp[2]=9; S memory s=S(1,pp,bytes("z")); return abi.encode(s); }
@@ -62,8 +62,8 @@ describe('Batch B: dyn-struct with a nested static-aggregate field - byte-identi
     type Mid = { q: u256; inner: In; };
     type S = { fa: Arr<u256, 2>; a: u256; outer: Mid; b: bytes; };
     class C {
-      get read(): External<u256> { let s: S = S([10n, 20n], 1n, Mid(5n, In(3n, 4n)), bytes("z")); return s.fa[1n] + s.a + s.outer.q + s.outer.inner.x + s.outer.inner.y; }
-      get enc(): External<bytes> { let s: S = S([10n, 20n], 1n, Mid(5n, In(3n, 4n)), bytes("z")); return abi.encode(s); } }`;
+      get read(): External<u256> { let s: S = S([u256(10n), 20n], 1n, Mid(5n, In(3n, 4n)), bytes("z")); return s.fa[1n] + s.a + s.outer.q + s.outer.inner.x + s.outer.inner.y; }
+      get enc(): External<bytes> { let s: S = S([u256(10n), 20n], 1n, Mid(5n, In(3n, 4n)), bytes("z")); return abi.encode(s); } }`;
     const Sol = `struct In { uint256 x; uint256 y; }
     struct Mid { uint256 q; In inner; }
     struct S { uint256[2] fa; uint256 a; Mid outer; bytes b; }

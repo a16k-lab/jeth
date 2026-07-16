@@ -17,10 +17,10 @@ const accepts = (src: string) => expect(codes(src)).toEqual([]);
 describe('AUDIT OA-1: a different-size fixed-array alias in a local-decl init (solc: not convertible)', () => {
   it('rejects small->large and large->small; same-size alias and correct-size literal still accept', () => {
     // The alias would let an in-bounds index read/write PAST the source image (an OOB memory leak).
-    rejects(`class C { get f(): External<u256> { let a: Arr<u256,2> = [1n,2n]; let b: Arr<u256,3> = a; return b[2]; } }`);
-    rejects(`class C { get f(): External<u256> { let a: Arr<u256,3> = [1n,2n,3n]; let b: Arr<u256,2> = a; return b[0]; } }`);
-    accepts(`class C { get f(): External<u256> { let a: Arr<u256,2> = [5n,6n]; let b: Arr<u256,2> = a; return b[1]; } }`);
-    accepts(`class C { get f(): External<u256> { let b: Arr<u256,3> = [1n,2n,3n]; return b[2]; } }`);
+    rejects(`class C { get f(): External<u256> { let a: Arr<u256,2> = [u256(1n),2n]; let b: Arr<u256,3> = a; return b[2]; } }`);
+    rejects(`class C { get f(): External<u256> { let a: Arr<u256,3> = [u256(1n),2n,3n]; let b: Arr<u256,2> = a; return b[0]; } }`);
+    accepts(`class C { get f(): External<u256> { let a: Arr<u256,2> = [u256(5n),6n]; let b: Arr<u256,2> = a; return b[1]; } }`);
+    accepts(`class C { get f(): External<u256> { let b: Arr<u256,3> = [u256(1n),2n,3n]; return b[2]; } }`);
   });
 });
 

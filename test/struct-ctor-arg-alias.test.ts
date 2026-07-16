@@ -168,7 +168,7 @@ describe('W6A: static-inline captures REJECT cleanly (JETH465) instead of the ol
     type S = { ps: Arr<P, 2>; z: u256 };
     class C { get f(): External<u256> { let p: P = P(5n); let q: P = P(6n); let s: S = S([p, q], 1n); p.a = 9n; return s.ps[0n].a; } }`)).toContain('JETH465');
     expect(codes(`type S = { a: u256; xs: Arr<u256, 2> };
-    class C { get f(): External<u256> { let xs: Arr<u256, 2> = [1n, 2n]; let s: S = S(1n, xs); xs[0n] = 9n; return s.xs[0n]; } }`)).toContain('JETH465');
+    class C { get f(): External<u256> { let xs: Arr<u256, 2> = [u256(1n), 2n]; let s: S = S(1n, xs); xs[0n] = 9n; return s.xs[0n]; } }`)).toContain('JETH465');
   });
   it('call-result source, ctor-as-internal-arg, capture inside a transient encode arg', () => {
     expect(codes(`${HDR}class C {

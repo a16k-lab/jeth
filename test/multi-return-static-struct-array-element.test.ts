@@ -30,7 +30,7 @@ class C {
   get fIn3(): External<[u256, Arr<In3,2>]> { let m: Arr<In3,2>[] = [[In3(1n,2n,3n),In3(4n,5n,6n)]]; return [42n, m[0n]]; }
   get fDeep(): External<[u256, Arr<Arr<In,2>,2>]> { let m: Arr<Arr<Arr<In,2>,2>,2> = [[[In(1n,2n),In(3n,4n)],[In(5n,6n),In(7n,8n)]],[[In(21n,22n),In(23n,24n)],[In(25n,26n),In(27n,28n)]]]; return [42n, m[1n]]; }
   get fMixed(): External<[u256, Arr<In,2>, string]> { let m: Arr<Arr<In,2>,2> = [[In(1n,2n),In(3n,4n)],[In(5n,6n),In(7n,8n)]]; return [42n, m[1n], "hello world"]; }
-  get fValElem(): External<[u256, Arr<u256,2>]> { let m: Arr<Arr<u256,2>,2> = [[31n,32n],[33n,34n]]; return [42n, m[1n]]; }
+  get fValElem(): External<[u256, Arr<u256,2>]> { let m: Arr<Arr<u256,2>,2> = [[u256(31n),32n],[u256(33n),34n]]; return [42n, m[1n]]; }
   get fValElemDyn(): External<[u256, Arr<u256,2>]> { let m: Arr<u256,2>[] = [[31n,32n],[33n,34n]]; return [42n, m[1n]]; }
   get fTwoElems(): External<[Arr<In,2>, u256, Arr<In,2>]> { let m: Arr<Arr<In,2>,2> = [[In(1n,2n),In(3n,4n)],[In(5n,6n),In(7n,8n)]]; return [m[0n], 5n, m[1n]]; }
   get ctrlLocal(): External<[u256, Arr<In,2>]> { let a: Arr<In,2> = [In(15n,16n),In(17n,18n)]; return [42n, a]; }

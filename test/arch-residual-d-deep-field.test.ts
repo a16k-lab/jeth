@@ -23,7 +23,7 @@ const wrapBytes = (blob: string) => {
   return '0x' + W(0x20n) + W(BigInt(len)) + pad;
 };
 
-const MK = `[P(1n,Q(2n,3n),[4n,5n],[6n,7n,8n]),P(11n,Q(12n,13n),[14n,15n],[16n,17n,18n])]`;
+const MK = `[P(1n,Q(2n,3n),[u256(4n),5n],[6n,7n,8n]),P(11n,Q(12n,13n),[u256(14n),15n],[16n,17n,18n])]`;
 const J = `type Q = { m: u256; n: u256; }; type P = { a: u256; q: Q; pre: Arr<u256,2>; t: Arr<u8,3>; };
 class C {
   get a(): External<u256> { let xs: P[] = ${MK}; return xs[1n].a; }
@@ -82,7 +82,7 @@ describe('Residual D: deep sub-field read on a memory-array struct element (lite
       }
     };
     expect(
-      codes(`type P = { a: u256; pre: Arr<u256,2>; }; class C { get f(j: u256): External<u256> { let xs: P[] = [P(1n,[2n,3n])]; return xs[0n].pre[j]; } }`),
+      codes(`type P = { a: u256; pre: Arr<u256,2>; }; class C { get f(j: u256): External<u256> { let xs: P[] = [P(1n,[u256(2n),3n])]; return xs[0n].pre[j]; } }`),
     ).toEqual([]);
   });
 });

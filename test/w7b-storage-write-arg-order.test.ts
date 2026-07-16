@@ -262,7 +262,7 @@ describe('W7B: storage-write argument order matches solc 0.8.35', () => {
         gg: Arr<u256, 2>[];
         rd(): u256 { return this.p.a[0n]; }
         rg(): u256 { return this.gg.length; }
-        f(): External<u256> { this.p = P([5n, 6n], 0n); this.p = P([7n, this.rd()], this.rd()); return this.p.a[1n] * 10n + this.p.z; }
+        f(): External<u256> { this.p = P([u256(5n), 6n], 0n); this.p = P([7n, this.rd()], this.rd()); return this.p.a[1n] * 10n + this.p.z; }
         g(): External<u256> { this.gg.push([this.rg(), 9n]); return this.gg[0n][0n] * 10n + this.gg.length; } }`,
       `struct P { uint256[2] a; uint256 z; }
       contract C {

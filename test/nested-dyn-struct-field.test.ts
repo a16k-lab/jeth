@@ -111,7 +111,7 @@ describe('Edge A: nested dynamic-struct leaf field read/write - byte-identical t
 
   it('offset math: a static-aggregate field precedes the nested struct', async () => {
     await eqCalls(
-      'type T = { n: u256 }; type S = { fa: Arr<u256,2>; t: T }; class C { get go(): External<u256> { let v: S=S([10n,20n],T(30n)); v.t.n = 99n; return v.t.n + v.fa[0n] + v.fa[1n]; } }',
+      'type T = { n: u256 }; type S = { fa: Arr<u256,2>; t: T }; class C { get go(): External<u256> { let v: S=S([u256(10n),20n],T(30n)); v.t.n = 99n; return v.t.n + v.fa[0n] + v.fa[1n]; } }',
       'struct T { uint256 n; } struct S { uint256[2] fa; T t; } contract C { function go() external pure returns(uint256){ S memory v=S([uint256(10),20],T(30)); v.t.n=99; return v.t.n+v.fa[0]+v.fa[1]; } }',
       [['go()', '']],
     );

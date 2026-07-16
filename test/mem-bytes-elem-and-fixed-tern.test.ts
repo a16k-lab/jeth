@@ -120,7 +120,7 @@ describe('P0-35b: memory bytes[]/string[] single-byte element write vs Solidity'
 describe('P1-13: fixed value-array ternary lvalue vs Solidity', () => {
   it('(c ? xs : ys)[0] = 9 writes THROUGH to the selected array (both branches)', async () => {
     await diff(
-      `class C { get f(c: bool): External<u256> { const xs: Arr<u256,3> = [1n,2n,3n]; const ys: Arr<u256,3> = [4n,5n,6n]; (c ? xs : ys)[0n] = 9n; return xs[0n]*1000n + ys[0n]; } }`,
+      `class C { get f(c: bool): External<u256> { const xs: Arr<u256,3> = [u256(1n),2n,3n]; const ys: Arr<u256,3> = [u256(4n),5n,6n]; (c ? xs : ys)[0n] = 9n; return xs[0n]*1000n + ys[0n]; } }`,
       `contract C { function f(bool c) external pure returns (uint256){ uint256[3] memory xs=[uint256(1),2,3]; uint256[3] memory ys=[uint256(4),5,6]; (c?xs:ys)[0]=9; return xs[0]*1000+ys[0]; } }`,
       [{ sig: 'f(bool)', args: W(1n) }, { sig: 'f(bool)', args: W(0n) }],
     );
@@ -128,7 +128,7 @@ describe('P1-13: fixed value-array ternary lvalue vs Solidity', () => {
 
   it('write to a non-zero index with a runtime value', async () => {
     await diff(
-      `class C { get f(c: bool, v: u256): External<u256> { const xs: Arr<u256,3> = [1n,2n,3n]; const ys: Arr<u256,3> = [4n,5n,6n]; (c ? xs : ys)[2n] = v; return xs[2n]*1000n + ys[2n]; } }`,
+      `class C { get f(c: bool, v: u256): External<u256> { const xs: Arr<u256,3> = [u256(1n),2n,3n]; const ys: Arr<u256,3> = [u256(4n),5n,6n]; (c ? xs : ys)[2n] = v; return xs[2n]*1000n + ys[2n]; } }`,
       `contract C { function f(bool c, uint256 v) external pure returns (uint256){ uint256[3] memory xs=[uint256(1),2,3]; uint256[3] memory ys=[uint256(4),5,6]; (c?xs:ys)[2]=v; return xs[2]*1000+ys[2]; } }`,
       [{ sig: 'f(bool,uint256)', args: W(1n) + W(77n) }, { sig: 'f(bool,uint256)', args: W(0n) + W(88n) }],
     );
@@ -136,7 +136,7 @@ describe('P1-13: fixed value-array ternary lvalue vs Solidity', () => {
 
   it('READ of the ternary element, both branches + several indices', async () => {
     await diff(
-      `class C { get f(c: bool, i: u256): External<u256> { const xs: Arr<u256,3> = [1n,2n,3n]; const ys: Arr<u256,3> = [4n,5n,6n]; return (c ? xs : ys)[i]; } }`,
+      `class C { get f(c: bool, i: u256): External<u256> { const xs: Arr<u256,3> = [u256(1n),2n,3n]; const ys: Arr<u256,3> = [u256(4n),5n,6n]; return (c ? xs : ys)[i]; } }`,
       `contract C { function f(bool c, uint256 i) external pure returns (uint256){ uint256[3] memory xs=[uint256(1),2,3]; uint256[3] memory ys=[uint256(4),5,6]; return (c?xs:ys)[i]; } }`,
       [{ sig: 'f(bool,uint256)', args: W(1n) + W(0n) }, { sig: 'f(bool,uint256)', args: W(1n) + W(2n) }, { sig: 'f(bool,uint256)', args: W(0n) + W(1n) }],
     );
@@ -144,7 +144,7 @@ describe('P1-13: fixed value-array ternary lvalue vs Solidity', () => {
 
   it('OOB runtime index reverts Panic 0x32, byte-identical', async () => {
     await diff(
-      `class C { get f(c: bool, i: u256): External<u256> { const xs: Arr<u256,3> = [1n,2n,3n]; const ys: Arr<u256,3> = [4n,5n,6n]; (c ? xs : ys)[i] = 9n; return xs[0n]; } }`,
+      `class C { get f(c: bool, i: u256): External<u256> { const xs: Arr<u256,3> = [u256(1n),2n,3n]; const ys: Arr<u256,3> = [u256(4n),5n,6n]; (c ? xs : ys)[i] = 9n; return xs[0n]; } }`,
       `contract C { function f(bool c, uint256 i) external pure returns (uint256){ uint256[3] memory xs=[uint256(1),2,3]; uint256[3] memory ys=[uint256(4),5,6]; (c?xs:ys)[i]=9; return xs[0]; } }`,
       [{ sig: 'f(bool,uint256)', args: W(1n) + W(3n) }, { sig: 'f(bool,uint256)', args: W(0n) + W(100n) }],
     );
@@ -152,7 +152,7 @@ describe('P1-13: fixed value-array ternary lvalue vs Solidity', () => {
 
   it('side-effecting condition runs once; only the taken branch is mutated', async () => {
     await diff(
-      `class C { n: u256; f(): External<u256> { const xs: Arr<u256,2> = [1n,2n]; const ys: Arr<u256,2> = [3n,4n]; (this.bump() > 0n ? xs : ys)[0n] = 9n; return xs[0n]*100n + ys[0n]*10n + this.n; } bump(): u256 { this.n = this.n + 1n; return this.n; } }`,
+      `class C { n: u256; f(): External<u256> { const xs: Arr<u256,2> = [u256(1n),2n]; const ys: Arr<u256,2> = [u256(3n),4n]; (this.bump() > 0n ? xs : ys)[0n] = 9n; return xs[0n]*100n + ys[0n]*10n + this.n; } bump(): u256 { this.n = this.n + 1n; return this.n; } }`,
       `contract C { uint256 public n; function f() external returns (uint256){ uint256[2] memory xs=[uint256(1),2]; uint256[2] memory ys=[uint256(3),4]; (bump() > 0 ? xs : ys)[0]=9; return xs[0]*100 + ys[0]*10 + n; } function bump() internal returns (uint256){ n=n+1; return n; } }`,
       [{ sig: 'f()' }],
     );
@@ -160,7 +160,7 @@ describe('P1-13: fixed value-array ternary lvalue vs Solidity', () => {
 
   it('nested value sub-array ternary element write ((c ? xs : ys)[i][j] = v)', async () => {
     await diff(
-      `class C { get f(c: bool): External<u256> { const xs: Arr<Arr<u256,2>,2> = [[1n,2n],[3n,4n]]; const ys: Arr<Arr<u256,2>,2> = [[5n,6n],[7n,8n]]; (c ? xs : ys)[0n][1n]=99n; return xs[0n][1n]*1000n + ys[0n][1n]; } }`,
+      `class C { get f(c: bool): External<u256> { const xs: Arr<Arr<u256,2>,2> = [[u256(1n),2n],[u256(3n),4n]]; const ys: Arr<Arr<u256,2>,2> = [[u256(5n),6n],[u256(7n),8n]]; (c ? xs : ys)[0n][1n]=99n; return xs[0n][1n]*1000n + ys[0n][1n]; } }`,
       `contract C { function f(bool c) external pure returns (uint256){ uint256[2][2] memory xs=[[uint256(1),2],[uint256(3),4]]; uint256[2][2] memory ys=[[uint256(5),6],[uint256(7),8]]; (c?xs:ys)[0][1]=99; return xs[0][1]*1000 + ys[0][1]; } }`,
       [{ sig: 'f(bool)', args: W(1n) }, { sig: 'f(bool)', args: W(0n) }],
     );
@@ -168,8 +168,8 @@ describe('P1-13: fixed value-array ternary lvalue vs Solidity', () => {
 
   it('const-OOB index into a fixed-array ternary is a compile error (both reject)', () => {
     // solc: "Out of bounds array access". JETH: JETH211 (was an over-acceptance before the memFixedLen wiring).
-    expect(jethRejects(`class C { get f(c: bool): External<u256> { const xs: Arr<u256,3> = [1n,2n,3n]; const ys: Arr<u256,3> = [4n,5n,6n]; (c ? xs : ys)[5n] = 9n; return xs[0n]; } }`)).toContain('JETH211');
-    expect(jethRejects(`class C { get f(c: bool): External<u256> { const xs: Arr<u256,3> = [1n,2n,3n]; const ys: Arr<u256,3> = [4n,5n,6n]; return (c ? xs : ys)[5n]; } }`)).toContain('JETH211');
+    expect(jethRejects(`class C { get f(c: bool): External<u256> { const xs: Arr<u256,3> = [u256(1n),2n,3n]; const ys: Arr<u256,3> = [u256(4n),5n,6n]; (c ? xs : ys)[5n] = 9n; return xs[0n]; } }`)).toContain('JETH211');
+    expect(jethRejects(`class C { get f(c: bool): External<u256> { const xs: Arr<u256,3> = [u256(1n),2n,3n]; const ys: Arr<u256,3> = [u256(4n),5n,6n]; return (c ? xs : ys)[5n]; } }`)).toContain('JETH211');
   });
 
   it('a dynamic value-array ternary lvalue still works (regression)', async () => {

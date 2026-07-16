@@ -52,7 +52,7 @@ function jethCodes(src: string): string[] {
 describe('whole fixed-value-word-array field of a memory struct as an aggregate (S3) - byte-identical to solc 0.8.35', () => {
   it('abi.encode(q.nums), nums: Arr<u256,3> - canonical, non-vacuous decode', async () => {
     const [ret] = await eqDecode(
-      'type Q = { nums: Arr<u256,3> }; class C { get f(): External<bytes> { let q: Q = Q([1n,2n,3n]); return abi.encode(q.nums); } }',
+      'type Q = { nums: Arr<u256,3> }; class C { get f(): External<bytes> { let q: Q = Q([u256(1n),2n,3n]); return abi.encode(q.nums); } }',
       'struct Q { uint256[3] nums; } contract C { function f() external pure returns(bytes memory){ Q memory q=Q([uint256(1),2,3]); return abi.encode(q.nums); } }',
       [['f()', '']],
     );
@@ -66,7 +66,7 @@ describe('whole fixed-value-word-array field of a memory struct as an aggregate 
 
   it('return q.nums, nums: Arr<u256,3> - inline 3 words, non-vacuous decode', async () => {
     const [ret] = await eqDecode(
-      'type Q = { nums: Arr<u256,3> }; class C { get f(): External<Arr<u256,3>> { let q: Q = Q([7n,8n,9n]); return q.nums; } }',
+      'type Q = { nums: Arr<u256,3> }; class C { get f(): External<Arr<u256,3>> { let q: Q = Q([u256(7n),8n,9n]); return q.nums; } }',
       'struct Q { uint256[3] nums; } contract C { function f() external pure returns(uint256[3] memory){ Q memory q=Q([uint256(7),8,9]); return q.nums; } }',
       [['f()', '']],
     );
@@ -112,7 +112,7 @@ describe('whole fixed-value-word-array field of a memory struct as an aggregate 
 
   it('NESTED value-word array field: Arr<Arr<u256,2>,2> - non-vacuous decode', async () => {
     const [ret] = await eqDecode(
-      'type Q = { nums: Arr<Arr<u256,2>,2> }; class C { get f(): External<bytes> { let q: Q = Q([[1n,2n],[3n,4n]]); return abi.encode(q.nums); } }',
+      'type Q = { nums: Arr<Arr<u256,2>,2> }; class C { get f(): External<bytes> { let q: Q = Q([[u256(1n),2n],[u256(3n),4n]]); return abi.encode(q.nums); } }',
       'struct Q { uint256[2][2] nums; } contract C { function f() external pure returns(bytes memory){ Q memory q=Q([[uint256(1),2],[uint256(3),4]]); return abi.encode(q.nums); } }',
       [['f()', '']],
     );
@@ -127,7 +127,7 @@ describe('whole fixed-value-word-array field of a memory struct as an aggregate 
 
   it('preceding value field (non-zero word offset): Q2{a:u256; nums:Arr<u256,3>}', async () => {
     const [ret] = await eqDecode(
-      'type Q2 = { a: u256; nums: Arr<u256,3> }; class C { get f(): External<bytes> { let q: Q2 = Q2(9n,[10n,11n,12n]); return abi.encode(q.nums); } }',
+      'type Q2 = { a: u256; nums: Arr<u256,3> }; class C { get f(): External<bytes> { let q: Q2 = Q2(9n,[u256(10n),11n,12n]); return abi.encode(q.nums); } }',
       'struct Q2 { uint256 a; uint256[3] nums; } contract C { function f() external pure returns(bytes memory){ Q2 memory q=Q2(9,[uint256(10),11,12]); return abi.encode(q.nums); } }',
       [['f()', '']],
     );
@@ -140,13 +140,13 @@ describe('whole fixed-value-word-array field of a memory struct as an aggregate 
   it('let-bind ys = q.nums, abi.encode(q.nums,7n), abi.encodePacked, internal-arg, inner-struct field', async () => {
     // let-bind alias
     await eqDecode(
-      'type Q = { nums: Arr<u256,3> }; class C { get f(): External<bytes> { let q: Q = Q([1n,2n,3n]); let ys: Arr<u256,3> = q.nums; return abi.encode(ys); } }',
+      'type Q = { nums: Arr<u256,3> }; class C { get f(): External<bytes> { let q: Q = Q([u256(1n),2n,3n]); let ys: Arr<u256,3> = q.nums; return abi.encode(ys); } }',
       'struct Q { uint256[3] nums; } contract C { function f() external pure returns(bytes memory){ Q memory q=Q([uint256(1),2,3]); uint256[3] memory ys=q.nums; return abi.encode(ys); } }',
       [['f()', '']],
     );
     // abi.encode(q.nums, 7n) - the field followed by a trailing scalar
     const [ret] = await eqDecode(
-      'type Q = { nums: Arr<u256,3> }; class C { get f(): External<bytes> { let q: Q = Q([1n,2n,3n]); return abi.encode(q.nums, 7n); } }',
+      'type Q = { nums: Arr<u256,3> }; class C { get f(): External<bytes> { let q: Q = Q([u256(1n),2n,3n]); return abi.encode(q.nums, 7n); } }',
       'struct Q { uint256[3] nums; } contract C { function f() external pure returns(bytes memory){ Q memory q=Q([uint256(1),2,3]); return abi.encode(q.nums, uint256(7)); } }',
       [['f()', '']],
     );
@@ -157,19 +157,19 @@ describe('whole fixed-value-word-array field of a memory struct as an aggregate 
     expect(ret!.slice(2 + 64 * 5, 2 + 64 * 6)).toBe(W(7n));
     // abi.encodePacked(q.nums)
     await eqDecode(
-      'type Q = { nums: Arr<u256,3> }; class C { get f(): External<bytes> { let q: Q = Q([1n,2n,3n]); return abi.encodePacked(q.nums); } }',
+      'type Q = { nums: Arr<u256,3> }; class C { get f(): External<bytes> { let q: Q = Q([u256(1n),2n,3n]); return abi.encodePacked(q.nums); } }',
       'struct Q { uint256[3] nums; } contract C { function f() external pure returns(bytes memory){ Q memory q=Q([uint256(1),2,3]); return abi.encodePacked(q.nums); } }',
       [['f()', '']],
     );
     // internal-arg: this.g(q.nums) (g is internal-by-default, called via this.)
     await eqDecode(
-      'type Q = { nums: Arr<u256,3> }; class C { g(a: Arr<u256,3>): bytes { return abi.encode(a); } get f(): External<bytes> { let q: Q = Q([1n,2n,3n]); return this.g(q.nums); } }',
+      'type Q = { nums: Arr<u256,3> }; class C { g(a: Arr<u256,3>): bytes { return abi.encode(a); } get f(): External<bytes> { let q: Q = Q([u256(1n),2n,3n]); return this.g(q.nums); } }',
       'struct Q { uint256[3] nums; } contract C { function g(uint256[3] memory a) internal pure returns(bytes memory){ return abi.encode(a); } function f() external pure returns(bytes memory){ Q memory q=Q([uint256(1),2,3]); return g(q.nums); } }',
       [['f()', '']],
     );
     // nested struct-in-struct inner fixed-array field: q.inner.nums
     await eqDecode(
-      'type Inner = { nums: Arr<u256,3> }; type Q = { a: u256; inner: Inner }; class C { get f(): External<bytes> { let q: Q = Q(9n, Inner([1n,2n,3n])); return abi.encode(q.inner.nums); } }',
+      'type Inner = { nums: Arr<u256,3> }; type Q = { a: u256; inner: Inner }; class C { get f(): External<bytes> { let q: Q = Q(9n, Inner([u256(1n),2n,3n])); return abi.encode(q.inner.nums); } }',
       'struct Inner { uint256[3] nums; } struct Q { uint256 a; Inner inner; } contract C { function f() external pure returns(bytes memory){ Q memory q=Q(9, Inner([uint256(1),2,3])); return abi.encode(q.inner.nums); } }',
       [['f()', '']],
     );

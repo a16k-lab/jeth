@@ -92,7 +92,7 @@ describe('Bucket-A over-rejection fixes vs Solidity', () => {
 
   it('indexed static-aggregate event params from a local / constructor', async () => {
     await diff(
-      `type P = { x: u256; y: u256; }; class C { A: event<{ a: indexed<Arr<u256,3>>; n: u256 }>; S: event<{ p: indexed<P>; n: u256 }>; fa(): External<void> { let a: Arr<u256,3> = [10n, 20n, 30n]; emit(A(a, 7n)); } fs(x: u256, y: u256): External<void> { emit(S(P(x, y), 7n)); } }`,
+      `type P = { x: u256; y: u256; }; class C { A: event<{ a: indexed<Arr<u256,3>>; n: u256 }>; S: event<{ p: indexed<P>; n: u256 }>; fa(): External<void> { let a: Arr<u256,3> = [u256(10n), 20n, 30n]; emit(A(a, 7n)); } fs(x: u256, y: u256): External<void> { emit(S(P(x, y), 7n)); } }`,
       `struct P { uint256 x; uint256 y; } contract C { event A(uint256[3] indexed a, uint256 n); event S(P indexed p, uint256 n); function fa() external { uint256[3] memory a=[uint256(10),20,30]; emit A(a, 7); } function fs(uint256 x, uint256 y) external { emit S(P(x,y), 7); } }`,
       [{ sig: 'fa()' }, { sig: 'fs(uint256,uint256)', args: W(1n) + W(2n) }],
     );

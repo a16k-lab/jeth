@@ -38,7 +38,7 @@ class C {
   eExt1(): External<void> { emit(Et1(this.produce1(), 79n)); }
   eExtN(): External<void> { emit(EtN(this.produceN(), 80n)); }
   eDec(b: bytes): External<void> { emit(Et(abi.decode(b, Arr<In,2>), 81n)); }
-  eDecNF(b: bytes): External<void> { let pre: Arr<u256,2> = [1n,2n]; emit(Et(abi.decode(b, Arr<In,2>), pre[0n] + 82n)); }
+  eDecNF(b: bytes): External<void> { let pre: Arr<u256,2> = [u256(1n),2n]; emit(Et(abi.decode(b, Arr<In,2>), pre[0n] + 82n)); }
   eCtl(): External<void> { let a: Arr<In,2> = [In(31n,32n),In(33n,34n)]; emit(Et(a, 83n)); }
   ctlEnc(): External<bytes> { return abi.encode(this.produce()); } }`;
 

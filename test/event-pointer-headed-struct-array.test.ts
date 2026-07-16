@@ -88,7 +88,7 @@ describe('emit of a pointer-headed memory Arr<P,N> (static-struct fixed array) -
 
   it('control: a value fixed array Arr<u256,3> stays inline (unaffected)', async () => {
     const r = await logDiff(
-      `class C { E: event<{ a: Arr<u256,3> }>; f(): External<void> { let a: Arr<u256,3> = [7n,8n,9n]; emit(E(a)); } }`,
+      `class C { E: event<{ a: Arr<u256,3> }>; f(): External<void> { let a: Arr<u256,3> = [u256(7n),8n,9n]; emit(E(a)); } }`,
       `contract C { event E(uint256[3] a); function f() external { uint256[3] memory a=[uint256(7),8,9]; emit E(a); } }`,
       'f()',
     );

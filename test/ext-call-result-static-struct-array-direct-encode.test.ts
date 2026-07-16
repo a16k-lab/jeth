@@ -138,7 +138,7 @@ describe('external-call result of a static-struct fixed array consumed directly 
   it('a VALUE fixed array Arr<u256,3> external-call result direct-consume stays byte-identical (control)', async () => {
     const a = await pair(
       `class C {
-         get produce(): External<Arr<u256,3>> { return [11n,22n,33n]; }
+         get produce(): External<Arr<u256,3>> { return [u256(11n),22n,33n]; }
          encDirect(): External<bytes> { return abi.encode(this.produce()); }
          get consume(xs: Arr<u256,3>): External<u256> { return xs[0n]+xs[1n]+xs[2n]; }
          fwdDirect(): External<u256> { return this.consume(this.produce()); } }`,

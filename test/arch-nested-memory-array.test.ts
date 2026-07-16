@@ -31,8 +31,8 @@ describe('nested / multi-dim memory-array locals (arch #2) vs solc', () => {
     get empties(): External<u256[][]> { let m: u256[][] = [[],[5n]]; return m; }
     get emptyOuter(): External<u256[][]> { let m: u256[][] = []; return m; }
     // --- Arr<Arr<u256,2>,2> fixed-of-fixed (pure static, inline image) ---
-    get fixFix(): External<Arr<Arr<u256,2>,2>> { let f: Arr<Arr<u256,2>,2> = [[1n,2n],[3n,4n]]; return f; }
-    get fixFixRead(): External<u256> { let f: Arr<Arr<u256,2>,2> = [[1n,2n],[3n,4n]]; return f[1n][0n] * 10n + f[0n][1n]; }
+    get fixFix(): External<Arr<Arr<u256,2>,2>> { let f: Arr<Arr<u256,2>,2> = [[u256(1n),2n],[u256(3n),4n]]; return f; }
+    get fixFixRead(): External<u256> { let f: Arr<Arr<u256,2>,2> = [[u256(1n),2n],[u256(3n),4n]]; return f[1n][0n] * 10n + f[0n][1n]; }
     // --- Arr<u256[],2> fixed-of-dynamic (pointer table) ---
     get fixDyn(): External<Arr<u256[],2>> { let g: Arr<u256[],2> = [[1n],[2n,3n]]; return g; }
     get fixDynRW(): External<u256> { let g: Arr<u256[],2> = [[1n],[2n,3n]]; g[1n][0n] = 9n; return g[0n][0n]*100n + g[1n][0n]*10n + g[1n][1n] + g.length; }

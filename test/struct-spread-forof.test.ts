@@ -19,7 +19,7 @@ describe('F2 for-of', () => {
     get countGt(t: u256): External<u256> { let n: u256 = 0n; for (const v of this.xs) { if (v > t) { n = n + 1n; } } return n; }
     get sumCd(a: u256[]): External<u256> { let s: u256 = 0n; for (const v of a) { s = s + v; } return s; }
     get firstZero(a: u256[]): External<u256> { let i: u256 = 0n; for (const v of a) { if (v == 0n) { return i; } i = i + 1n; } return 999n; }
-    get sumFixed(): External<u256> { let a: Arr<u256,4> = [3n,5n,7n,9n]; let s: u256 = 0n; for (const v of a) { s = s + v; } return s; }
+    get sumFixed(): External<u256> { let a: Arr<u256,4> = [u256(3n),5n,7n,9n]; let s: u256 = 0n; for (const v of a) { s = s + v; } return s; }
   }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

@@ -40,7 +40,7 @@ describe('Cat B: pointer-headed static-struct memory arrays - byte-identical to 
       get ret(): External<P[]> { let xs: P[] = [P(7n, 8n), P(9n, 10n)]; return xs; }
       get zero(): External<bytes> { let xs: P[] = new Array<P>(3n); xs[1n] = P(7n, 8n); return abi.encode(xs); }
       get oob(): External<u256> { let xs: P[] = [P(1n, 2n)]; return xs[5n].a; }
-      get fafield(): External<bytes> { let xs: N[] = new Array<N>(2n); xs[0n] = N(5n, [6n, 7n]); return abi.encode(xs, xs[0n].pre[1n]); } }`;
+      get fafield(): External<bytes> { let xs: N[] = new Array<N>(2n); xs[0n] = N(5n, [u256(6n), 7n]); return abi.encode(xs, xs[0n].pre[1n]); } }`;
     const S = `struct P { uint256 a; uint256 b; }
     struct N { uint256 a; uint256[2] pre; }
     contract C {

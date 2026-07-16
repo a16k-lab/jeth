@@ -55,7 +55,7 @@ describe('Batch A: fixed-outer / fixed-element static-struct arrays - byte-ident
     type Q = { a: u256; pre: Arr<u256, 2>; };
     class C {
       get pk(): External<bytes> { let m: Arr<P, 2> = [P(1n, 2n), P(3n, 4n)]; return abi.encode(m, m[1n].a); }
-      get ff(): External<bytes> { let q0: Q = Q(5n, [6n, 7n]); let m: Arr<Q, 2> = [q0, Q(8n, [9n, 10n])]; return abi.encode(m, m[1n].pre[1n]); } }`;
+      get ff(): External<bytes> { let q0: Q = Q(5n, [u256(6n), 7n]); let m: Arr<Q, 2> = [q0, Q(8n, [u256(9n), 10n])]; return abi.encode(m, m[1n].pre[1n]); } }`;
     const S = `struct P { uint128 a; uint128 b; }
     struct Q { uint256 a; uint256[2] pre; }
     contract C {
@@ -95,7 +95,7 @@ describe('Batch A: fixed-outer / fixed-element static-struct arrays - byte-ident
     const codes = (src: string): string[] => {
       try { compile(src, { fileName: 'C.jeth' }); return []; } catch (e: any) { return e?.diagnostics ? e.diagnostics.map((d: any) => d.code) : ['THROW']; }
     };
-    expect(codes(`class C { get f(): External<u256> { let a: Arr<u256,3> = [1n,2n,3n]; return a[2n]; } }`)).toEqual([]);
+    expect(codes(`class C { get f(): External<u256> { let a: Arr<u256,3> = [u256(1n),2n,3n]; return a[2n]; } }`)).toEqual([]);
     expect(codes(`class C { get f(): External<u256> { let a: Arr<u256,2>[] = [[1n,2n]]; return a[0n][1n]; } }`)).toEqual([]);
   });
 });

@@ -184,8 +184,8 @@ describe('Stage-0 flat Arr<In,N> matrix - byte-identical to solc 0.8.35 (pointer
     await diff(
       `type Q = { a: u256; pre: Arr<u256,2>; };
        class C {
-         get e(): External<bytes> { let m: Arr<Q,2> = [Q(5n,[6n,7n]), Q(8n,[9n,10n])]; return abi.encode(m, m[1n].pre[1n], m[0n].a); }
-         get r(): External<u256> { let m: Arr<Q,2> = [Q(5n,[6n,7n]), Q(8n,[9n,10n])]; return m[0n].pre[0n] + m[1n].pre[1n] + m[1n].a; } }`,
+         get e(): External<bytes> { let m: Arr<Q,2> = [Q(5n,[u256(6n),7n]), Q(8n,[u256(9n),10n])]; return abi.encode(m, m[1n].pre[1n], m[0n].a); }
+         get r(): External<u256> { let m: Arr<Q,2> = [Q(5n,[u256(6n),7n]), Q(8n,[u256(9n),10n])]; return m[0n].pre[0n] + m[1n].pre[1n] + m[1n].a; } }`,
       `struct Q { uint256 a; uint256[2] pre; }
        contract C {
          function e() external pure returns(bytes memory){ uint256[2] memory p0;p0[0]=6;p0[1]=7; uint256[2] memory p1;p1[0]=9;p1[1]=10; Q[2] memory m; m[0]=Q(5,p0);m[1]=Q(8,p1); return abi.encode(m, m[1].pre[1], m[0].a); }
@@ -297,9 +297,9 @@ describe('Stage-0 flat Arr<In,N> matrix - byte-identical to solc 0.8.35 (pointer
   it('REG: Arr<u256,N> value array unchanged (was always flat)', async () => {
     await diff(
       `class C {
-         get e(): External<bytes> { let m: Arr<u256,3> = [11n, 12n, 13n]; return abi.encode(m, m[1n]); }
-         get r(i: u256): External<u256> { let m: Arr<u256,3> = [11n, 12n, 13n]; m[i] = 99n; return m[0n] + m[1n] + m[2n]; }
-         get ret(): External<Arr<u256,3>> { let m: Arr<u256,3> = [71n, 72n, 73n]; return m; } }`,
+         get e(): External<bytes> { let m: Arr<u256,3> = [u256(11n), 12n, 13n]; return abi.encode(m, m[1n]); }
+         get r(i: u256): External<u256> { let m: Arr<u256,3> = [u256(11n), 12n, 13n]; m[i] = 99n; return m[0n] + m[1n] + m[2n]; }
+         get ret(): External<Arr<u256,3>> { let m: Arr<u256,3> = [u256(71n), 72n, 73n]; return m; } }`,
       `contract C {
          function e() external pure returns(bytes memory){ uint256[3] memory m; m[0]=11;m[1]=12;m[2]=13; return abi.encode(m, m[1]); }
          function r(uint256 i) external pure returns(uint256){ uint256[3] memory m; m[0]=11;m[1]=12;m[2]=13; m[i]=99; return m[0]+m[1]+m[2]; }

@@ -41,7 +41,9 @@ async function bothMatch(J: string, S: string, calls: [string, string?][], name 
 describe('Fix 1a: fixed value-leaf array returned directly from an external call', () => {
   it('self-call return this.mk() : u256[N] and address[N], N=1..4, + let-bound + abi.encode', async () => {
     for (const N of [1, 2, 3, 4]) {
-      const jU = Array.from({ length: N }, (_, i) => `${i + 5}n`).join(',');
+      // the first element carries the cast on BOTH sides: an inline array literal is typed from its
+      // elements only, so a bare [5,6] is uint8[2] and does not convert to a uint256[2] MEMORY local.
+      const jU = 'u256(5n)' + Array.from({ length: N - 1 }, (_, i) => `,${i + 6}n`).join('');
       const sU = 'uint256(5)' + Array.from({ length: N - 1 }, (_, i) => `,${i + 6}`).join('');
       await bothMatch(
         `class C {
@@ -81,7 +83,7 @@ describe('Fix 1a: fixed value-leaf array returned directly from an external call
   it('self-call return this.mk() : nested static Arr<Arr<u256,2>,2>, Arr<bytes4,3>, Arr<bool,3>', async () => {
     await bothMatch(
       `class C {
-        get mk(): External<Arr<Arr<u256,2>,2>> { let xs: Arr<Arr<u256,2>,2> = [[1n,2n],[3n,4n]]; return xs; }
+        get mk(): External<Arr<Arr<u256,2>,2>> { let xs: Arr<Arr<u256,2>,2> = [[u256(1n),2n],[u256(3n),4n]]; return xs; }
         go(): External<Arr<Arr<u256,2>,2>> { return this.mk(); }
         goEnc(): External<bytes> { return abi.encode(this.mk()); }
       }`,
@@ -165,7 +167,7 @@ describe('Fix 1a: fixed value-leaf array returned directly from an external call
     );
     // plain fixed-array literal return (no call).
     await bothMatch(
-      `class C { get go(): External<Arr<u256,3>> { return [1n,2n,3n]; } }`,
+      `class C { get go(): External<Arr<u256,3>> { return [u256(1n),2n,3n]; } }`,
       `contract C { function go() external returns(uint256[3] memory){ return [uint256(1),2,3]; } }`,
       [['go()']],
     );

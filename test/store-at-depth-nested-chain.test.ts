@@ -175,7 +175,7 @@ struct S { uint256 a; T t; }
       J3 +
         `class C {
   get go(j: u256): External<u256> {
-    let v: S = S(1n, T("hi", I([10n,20n,30n], 4n)));
+    let v: S = S(1n, T("hi", I([u256(10n),20n,30n], 4n)));
     v.t.inner.fa[j] = 99n;
     v.t.inner.fa[1n] += 5n;
     v.t.inner.fa[2n]++;
@@ -228,7 +228,7 @@ contract C {
     expect(
       codes(
         J3 +
-          `class C { get go(): External<u256> { let v: S = S(1n, T("h", I([1n,2n,3n], 4n))); return v.t.inner.fa[3n]; } }`,
+          `class C { get go(): External<u256> { let v: S = S(1n, T("h", I([u256(1n),2n,3n], 4n))); return v.t.inner.fa[3n]; } }`,
       ),
     ).toContain('JETH211');
   });
@@ -274,9 +274,9 @@ type U = { z: string; inner: I };
 type T = { s: string; u: U };
 type S = { a: u256; t: T };
 class C {
-  get gq(): External<Q> { let v: S = S(1n, T("a", U("b", I(5n, Q(6n, 7n), [8n, 9n])))); return v.t.u.inner.q; }
-  get gi(): External<I> { let v: S = S(1n, T("a", U("b", I(5n, Q(6n, 7n), [8n, 9n])))); return v.t.u.inner; }
-  get gf(): External<Arr<u256,2>> { let v: S = S(1n, T("a", U("b", I(5n, Q(6n, 7n), [8n, 9n])))); return v.t.u.inner.fa; }
+  get gq(): External<Q> { let v: S = S(1n, T("a", U("b", I(5n, Q(6n, 7n), [u256(8n), 9n])))); return v.t.u.inner.q; }
+  get gi(): External<I> { let v: S = S(1n, T("a", U("b", I(5n, Q(6n, 7n), [u256(8n), 9n])))); return v.t.u.inner; }
+  get gf(): External<Arr<u256,2>> { let v: S = S(1n, T("a", U("b", I(5n, Q(6n, 7n), [u256(8n), 9n])))); return v.t.u.inner.fa; }
 }`,
       `struct Q { uint256 m; uint256 n; }
 struct I { uint8 p; Q q; uint256[2] fa; }

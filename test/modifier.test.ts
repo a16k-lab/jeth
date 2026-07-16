@@ -195,7 +195,7 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
       ));
     it('an aggregate modifier parameter is now supported (JETH322 lifted)', () =>
       expect(
-        codes(`class C { @modifier m(a: Arr<u256,2>) { _; } @m(([1n,2n])) f(): External<void> {} }`),
+        codes(`class C { @modifier m(a: Arr<u256,2>) { _; } @m(([u256(1n),2n])) f(): External<void> {} }`),
       ).toEqual([]));
     it('a mapping modifier parameter still rejects (JETH247: mappings are storage-only)', () =>
       expect(

@@ -30,7 +30,9 @@ describe('aggregate comparison gate (JETH088, solc parity)', () => {
 
   it('rejects == on a dynamic array and a fixed array (solc rejects array equality)', () => {
     expect(codes(fn('let a: u256[] = [1n,2n]; let b: u256[] = [1n,2n]; return a == b;'))).toContain('JETH088');
-    expect(codes(fn('let a: Arr<u256,2> = [1n,2n]; let b: Arr<u256,2> = [1n,2n]; return a == b;'))).toContain('JETH088');
+    expect(codes(fn('let a: Arr<u256,2> = [u256(1n),2n]; let b: Arr<u256,2> = [u256(1n),2n]; return a == b;'))).toContain(
+      'JETH088',
+    );
     // NOTE: `==` / `!=` on `bytes` / `string` is now a FEATURE - it desugars to
     // `keccak256(bytes(a)) == keccak256(bytes(b))`, byte-identical to solc's idiom (see
     // string-bytes-equality.test.ts). Only ORDERED comparisons (< > <= >=) on bytes/string still reject.

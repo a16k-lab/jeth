@@ -117,7 +117,7 @@ describe('F2 for-of: element-kind coverage (storage/calldata/fixed)', () => {
     get sumEmpty(a: u256[]): External<u256> { let s: u256 = 7n; for (const v of a) { s = s + v; } return s; }
 
     // memory fixed array Arr<T,N>
-    get sumFixed(): External<u256> { let a: Arr<u256,4> = [3n,5n,7n,9n]; let s: u256 = 0n; for (const v of a) { s = s + v; } return s; }
+    get sumFixed(): External<u256> { let a: Arr<u256,4> = [u256(3n),5n,7n,9n]; let s: u256 = 0n; for (const v of a) { s = s + v; } return s; }
     // calldata fixed array Arr<T,N>
     get sumCdFixed(a: Arr<u256,3>): External<u256> { let s: u256 = 0n; for (const v of a) { s = s + v; } return s; }
 
@@ -730,12 +730,12 @@ describe('F2 struct literal: rejections (codes pinned, no crash)', () => {
   it('array-field struct via object literal: an array LITERAL AND a non-inline fixed-array local both accepted', () => {
     expect(
       errCodes(
-        `type A = { x: u256; arr: Arr<u256,2>; }; class C { get mk(x: u256): External<A> { return { x: x, arr: [1n,2n] }; } }`,
+        `type A = { x: u256; arr: Arr<u256,2>; }; class C { get mk(x: u256): External<A> { return { x: x, arr: [u256(1n),2n] }; } }`,
       ),
     ).toEqual([]);
     expect(
       errCodes(
-        `type A = { x: u256; arr: Arr<u256,2>; }; class C { get mk(x: u256): External<A> { let z: Arr<u256,2> = [1n,2n]; return { x: x, arr: z }; } }`,
+        `type A = { x: u256; arr: Arr<u256,2>; }; class C { get mk(x: u256): External<A> { let z: Arr<u256,2> = [u256(1n),2n]; return { x: x, arr: z }; } }`,
       ),
     ).toEqual([]);
   });

@@ -94,8 +94,8 @@ describe('inline struct-ctor with a pointer-headed static-struct fixed-array fie
   it('CONTROL: a VALUE-array field struct S{tag; v: Arr<u256,2>} inline return + encode MATCH', async () => {
     const J = `type S = { tag: u256; v: Arr<u256,2> };
     class C {
-      get ret(): External<S> { let a: Arr<u256,2> = [111n, 222n]; return S(9n, a); }
-      get enc(): External<bytes> { let a: Arr<u256,2> = [111n, 222n]; return abi.encode(S(9n, a)); } }`;
+      get ret(): External<S> { let a: Arr<u256,2> = [u256(111n), 222n]; return S(9n, a); }
+      get enc(): External<bytes> { let a: Arr<u256,2> = [u256(111n), 222n]; return abi.encode(S(9n, a)); } }`;
     const S = `struct S { uint256 tag; uint256[2] v; }
     contract C {
       function ret() external pure returns(S memory){ uint256[2] memory a=[uint256(111),222]; return S(9,a); }
@@ -128,7 +128,7 @@ describe('inline struct-ctor with a pointer-headed static-struct fixed-array fie
 
   it('CONTROL: an inline value-array literal field S(9n, [111n,222n]) return MATCH (inline arrayLit, not swept)', async () => {
     const J = `type S = { tag: u256; v: Arr<u256,2> };
-    class C { get f(): External<S> { return S(9n, [111n, 222n]); } }`;
+    class C { get f(): External<S> { return S(9n, [u256(111n), 222n]); } }`;
     const S = `struct S { uint256 tag; uint256[2] v; }
     contract C { function f() external pure returns(S memory){ return S(9, [uint256(111), 222]); } }`;
     expect(codes(J)).toEqual([]);

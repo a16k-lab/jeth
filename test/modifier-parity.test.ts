@@ -92,7 +92,7 @@ describe('Full modifier parity vs solc 0.8.35 (JETH320 / JETH322 / JETH323 / JET
   });
 
   it('JETH322: a fixed-array modifier param Arr<u256,2> reads an element in the guard', async () => {
-    const J = `class C { n: u256; @modifier minHead(a: Arr<u256,2>) { require(a[0n] >= 10n, "lo"); _; } @minHead(([5n,6n])) lo(): External<void> { this.n = 1n; } @minHead(([15n,6n])) hi(): External<void> { this.n = 2n; } }`;
+    const J = `class C { n: u256; @modifier minHead(a: Arr<u256,2>) { require(a[0n] >= 10n, "lo"); _; } @minHead(([u256(5n),6n])) lo(): External<void> { this.n = 1n; } @minHead(([u256(15n),6n])) hi(): External<void> { this.n = 2n; } }`;
     const S = `contract C { uint256 n; modifier minHead(uint256[2] memory a){ require(a[0]>=10,"lo"); _; } function lo() external minHead([uint256(5),6]) { n = 1; } function hi() external minHead([uint256(15),6]) { n = 2; } }`;
     await diff(J, S, '0x' + sel('lo()'), [0n]); // reverts on both
     const { j } = await diff(J, S, '0x' + sel('hi()'), [0n]); // passes on both

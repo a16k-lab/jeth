@@ -147,7 +147,7 @@ class C {
   nx: Arr<Arr<u256,2>,3>; ny: Arr<Arr<u256,2>,3>;
   bx: Arr<u8,5>; by: Arr<u8,5>;
   seed(): External<void> {
-    this.wx = WithArr(1n, [10n, 20n, 30n]); this.wy = WithArr(2n, [40n, 50n, 60n]);
+    this.wx = WithArr(1n, [u256(10n), 20n, 30n]); this.wy = WithArr(2n, [u256(40n), 50n, 60n]);
     this.sx[0n] = Inner(1n, 2n); this.sx[1n] = Inner(3n, 4n);
     this.sy[0n] = Inner(5n, 6n); this.sy[1n] = Inner(7n, 8n);
     this.nx[0n][0n] = 1n; this.nx[0n][1n] = 2n; this.nx[1n][0n] = 3n; this.nx[1n][1n] = 4n; this.nx[2n][0n] = 5n; this.nx[2n][1n] = 6n;

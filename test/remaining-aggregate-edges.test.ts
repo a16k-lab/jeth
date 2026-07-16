@@ -49,9 +49,9 @@ describe('E: dyn-struct nested static-aggregate field WRITES vs solc 0.8.35', ()
     const J = `type In = { x: u256; y: u256; };
     type S = { a: u256; inner: In; fa: Arr<u256, 3>; b: bytes; };
     class C {
-      get vleaf(): External<bytes> { let s: S = S(1n, In(3n, 4n), [7n, 8n, 9n], bytes("z")); s.inner.x = 90n; return abi.encode(s, s.inner.x, s.inner.y); }
-      get felem(): External<bytes> { let s: S = S(1n, In(3n, 4n), [7n, 8n, 9n], bytes("z")); s.fa[1n] = 99n; return abi.encode(s, s.fa[1n], s.fa[0n]); }
-      get fdyn(i: u256): External<u256> { let s: S = S(1n, In(3n, 4n), [7n, 8n, 9n], bytes("z")); s.fa[i] = 77n; return s.fa[i]; } }`;
+      get vleaf(): External<bytes> { let s: S = S(1n, In(3n, 4n), [u256(7n), 8n, 9n], bytes("z")); s.inner.x = 90n; return abi.encode(s, s.inner.x, s.inner.y); }
+      get felem(): External<bytes> { let s: S = S(1n, In(3n, 4n), [u256(7n), 8n, 9n], bytes("z")); s.fa[1n] = 99n; return abi.encode(s, s.fa[1n], s.fa[0n]); }
+      get fdyn(i: u256): External<u256> { let s: S = S(1n, In(3n, 4n), [u256(7n), 8n, 9n], bytes("z")); s.fa[i] = 77n; return s.fa[i]; } }`;
     const Sol = `struct In { uint256 x; uint256 y; }
     struct S { uint256 a; In inner; uint256[3] fa; bytes b; }
     contract C {
@@ -76,9 +76,9 @@ describe('E: dyn-struct nested static-aggregate field WRITES vs solc 0.8.35', ()
     const HDR = `type In = { x: u256; y: u256; };
     type S = { a: u256; inner: In; fa: Arr<u256, 3>; b: bytes; };`;
     expect(codes(`${HDR}
-    class C { get r(): External<bytes> { let s: S = S(1n, In(3n, 4n), [7n, 8n, 9n], bytes("z")); s.inner = In(5n, 6n); return abi.encode(s); } }`)).toContain('JETH429');
+    class C { get r(): External<bytes> { let s: S = S(1n, In(3n, 4n), [u256(7n), 8n, 9n], bytes("z")); s.inner = In(5n, 6n); return abi.encode(s); } }`)).toContain('JETH429');
     expect(codes(`${HDR}
-    class C { get r(): External<bytes> { let s: S = S(1n, In(3n, 4n), [7n, 8n, 9n], bytes("z")); let q: Arr<u256, 3> = [10n, 11n, 12n]; s.fa = q; return abi.encode(s); } }`)).toContain('JETH429');
+    class C { get r(): External<bytes> { let s: S = S(1n, In(3n, 4n), [u256(7n), 8n, 9n], bytes("z")); let q: Arr<u256, 3> = [u256(10n), 11n, 12n]; s.fa = q; return abi.encode(s); } }`)).toContain('JETH429');
   });
 });
 

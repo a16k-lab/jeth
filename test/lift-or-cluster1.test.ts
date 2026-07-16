@@ -86,8 +86,8 @@ class C{ A:Arr<In,2>;
     await run(
       `class C{ A:Arr<u256,2>;
   seed():External<void>{ this.A[0n]=5n; }
-  eq(c:bool,v:u256):External<Arr<u256,2>>{ let m:Arr<u256,2>=[10n,20n]; (c?this.A:m)[0n]=v; return [m[0n], this.A[0n]]; }
-  pe(c:bool,v:u256):External<Arr<u256,2>>{ let m:Arr<u256,2>=[10n,20n]; (c?this.A:m)[0n]+=v; return [m[0n], this.A[0n]]; } }`,
+  eq(c:bool,v:u256):External<Arr<u256,2>>{ let m:Arr<u256,2>=[u256(10n),20n]; (c?this.A:m)[0n]=v; return [m[0n], this.A[0n]]; }
+  pe(c:bool,v:u256):External<Arr<u256,2>>{ let m:Arr<u256,2>=[u256(10n),20n]; (c?this.A:m)[0n]+=v; return [m[0n], this.A[0n]]; } }`,
       `contract C{ uint256[2] A;
   function seed() external { A[0]=5; }
   function eq(bool c,uint256 v) external returns(uint256[2] memory){ uint256[2] memory m=[uint256(10),20]; (c?A:m)[0]=v; return [m[0], A[0]]; }

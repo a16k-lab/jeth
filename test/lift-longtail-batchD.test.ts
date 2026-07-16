@@ -103,7 +103,7 @@ describe('long-tail batch D: generic @modifier at aggregate/dynamic types (MOD-G
     await run(
       `class C {
   @modifier ne<T>(v: T) { require(v[0n] + v[1n] > 4n, "e"); _; }
-  @ne<Arr<u256, 2>>([2n, 3n]) get f(x: u256): External<u256> { return x + 1n; }
+  @ne<Arr<u256, 2>>([u256(2n), 3n]) get f(x: u256): External<u256> { return x + 1n; }
 }`,
       `contract C {
   modifier ne(uint256[2] memory v) { require(v[0] + v[1] > 4, "e"); _; }

@@ -61,8 +61,8 @@ describe('Residual A: whole-inner-array assignment m[i] = [...] on a nested memo
     // Arr<Arr<u256,2>,2> (P0-14) and Arr<u256,2>[] (P0-13): the inner element is INLINE, so a whole-element
     // write deep-copies where solc re-points. Sound clean reject (a return-immediately form would coincide,
     // but the write semantics diverge under aliasing).
-    expect(codes(`class C { get ff(): External<Arr<Arr<u256,2>,2>> { let m: Arr<Arr<u256,2>,2> = [[1n,2n],[3n,4n]]; m[0n] = [9n,8n]; return m; } }`)).toContain('JETH429');
-    expect(codes(`class C { get df(): External<Arr<u256,2>[]> { let m: Arr<u256,2>[] = [[1n,2n],[3n,4n],[5n,6n]]; m[1n] = [9n,8n]; return m; } }`)).toContain('JETH429');
+    expect(codes(`class C { get ff(): External<Arr<Arr<u256,2>,2>> { let m: Arr<Arr<u256,2>,2> = [[u256(1n),2n],[u256(3n),4n]]; m[0n] = [u256(9n),8n]; return m; } }`)).toContain('JETH429');
+    expect(codes(`class C { get df(): External<Arr<u256,2>[]> { let m: Arr<u256,2>[] = [[1n,2n],[3n,4n],[5n,6n]]; m[1n] = [u256(9n),8n]; return m; } }`)).toContain('JETH429');
   });
 
   it('still rejects a write to a calldata aggregate parameter (read-only)', () => {

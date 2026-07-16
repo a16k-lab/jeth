@@ -331,7 +331,7 @@ describe('@payable on an internally-reached method has no native form; the legac
 describe('fixed-array field of a memory struct local (p.a[i]) read/write vs solc', () => {
   it('value, packed-element, and nested-struct fixed-array fields', async () => {
     await rt(
-      `type P = { x: u256; a: Arr<u256,3>; y: u256; }; class C { get f(i: u256, v: u256): External<u256> { let p: P = P(7n, [10n, 20n, 30n], 9n); p.a[i] = v; return p.a[i] + p.x + p.y; } }`,
+      `type P = { x: u256; a: Arr<u256,3>; y: u256; }; class C { get f(i: u256, v: u256): External<u256> { let p: P = P(7n, [u256(10n), 20n, 30n], 9n); p.a[i] = v; return p.a[i] + p.x + p.y; } }`,
       `struct P { uint256 x; uint256[3] a; uint256 y; } contract C { function f(uint256 i, uint256 v) external pure returns(uint256){ P memory p = P(7, [uint256(10),20,30], 9); p.a[i] = v; return p.a[i] + p.x + p.y; } }`,
       [
         { sig: 'f(uint256,uint256)', args: W(1n) + W(99n) },
@@ -348,7 +348,7 @@ describe('fixed-array field of a memory struct local (p.a[i]) read/write vs solc
       ],
     );
     await rt(
-      `type I = { a: Arr<u256,2>; }; type O = { x: u256; inner: I; }; class C { get f(i: u256, v: u256): External<u256> { let o: O = O(5n, I([1n, 2n])); o.inner.a[i] = v; return o.inner.a[i] + o.x; } }`,
+      `type I = { a: Arr<u256,2>; }; type O = { x: u256; inner: I; }; class C { get f(i: u256, v: u256): External<u256> { let o: O = O(5n, I([u256(1n), 2n])); o.inner.a[i] = v; return o.inner.a[i] + o.x; } }`,
       `struct I { uint256[2] a; } struct O { uint256 x; I inner; } contract C { function f(uint256 i, uint256 v) external pure returns(uint256){ O memory o = O(5, I([uint256(1),2])); o.inner.a[i] = v; return o.inner.a[i] + o.x; } }`,
       [
         { sig: 'f(uint256,uint256)', args: W(1n) + W(77n) },
@@ -396,7 +396,7 @@ describe('delete of a memory aggregate local (rebind to fresh zeroed instance) v
       [{ sig: 'f()' }],
     );
     await rt(
-      `class C { get f(): External<u256> { let a: Arr<u256,3> = [5n, 6n, 7n]; delete a; return a[0n] + a[1n] + a[2n]; } }`,
+      `class C { get f(): External<u256> { let a: Arr<u256,3> = [u256(5n), 6n, 7n]; delete a; return a[0n] + a[1n] + a[2n]; } }`,
       `contract C { function f() external pure returns(uint256){ uint256[3] memory a = [uint256(5),6,7]; delete a; return a[0] + a[1] + a[2]; } }`,
       [{ sig: 'f()' }],
     );
@@ -565,7 +565,7 @@ describe('re-sweep over-acceptance fixes (solc rejects, JETH must too)', () => {
     ).toBe(true);
     expect(
       jethAccepts(
-        `class C { get f(): External<Arr<u256,3>> { let a: Arr<u256,3> = [1n,2n,3n]; return a; } }`,
+        `class C { get f(): External<Arr<u256,3>> { let a: Arr<u256,3> = [u256(1n),2n,3n]; return a; } }`,
       ),
     ).toBe(true);
   });
@@ -723,13 +723,13 @@ describe('re-sweep batch 2: bytes(string)[i] / nested ctor / fixed-array copy / 
     ));
   it('whole memory / calldata fixed-array -> storage assignment (incl. packed elements)', () =>
     rt(
-      `class C { g: Arr<u256,3>; h: Arr<u64,4>; a(): External<u256> { let m: Arr<u256,3> = [111n,222n,333n]; this.g = m; return this.g[2n]; } b(x: Arr<u256,3>): External<u256> { this.g = x; return this.g[1n]; } c(): External<u64> { let m: Arr<u64,4> = [1n,2n,3n,4n]; this.h = m; return this.h[3n]; } }`,
+      `class C { g: Arr<u256,3>; h: Arr<u64,4>; a(): External<u256> { let m: Arr<u256,3> = [u256(111n),222n,333n]; this.g = m; return this.g[2n]; } b(x: Arr<u256,3>): External<u256> { this.g = x; return this.g[1n]; } c(): External<u64> { let m: Arr<u64,4> = [u64(1n),2n,3n,4n]; this.h = m; return this.h[3n]; } }`,
       `contract C { uint256[3] g; uint64[4] h; function a() external returns(uint256){ uint256[3] memory m=[uint256(111),222,333]; g=m; return g[2]; } function b(uint256[3] calldata x) external returns(uint256){ g=x; return g[1]; } function c() external returns(uint64){ uint64[4] memory m=[uint64(1),2,3,4]; h=m; return h[3]; } }`,
       [{ sig: 'a()' }, { sig: 'b(uint256[3])', args: W(5n) + W(6n) + W(7n) }, { sig: 'c()' }],
     ));
   it('@error with static struct / fixed-array / mixed params reverts byte-identically', () =>
     rt(
-      `type P = { x: u256; y: bool; }; class C { BadS: error<{ p: P }>; BadA: error<{ a: Arr<u256, 2> }>; BadMix: error<{ n: u256; p: P; s: bytes }>; fs(): External<void> { revert(BadS(P(42n, true))); } fa(): External<void> { let x: Arr<u256,2> = [5n,6n]; revert(BadA(x)); } fm(): External<void> { revert(BadMix(9n, P(1n, true), "hello")); } }`,
+      `type P = { x: u256; y: bool; }; class C { BadS: error<{ p: P }>; BadA: error<{ a: Arr<u256, 2> }>; BadMix: error<{ n: u256; p: P; s: bytes }>; fs(): External<void> { revert(BadS(P(42n, true))); } fa(): External<void> { let x: Arr<u256,2> = [u256(5n),6n]; revert(BadA(x)); } fm(): External<void> { revert(BadMix(9n, P(1n, true), "hello")); } }`,
       `contract C { struct P{uint256 x;bool y;} error BadS(P p); error BadA(uint256[2] a); error BadMix(uint256 n, P p, bytes s); function fs() external { revert BadS(P(42,true)); } function fa() external { uint256[2] memory x=[uint256(5),6]; revert BadA(x); } function fm() external { revert BadMix(9, P(1,true), "hello"); } }`,
       [{ sig: 'fs()' }, { sig: 'fa()' }, { sig: 'fm()' }],
     ));
@@ -745,7 +745,7 @@ describe('re-sweep batch 3: object literals, internal aggregate params, Arr<dynE
   const LONG = 'abcdefghijklmnopqrstuvwxyz0123456789';
   it('object-literal struct construction with nested struct / bytes / fixed-array fields', () =>
     rt(
-      `type In = { c: u8; v: u32; }; type O = { id: u16; inner: In; }; type Db = { x: u256; s: bytes; }; type Da = { x: u256; a: Arr<u256,2>; }; class C { get f(): External<O> { return { id: 1n, inner: In(2n, 3n) }; } get gb(): External<Db> { return { x: 9n, s: "hi" }; } get ga(): External<Da> { return { x: 7n, a: [4n, 5n] }; } }`,
+      `type In = { c: u8; v: u32; }; type O = { id: u16; inner: In; }; type Db = { x: u256; s: bytes; }; type Da = { x: u256; a: Arr<u256,2>; }; class C { get f(): External<O> { return { id: 1n, inner: In(2n, 3n) }; } get gb(): External<Db> { return { x: 9n, s: "hi" }; } get ga(): External<Da> { return { x: 7n, a: [u256(4n), 5n] }; } }`,
       `struct In{uint8 c;uint32 v;} struct O{uint16 id;In inner;} struct Db{uint256 x;bytes s;} struct Da{uint256 x;uint256[2] a;} contract C { function f() external pure returns(O memory){ return O({id:1, inner:In(2,3)}); } function gb() external pure returns(Db memory){ return Db({x:9, s:"hi"}); } function ga() external pure returns(Da memory){ return Da({x:7, a:[uint256(4),5]}); } }`,
       [{ sig: 'f()' }, { sig: 'gb()' }, { sig: 'ga()' }],
     ));
@@ -763,7 +763,7 @@ describe('re-sweep batch 3: object literals, internal aggregate params, Arr<dynE
   });
   it('internal call: struct + fixed-array params/return + calldata aggregate forwarding (byte-identical)', () =>
     rt(
-      `type P = { a: u8; b: u32; }; class C { gs(p: P): u32 { return p.b; } ga(a: Arr<u256,3>): u256 { return a[2n]; } mk(): Arr<u256,2> { return [9n, 8n]; } get fs(x: u8, y: u32): External<u32> { return gs(P(x, y)); } get fa(): External<u256> { return ga([10n,20n,30n]); } get fr(): External<u256> { let a: Arr<u256,2> = mk(); return a[0n] + a[1n]; } get fwd(x: P): External<u32> { return gs(x); } }`,
+      `type P = { a: u8; b: u32; }; class C { gs(p: P): u32 { return p.b; } ga(a: Arr<u256,3>): u256 { return a[2n]; } mk(): Arr<u256,2> { return [u256(9n), 8n]; } get fs(x: u8, y: u32): External<u32> { return gs(P(x, y)); } get fa(): External<u256> { return ga([u256(10n),20n,30n]); } get fr(): External<u256> { let a: Arr<u256,2> = mk(); return a[0n] + a[1n]; } get fwd(x: P): External<u32> { return gs(x); } }`,
       `contract C { struct P{uint8 a;uint32 b;} function gs(P memory p) internal pure returns(uint32){return p.b;} function ga(uint256[3] memory a) internal pure returns(uint256){return a[2];} function mk() internal pure returns(uint256[2] memory){return [uint256(9),8];} function fs(uint8 x,uint32 y) external pure returns(uint32){ return gs(P(x,y)); } function fa() external pure returns(uint256){ return ga([uint256(10),20,30]); } function fr() external pure returns(uint256){ uint256[2] memory a=mk(); return a[0]+a[1]; } function fwd(P calldata x) external pure returns(uint32){ return gs(x); } }`,
       [
         { sig: 'fs(uint8,uint32)', args: W(7n) + W(0xcafen) },
@@ -797,7 +797,7 @@ describe('re-sweep batch 3: object literals, internal aggregate params, Arr<dynE
 describe('remaining over-rejections R1/R3/R5 vs solc (byte-identical)', () => {
   it('R3: a dynamic struct with a static fixed-array field (return + storage roundtrip)', () =>
     rt(
-      `type D = { x: u256; s: bytes; a: Arr<u256,2>; }; class C { d: D; get f(): External<D> { return D(9n, "hello", [4n,5n]); } set(): External<void> { this.d = D(1n, "stored value here, fairly long!!", [7n,8n]); } get ga(i: u256): External<u256> { return this.d.a[i]; } get gs(): External<bytes> { return this.d.s; } }`,
+      `type D = { x: u256; s: bytes; a: Arr<u256,2>; }; class C { d: D; get f(): External<D> { return D(9n, "hello", [u256(4n),5n]); } set(): External<void> { this.d = D(1n, "stored value here, fairly long!!", [u256(7n),8n]); } get ga(i: u256): External<u256> { return this.d.a[i]; } get gs(): External<bytes> { return this.d.s; } }`,
       `struct D{uint256 x;bytes s;uint256[2] a;} contract C { D d; function f() external pure returns(D memory){ return D(9,"hello",[uint256(4),5]); } function set() external { d=D(1,"stored value here, fairly long!!",[uint256(7),8]); } function ga(uint256 i) external view returns(uint256){ return d.a[i]; } function gs() external view returns(bytes memory){ return d.s; } }`,
       [
         { sig: 'f()' },
@@ -809,7 +809,7 @@ describe('remaining over-rejections R1/R3/R5 vs solc (byte-identical)', () => {
     ));
   it('R1: struct/fixed-array field from a non-inline source (local/param/storage) in return/let/storage', () =>
     rt(
-      `type I = { a: u256; b: u32; }; type O = { i: I; y: u256; }; type A = { x: u256; arr: Arr<u256,2>; }; class C { o: O; src: I; get fLocal(y: u256): External<O> { let z: I = I(7n, 8n); return O(z, y); } get fParam(z: I, y: u256): External<O> { return O(z, y); } get fArr(x: u256): External<A> { let z: Arr<u256,2> = [1n,2n]; return A(x, z); } seed(): External<void> { this.src = I(11n, 22n); } setO(): External<void> { let z: I = I(3n, 4n); this.o = O(z, 99n); } get ga(): External<u256> { return this.o.i.a; } get fStore(y: u256): External<O> { return O(this.src, y); } }`,
+      `type I = { a: u256; b: u32; }; type O = { i: I; y: u256; }; type A = { x: u256; arr: Arr<u256,2>; }; class C { o: O; src: I; get fLocal(y: u256): External<O> { let z: I = I(7n, 8n); return O(z, y); } get fParam(z: I, y: u256): External<O> { return O(z, y); } get fArr(x: u256): External<A> { let z: Arr<u256,2> = [u256(1n),2n]; return A(x, z); } seed(): External<void> { this.src = I(11n, 22n); } setO(): External<void> { let z: I = I(3n, 4n); this.o = O(z, 99n); } get ga(): External<u256> { return this.o.i.a; } get fStore(y: u256): External<O> { return O(this.src, y); } }`,
       `struct I{uint256 a;uint32 b;} struct O{I i;uint256 y;} struct A{uint256 x;uint256[2] arr;} contract C { O o; I src; function fLocal(uint256 y) external pure returns(O memory){ I memory z=I(7,8); return O(z,y); } function fParam(I calldata z,uint256 y) external pure returns(O memory){ return O(z,y); } function fArr(uint256 x) external pure returns(A memory){ uint256[2] memory z=[uint256(1),2]; return A(x,z); } function seed() external { src=I(11,22); } function setO() external { I memory z=I(3,4); o=O(z,99); } function ga() external view returns(uint256){ return o.i.a; } function fStore(uint256 y) external view returns(O memory){ return O(src,y); } }`,
       [
         { sig: 'fLocal(uint256)', args: W(5n) },
@@ -1181,7 +1181,7 @@ describe('pre-Phase-6 sweep: soundness + over-rejection fixes (byte-identical to
       `class C { get f(x: bytes): External<string> { let y: string = x; return y; } }`, // #1 implicit bytes<->string
       `class C { static A: u16 = 300n; static K: u8 = A & 0xFFn; get f(): External<u8> { return this.K; } }`, // #4 typed result u16 -> u8
       `class C { static K: u16 = type(u8).max * 2n; get f(): External<u16> { return this.K; } }`, // #3 typed-overflow constant (safe reject)
-      `class C { get f(): External<u256> { let a: Arr<u256,3> = [10n,20n,30n]; return a[3n]; } }`, // #15 const-OOB memory fixed-array
+      `class C { get f(): External<u256> { let a: Arr<u256,3> = [u256(10n),20n,30n]; return a[3n]; } }`, // #15 const-OOB memory fixed-array
       // (#16 side-effecting compound key `m[i++] += v` is no longer a reject: it is now lifted and
       //  byte-identical to solc - the index is hoisted to a temp evaluated once. See the positive
       //  check below and test/compound-assign-side-effecting-index.test.ts.)
@@ -1381,7 +1381,7 @@ describe('assignment evaluation order: RHS before LHS index/key (byte-identical 
     ],
     [
       'memory-local a[inc()]=inc()',
-      `class C { ${INC} f(): External<u256> { let a: Arr<u256,2> = [0n,0n]; a[this.inc()] = this.inc(); return a[0n]*10n + a[1n]; } }`,
+      `class C { ${INC} f(): External<u256> { let a: Arr<u256,2> = [u256(0n),0n]; a[this.inc()] = this.inc(); return a[0n]*10n + a[1n]; } }`,
       `contract C { ${SINC} function f() external returns (uint256){ uint256[2] memory a; a[inc()]=inc(); return a[0]*10 + a[1]; } }`,
     ],
     [

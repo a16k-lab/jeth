@@ -24,7 +24,7 @@ const J = `type P = { a: u256; b: u256; }; type W = { x: Arr<u256,2>; y: u256; }
 class C {
   get t1(): External<[P[], u256]> { let xs: P[] = [P(1n,2n),P(3n,4n)]; return [xs, 42n]; }
   get t2(): External<[u256, P[]]> { let xs: P[] = [P(1n,2n),P(3n,4n)]; return [42n, xs]; }
-  get t3(): External<[W[], u256]> { let xs: W[] = [W([1n,2n],3n),W([4n,5n],6n)]; return [xs, 7n]; }
+  get t3(): External<[W[], u256]> { let xs: W[] = [W([u256(1n),2n],3n),W([u256(4n),5n],6n)]; return [xs, 7n]; }
   get t4(): External<[u256, bytes[]]> { let bs: bytes[] = [bytes("${P32}"),bytes("${Q33}")]; return [42n, bs]; }
   get t5(): External<[bytes[], u256]> { let bs: bytes[] = [bytes("${P32}"),bytes("${Q33}")]; return [bs, 42n]; }
   get t6(): External<[u256, string[]]> { let ss: string[] = ["${P32}","${Q33}"]; return [7n, ss]; }

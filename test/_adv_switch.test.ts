@@ -182,7 +182,7 @@ class C {
 
   // --- (7) return shapes through the switch ---
   get rStruct(x: u256): External<P> { switch (x) { case 1n: return P(1n, 2n); default: return P(3n, 4n); } }
-  get rFixed(x: u256): External<Arr<u256,3>> { switch (x) { case 1n: return [1n, 2n, 3n]; default: return [4n, 5n, 6n]; } }
+  get rFixed(x: u256): External<Arr<u256,3>> { switch (x) { case 1n: return [u256(1n), 2n, 3n]; default: return [u256(4n), 5n, 6n]; } }
   get rTuple(x: u256): External<[u256, u256]> { switch (x) { case 1n: return [10n, 11n]; default: return [20n, 21n]; } }
   get rString(x: u256): External<string> { switch (x) { case 1n: return "alpha"; default: return "this string is comfortably longer than thirty-two bytes total!"; } }
 

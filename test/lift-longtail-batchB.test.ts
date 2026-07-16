@@ -366,7 +366,7 @@ describe('long-tail batch B: array-literal crosses (B1-B4) byte-identical to sol
     let m: u256[][] = [a, b];
     return [m, 4n];
   }
-  gf(): [Arr<u256, 2>, u256] { return [[7n, 8n], 4n]; }
+  gf(): [Arr<u256, 2>, u256] { return [[u256(7n), 8n], 4n]; }
   h(m: Arr<u256[], 2>, x: u256): u256 { return m[0n][0n] * 100n + m[1n][0n] + x; }
   get f(): External<u256> {
     let [m, n] = this.g();

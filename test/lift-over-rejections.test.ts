@@ -86,7 +86,7 @@ describe('lifted over-rejections: byte-identical vs solc', () => {
     type N = { a: u256; pre: Arr<u256, 2>; };
     class C {
       get we(i: u256): External<bytes> { let xs: P[] = new Array<P>(3n); xs[i] = P(11n, 22n); xs[0n] = P(1n, 2n); return abi.encode(xs[i].a, xs[i].b, xs[0n].a, xs[0n].b); }
-      get wn(i: u256): External<bytes> { let xs: N[] = new Array<N>(2n); xs[i] = N(5n, [6n, 7n]); return abi.encode(xs[i].a, xs[i].pre[0n], xs[i].pre[1n]); }
+      get wn(i: u256): External<bytes> { let xs: N[] = new Array<N>(2n); xs[i] = N(5n, [u256(6n), 7n]); return abi.encode(xs[i].a, xs[i].pre[0n], xs[i].pre[1n]); }
       get weoob(i: u256): External<bytes> { let xs: P[] = new Array<P>(2n); xs[i] = P(1n, 2n); return abi.encode(xs[0n].a); }
     }`;
     const S = `struct P { uint256 a; uint256 b; }
@@ -214,7 +214,7 @@ describe('lifted over-rejections: byte-identical vs solc', () => {
     class C { get wrq(i: u256): External<bytes> { let xs: P[] = new Array<P>(2n); xs[i].q = Q(11n, 22n); return abi.encode(xs[i].q.m, xs[i].q.n); } }`)).toContain('JETH429');
     expect(codes(`type Q = { m: u256; n: u256; };
     type P = { q: Q; pre: Arr<u256, 2>; tag: u256; };
-    class C { get wrpre(i: u256): External<bytes> { let xs: P[] = new Array<P>(2n); xs[i].pre = [33n, 44n]; return abi.encode(xs[i].pre[0n], xs[i].pre[1n]); } }`)).toContain('JETH429');
+    class C { get wrpre(i: u256): External<bytes> { let xs: P[] = new Array<P>(2n); xs[i].pre = [u256(33n), 44n]; return abi.encode(xs[i].pre[0n], xs[i].pre[1n]); } }`)).toContain('JETH429');
   });
 
   it('runtime array index into a struct-array-element field xs[i].pre[j] (read+write, 2D, OOB) [was JETH151]', async () => {

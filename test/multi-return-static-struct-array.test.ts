@@ -29,7 +29,7 @@ class C {
   get wide(): External<[u256, Arr<In3,2>]> { let a: Arr<In3,2> = [In3(1n,2n,3n),In3(4n,5n,6n)]; return [42n, a]; }
   get nested(): External<[u256, Arr<In2,2>]> { let a: Arr<In2,2> = [In2(In(1n,2n),3n), In2(In(4n,5n),6n)]; return [42n, a]; }
   // alongside a value array, another struct, a dynamic string sibling; two static-struct arrays
-  get withValArr(): External<[Arr<In,2>, Arr<u256,3>]> { let a: Arr<In,2> = [In(1n,2n),In(3n,4n)]; let v: Arr<u256,3> = [11n,12n,13n]; return [a, v]; }
+  get withValArr(): External<[Arr<In,2>, Arr<u256,3>]> { let a: Arr<In,2> = [In(1n,2n),In(3n,4n)]; let v: Arr<u256,3> = [u256(11n),12n,13n]; return [a, v]; }
   get withStruct(): External<[In, Arr<In,2>]> { let s: In = In(99n,100n); let a: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return [s, a]; }
   get withStr(): External<[Arr<In,2>, string]> { let a: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return [a, "hello"]; }
   get twoArrs(): External<[Arr<In,2>, u256, Arr<In,3>]> { let a: Arr<In,2> = [In(1n,2n),In(3n,4n)]; let b: Arr<In,3> = [In(5n,6n),In(7n,8n),In(9n,10n)]; return [a, 5n, b]; }
@@ -37,7 +37,7 @@ class C {
   // CONTROLS that must stay byte-identical (they exercise the sibling branches):
   get ctrlSolo(): External<Arr<In,2>> { let a: Arr<In,2> = [In(7n,8n),In(9n,10n)]; return a; }
   get ctrlStructInTuple(): External<[u256, In]> { let s: In = In(7n,8n); return [42n, s]; }
-  get ctrlValArrInTuple(): External<[u256, Arr<u256,3>]> { let a: Arr<u256,3> = [7n,8n,9n]; return [42n, a]; }
+  get ctrlValArrInTuple(): External<[u256, Arr<u256,3>]> { let a: Arr<u256,3> = [u256(7n),8n,9n]; return [42n, a]; }
   get ctrlAbiEncode(): External<bytes> { let a: Arr<In,2> = [In(7n,8n),In(9n,10n)]; return abi.encode(42n, a); }
 }`;
 

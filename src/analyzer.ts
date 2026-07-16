@@ -6604,7 +6604,10 @@ export class Analyzer {
       .filter((x): x is { p: { name: string; node: ts.Expression }; v: StateVar } => x.v !== undefined)
       .sort((a, b) => (a.v.slot < b.v.slot ? -1 : a.v.slot > b.v.slot ? 1 : 0));
     for (const { p, v } of items) {
-      const e = this.checkExpr(p.node, v.type);
+      // ARRLIT-CONV: a state-var initializer lands in STORAGE and is filled by the same ELEMENT-WISE
+      // COPY as `this.s = <lit>` in the constructor (`uint256[2] s = [1,2];` ACCEPTS - probed), so it
+      // gets the permission too.
+      const e = this.withElemWiseCopy(true, () => this.checkExpr(p.node, v.type));
       const value = e ? this.coerce(e, v.type, p.node) : undefined;
       if (!value) continue; // a diagnostic was emitted (e.g. invalid UTF-8) - the compile already fails
       this.currentWritesState = true; // same flag the twin's checkLValue sets on a dynState write
@@ -11840,7 +11843,10 @@ export class Analyzer {
       );
       return;
     }
-    const v = this.checkExpr(argExpr, arr.elem);
+    // ARRLIT-CONV: the push destination is always a STORAGE dynamic array here (a calldata/fixed-array
+    // receiver was rejected above), and solc appends the element with the same ELEMENT-WISE COPY a
+    // storage assignment uses - `uint256[2][] s; s.push([1,2]);` ACCEPTS (probed), so grant the permission.
+    const v = this.withElemWiseCopy(true, () => this.checkExpr(argExpr, arr.elem));
     if (!v) return;
     const value = this.coerce(v, arr.elem, call.arguments[0]!);
     // SOUNDNESS (JETH467/JETH470): pushing a MEMORY or CALLDATA aggregate element into a STORAGE dynamic array
@@ -15122,6 +15128,23 @@ export class Analyzer {
     return undefined;
   }
 
+  /** Is this assignment target a STORAGE NON-POINTER location - one solc fills with an ELEMENT-WISE COPY?
+   *  A `state` / `place` (nested storage path) / `mapping` value target always is; an `arrayElem` is
+   *  storage unless its array base is a memory array. Every other LValue kind is a memory / staged
+   *  location (`local`, `memField`, `memElem`, `memDynField`, `aggFieldStore`, `immutableStaged`, ...).
+   *  Shared by the JETH467/JETH470 mem/cd->storage copy gates and the ARRLIT-CONV element-wise-copy
+   *  permission (arrLitCtx.elemWiseCopy) so the two can never drift apart. */
+  private isStorageCopyTarget(target: LValue): boolean {
+    return (
+      target.kind === 'state' ||
+      target.kind === 'place' ||
+      target.kind === 'mapping' ||
+      (target.kind === 'arrayElem' &&
+        target.arr.base.kind !== 'memArray' &&
+        target.arr.base.kind !== 'memArrayExpr')
+    );
+  }
+
   private checkAssignment(e: ts.BinaryExpression, out: Stmt[]): void {
     // `[a, , c] = <multi-call | tuple>` (tuple destructuring assignment to existing lvalues).
     if (ts.isArrayLiteralExpression(e.left)) {
@@ -15203,7 +15226,15 @@ export class Analyzer {
     const opKind = e.operatorToken.kind;
 
     if (opKind === ts.SyntaxKind.EqualsToken) {
-      const rhs = this.checkExpr(e.right, target.type);
+      // ARRLIT-CONV: an array literal assigned into a STORAGE NON-POINTER target is filled by an
+      // ELEMENT-WISE COPY, which is the one landing where solc converts the element type instead of
+      // requiring it to be identical (`uint256[2] s; s = [1,2];` ACCEPTS). Grant the permission for
+      // exactly that target set - the same storage-target predicate the JETH467/JETH470 gates below use
+      // (a memory local / memField / memElem / aggFieldStore target, and an `immutableStaged` one, are
+      // NOT storage and keep the strict memory rule; solc likewise rejects a literal assigned to a
+      // storage POINTER local). checkExpr consumes the grant at entry, so it reaches the RHS literal
+      // itself and nothing deeper.
+      const rhs = this.withElemWiseCopy(this.isStorageCopyTarget(target), () => this.checkExpr(e.right, target.type));
       if (!rhs) return;
       const value = this.coerce(rhs, target.type, e.right);
       // SOUNDNESS (JETH429): a whole-inner-element / whole-aggregate-member write into an INLINE
@@ -15234,13 +15265,7 @@ export class Analyzer {
       // rejected. (Reading a storage Arr<In,N> into a memory local - bind-from-storage - is the OTHER
       // direction and stays supported; the fixed element/field storage writes this.fa[i].s = ... are
       // storage-native and unaffected.)
-      const storageTarget =
-        target.kind === 'state' ||
-        target.kind === 'place' ||
-        target.kind === 'mapping' ||
-        (target.kind === 'arrayElem' &&
-          target.arr.base.kind !== 'memArray' &&
-          target.arr.base.kind !== 'memArrayExpr');
+      const storageTarget = this.isStorageCopyTarget(target);
       const memorySourcedRhs =
         value.kind === 'arrayLit' ||
         value.kind === 'newArray' ||
@@ -23025,9 +23050,112 @@ export class Analyzer {
     return { kind: 'array', element: acc, length: lit.elements.length };
   }
 
+  /** ARRLIT-CONV: is the array literal currently being checked landing in a STORAGE NON-POINTER target,
+   *  i.e. a target solc fills with an ELEMENT-WISE COPY? Solc's ArrayType::isImplicitlyConvertibleTo has
+   *  exactly two branches, and this flag selects between them (all probed at 0.8.35):
+   *
+   *    - target is STORAGE and NOT a pointer (a state var, a storage struct field, a storage array
+   *      element, a mapping value, a `push` argument, a state-var initializer): "less restrictive
+   *      conversion, since we need to copy anyway" - the literal's element type only has to be
+   *      IMPLICITLY CONVERTIBLE to the target's element type, so `uint256[2] s; s = [1,2];` ACCEPTS
+   *      (uint8 -> uint256 element-wise).
+   *    - target is MEMORY, CALLDATA, or a STORAGE POINTER (a memory local decl/assign, a memory struct
+   *      field / array element, a return value, an internal/external call argument, a struct-constructor
+   *      field): no element-wise copy happens, so solc requires the base type to be IDENTICAL and
+   *      `uint256[2] memory a = [1,2];` REJECTS ("Type uint8[2] memory is not implicitly convertible to
+   *      expected type uint256[2] memory").
+   *
+   *  Solc reaches this by typing the inline array from its ELEMENTS ONLY (never pushing the expected type
+   *  in - that is selfTypeArrayLit's model) and then converting. JETH pushes `expected` into the literal,
+   *  which is byte-identical wherever solc accepts, so the flag only has to decide WHICH convertibility
+   *  check to run at the literal - the lowering is unchanged either way. Default false = the strict
+   *  memory rule; the permission is granted at exactly the storage landing sites and CONSUMED at every
+   *  checkExpr entry so it cannot leak (see checkExpr). */
+  private arrLitCtx: { elemWiseCopy: boolean; nestedElem: boolean } = { elemWiseCopy: false, nestedElem: false };
+
+  /** ARRLIT-CONV: run `fn` with the array-literal landing context set, restoring it after (the context is
+   *  a single analyzer-wide slot, so every grant/re-arm must be scoped).
+   *
+   *  `nestedElem` marks a literal that is an ELEMENT of an enclosing array literal. Such a literal never
+   *  runs the convertibility check itself, for two independent reasons:
+   *    - under a FIXED-outer landing the check at the OUTERMOST literal already covers it -
+   *      selfTypeArrayLit RECURSES into the elements, so `Arr<Arr<u256,2>,2> = [[1n,2n],[3n,4n]]` is
+   *      rejected by the outer comparison (uint8[2] vs Arr<u256,2>) and a per-element check is redundant;
+   *    - under a DYNAMIC-outer landing there is no outer check to subsume it, and there must not be one:
+   *      `Arr<u256,2>[] = [[1n,2n],[3n,4n]]` is JETH sugar with NO solc literal spelling (a literal is
+   *      always a FIXED T[n]). Its verified solc equivalent is new + per-element assign, the same
+   *      equivalence the Tier-3 L9 / Batch B (B3) element-location gate below is scoped by. Checking the
+   *      INNER literals of that sugar would demand a cast (`[[u256(1n),2n], ...]`) inside a construct
+   *      whose enclosing form solc cannot express at all - an over-rejection with no parity meaning. */
+  private withArrLitCtx<T>(ctx: { elemWiseCopy: boolean; nestedElem: boolean }, fn: () => T): T {
+    const saved = this.arrLitCtx;
+    this.arrLitCtx = ctx;
+    try {
+      return fn();
+    } finally {
+      this.arrLitCtx = saved;
+    }
+  }
+
+  /** ARRLIT-CONV: grant the storage element-wise-copy permission to a top-level (non-nested) landing. */
+  private withElemWiseCopy<T>(on: boolean, fn: () => T): T {
+    return this.withArrLitCtx({ elemWiseCopy: on, nestedElem: false }, fn);
+  }
+
+  /** ARRLIT-CONV: solc's array-literal convertibility check at a MEMORY / calldata / storage-pointer
+   *  landing. Returns an error message when solc would REJECT `lit` against `expected`, else undefined.
+   *
+   *  Self-type the literal from its ELEMENTS ONLY (selfTypeArrayLit is the faithful, independently swept
+   *  model of solc's inline-array typing) and require the inferred ELEMENT type to be IDENTICAL to the
+   *  expected element type - NOT merely convertible.
+   *
+   *  Scoped to an expectation solc's own literal typing can REACH. A solc array literal is always a FIXED
+   *  `T[n]`, so a DYNAMICALLY-SIZED array is unreachable as the literal's type at either level, and both
+   *  levels are therefore JETH-only sugar with NO solc literal spelling (its verified solc equivalent is
+   *  `new` + per-element assign - the same equivalence the Tier-3 L9 / Batch B (B3) element-location gate
+   *  is scoped by):
+   *    - DYNAMIC OUTER (`u256[] a = [1n,2n]`): rejected by solc for EVERY element spelling
+   *      (isDynamicallySized() must match), so this is JETH's documented dynamic-array-literal feature
+   *      (JETH216), not a width question.
+   *    - DYNAMIC ELEMENT (`Arr<u256[],2> a = [[7n],[8n]]`): likewise rejected by solc for every spelling -
+   *      a nested literal types as the FIXED `uint8[1]`, never as `uint256[]`, so `uint256[][2] memory m =
+   *      [[uint256(1),2],[uint256(3),4]]` is a TypeError too (probed). Without this arm the check would
+   *      fire only when the inner literals happen to UNIFY, rejecting `[[7n],[8n]]` while still accepting
+   *      the ragged `[[1n,2n,3n],[9n]]` (selfTypeArrayLit gives up there) - an incoherent split of one
+   *      sugar family that solc rejects wholesale.
+   *  A `bytes`/`string` element is NOT dynamic in this sense and stays checked: solc reaches `string[2]`
+   *  from `["a","b"]` normally.
+   *
+   *  A literal selfTypeArrayLit cannot type (undefined: an element that does not check quietly, or no
+   *  common element type - e.g. `[bytes32(0), 0]`, where solc's literal->bytesN zero quirk is deliberately
+   *  not modelled) falls through to JETH's existing expected-push behaviour: this check only ever REMOVES
+   *  acceptance it is certain about, never adds a reject on a shape whose solc type is unknown. */
+  private arrLitMemoryConvError(
+    lit: ts.ArrayLiteralExpression,
+    expected: JethType & { kind: 'array' },
+  ): string | undefined {
+    if (expected.length === undefined) return undefined;
+    if (expected.element.kind === 'array' && expected.element.length === undefined) return undefined;
+    const selfT = this.selfTypeArrayLit(lit);
+    if (!selfT || typesEqual(selfT.element, expected.element)) return undefined;
+    return `type ${displayName(selfT)} is not implicitly convertible to expected type ${displayName(expected)}: an inline array literal is typed from its ELEMENTS ONLY (the expected type is not pushed into it), and a memory array conversion requires an IDENTICAL element type (only a copy into storage converts element-wise); cast the first element (e.g. [${displayName(expected.element)}(...), ...])`;
+  }
+
   private checkExpr(node: ts.Expression, expected?: JethType): Expr | undefined {
-    // parenthesized
-    if (ts.isParenthesizedExpression(node)) return this.checkExpr(node.expression, expected);
+    // ARRLIT-CONV: CONSUME the array-literal landing context (see arrLitCtx) at every checkExpr
+    // ENTRY. This single choke point is what makes the permission safe: it can never leak into a
+    // sub-expression solc types in MEMORY (a call argument, a struct-constructor field). `this.s = S([1,2])`
+    // and `this.s = id([1,2])` are solc TypeErrors even though `this.s` is storage, because the inner
+    // literal lands in the constructor's / callee's MEMORY parameter, not in the storage copy - probed.
+    // The array-literal branch below captures the permission and re-arms it only where solc's own typing
+    // carries it through: a parenthesized expression and DIRECTLY nested array-literal elements.
+    const arrLitCtx = this.arrLitCtx;
+    this.arrLitCtx = { elemWiseCopy: false, nestedElem: false };
+
+    // parenthesized (solc: `s = ([1,2])` is the same expression as `s = [1,2]` - probed ACCEPT), so the
+    // landing context passes straight through.
+    if (ts.isParenthesizedExpression(node))
+      return this.withArrLitCtx(arrLitCtx, () => this.checkExpr(node.expression, expected));
 
     // ARRLIT-DIRECT-INDEX: `[a, b, c][i]` - solc materializes the array literal into a memory fixed array
     // then indexes. Desugar to the byte-identical `let __t: Arr<E,N> = [a,b,c]; __t[i]` via the statement
@@ -23358,8 +23486,13 @@ export class Analyzer {
         const tE = this.selfTypeArrayLit(node.whenFalse);
         if (tT && tE && typesEqual(tT, tE)) branchExpected = tT;
       }
-      const then = this.checkExpr(node.whenTrue, branchExpected);
-      const els = this.checkExpr(node.whenFalse, branchExpected);
+      // ARRLIT-CONV: a ternary in a storage landing carries the element-wise-copy permission into BOTH
+      // branches. solc types the ternary itself first (each branch on its own) and then converts the
+      // RESULT into storage element-wise, so `uint256[2] s; s = c ? [1,2] : [3,4];` ACCEPTS (probed) even
+      // though the same ternary REJECTS at a memory landing. Without the re-arm each branch literal would
+      // face the strict memory rule and this solc-ACCEPTED row would become an over-rejection.
+      const then = this.withArrLitCtx(arrLitCtx, () => this.checkExpr(node.whenTrue, branchExpected));
+      const els = this.withArrLitCtx(arrLitCtx, () => this.checkExpr(node.whenFalse, branchExpected));
       if (!cond || !then || !els) return undefined;
       // INTEGER-LITERAL branch typing (solc parity). solc types each branch by its OWN mobile type
       // (a non-negative literal -> smallest UNSIGNED type, a negative literal -> smallest SIGNED type;
@@ -24064,9 +24197,35 @@ export class Analyzer {
         );
         return undefined;
       }
+      // ARRLIT-CONV (SOUNDNESS): at a MEMORY / calldata / storage-pointer landing solc requires the
+      // literal's SELF-TYPED element type to be IDENTICAL to the expected element type; only a copy INTO
+      // STORAGE converts element-wise (arrLitCtx.elemWiseCopy carries that permission). JETH pushed `expected`
+      // into the literal unconditionally, so it ACCEPTED every case where the declared element type is
+      // merely WIDER than the one solc infers from the elements - `const a: Arr<u256,2> = [1n, 2n]` (solc:
+      // "Type uint8[2] memory is not implicitly convertible to expected type uint256[2] memory"), and the
+      // same in the assign / return / call-arg / struct-constructor-field positions. An OVER-ACCEPTANCE.
+      // The check runs at the OUTERMOST literal of a landing only (see withArrLitCtx for why a nested
+      // element never runs it), and never under the storage element-wise-copy permission.
+      if (!arrLitCtx.elemWiseCopy && !arrLitCtx.nestedElem) {
+        const convErr = this.arrLitMemoryConvError(node, expected);
+        if (convErr) {
+          this.diags.error(node, 'JETH497', convErr);
+          return undefined;
+        }
+      }
       const elements: Expr[] = [];
+      const arrExpected = expected; // narrowed alias: the element closures below outlive the narrowing
       for (const el of node.elements) {
-        const e = this.checkExpr(el, expected.element);
+        // ARRLIT-CONV: mark the element as nested (suppressing its own check - the outermost literal's
+        // check already covers it, and a dyn-outer literal must not gain one), and carry the storage
+        // element-wise-copy permission down a DIRECTLY nested array literal: solc's storage copy recurses
+        // into the nested literal's own conversion (`uint256[2][2] s; s = [[1,2],[3,4]];` ACCEPTS - probed).
+        // ANY other element form (a call, a struct constructor) is a fresh MEMORY landing and must not
+        // inherit the permission; checkExpr's consume-at-entry makes that side automatic.
+        const e = this.withArrLitCtx(
+          { elemWiseCopy: arrLitCtx.elemWiseCopy && ts.isArrayLiteralExpression(el), nestedElem: true },
+          () => this.checkExpr(el, arrExpected.element),
+        );
         if (!e) return undefined;
         elements.push(this.coerce(e, expected.element, el));
       }
