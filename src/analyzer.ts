@@ -36,6 +36,7 @@ import {
   isFixedValueWordArray,
   isAggregateLeafArray,
   isStaticStructFixedLeafArray,
+  isStaticStructLeafArray,
   isStaticStructFixedElemDynArray,
   isDynBytesFixedLeafArray,
   isDynLeafFixedArray,
@@ -22827,7 +22828,41 @@ export class Analyzer {
     const unified = this.unifyOperands(then, els, node);
     if (!unified) return undefined;
     const t = unified[0].type;
-    if (!(t.kind === 'array' && isStaticStructFixedLeafArray(t))) return undefined;
+    // The POINTER-HEADED memory array families this ternary can select PER BRANCH. solc unifies the mixed
+    // ternary to a MEMORY reference with an ASYMMETRIC rule (re-derived from solc 0.8.35, witnesses W1/W2/
+    // W2b/W3 in tern-struct-arr-dyn.test.ts): the MEMORY arm is ALIASED (a write through the result is
+    // visible in the source local), the STORAGE arm is DEEP-COPIED (recursively, incl. nested dyn fields;
+    // a write through the result never reaches storage, and a later storage write is not seen). It is
+    // observably EXACTLY `let r: T; if (c) { r = m; } else { r = st; }` - in Solidity mem->mem IS an alias
+    // and storage->mem IS a deep copy, so lowering each branch INSIDE ITS OWN arm reproduces the asymmetry
+    // for free. Every admitted family does exactly that (each branch materializes via aggArgToMemPtr inside
+    // its own switch-case block, so the arm NOT taken is never materialized - a blanket copy of both arms
+    // would MISCOMPILE the memory arm, and hoisting a calldata arm's cd->mem copy out of its arm would
+    // revert on malformed calldata that solc tolerates):
+    //  - Arr<In,N> (FIXED outer - the original cluster-1 shape, routed by lowerExpr's ptrHeadedStruct matPtr).
+    //  - In[] / In[][] / In[][][] (ALL-DYNAMIC down to the static-struct leaf - routed by lowerExpr's own
+    //    dyn-array ternary case, which already materializes the taken branch only).
+    //  - A-LIT-RESID: a FIXED-outer DYNAMIC-element value array (Arr<u256[],N>), routed by lowerExpr's
+    //    ptrHeadedNested matPtr. The dynamic-outer twin (u256[][]) is NOT admitted here - checkExpr's
+    //    dynamic value-array path already accepts it, so it must keep its existing lowering.
+    // A flat / inline VALUE-leaf family (Arr<u256,N>, u256[]) is byte-invariant and stays with checkExpr.
+    //
+    // The two static-struct clauses are spelled with the PER-SHAPE predicates on purpose. Using the codec
+    // dispatch predicate isStaticStructAnyLeafArray here (as the first cut of this lift did) is a GATE
+    // CONTRACT VIOLATION - its docstring scopes it to sites where the type is already known to be a codec-
+    // routed memory array - and it is UNSOUND: it descends through ANY mix of levels, so it also admitted a
+    // MIXED dyn-outer/fixed-inner chain. The `length === undefined` restriction on the bare-value gate below
+    // only ever guarded the OUTER level, so the fixed level simply moved INSIDE. Witness on this base, with
+    // the family gate widened: a ternary over `Arr<Arr<In,2>,2>[]` MISCOMPILES its storage arm - bind(c=0)
+    // returns a raw pointer 0x440 where solc returns 100 - because that chain's read path and ABI encoder
+    // disagree about the memory image (the B-21 member-layout family, USER RULING: KEEP THE REJECT).
+    // isStaticStructLeafArray is all-dynamic-down-to-a-static-struct-leaf, so no fixed level can hide in it.
+    const ptrHeadedFamily =
+      t.kind === 'array' &&
+      (isStaticStructFixedLeafArray(t) ||
+        isStaticStructLeafArray(t) ||
+        (t.length !== undefined && isNestedValueArray(t) && isDynamicType(t)));
+    if (!ptrHeadedFamily) return undefined;
     // only the ALIASABLE branch kinds (a memory-local Arr<In,N> = memAggregate, a storage source, or an
     // array literal): each has an aggArgToMemPtr materialization that ALIASES memory / DEEP-COPIES storage,
     // exactly solc's memory-reference selection. A live/fresh reference kind cannot be alias-preserved here.
@@ -22838,7 +22873,18 @@ export class Analyzer {
         (x.arr.base.kind === 'fixedArray' ||
           x.arr.base.kind === 'stateArray' ||
           x.arr.base.kind === 'mapArray' ||
-          x.arr.base.kind === 'placeArray')) ||
+          x.arr.base.kind === 'placeArray' ||
+          // a DYNAMIC memory array local (In[] / Arr<u256[],N>'s mem twin): aggArgToMemPtr's memArray case
+          // returns the local's pointer UNCHANGED (yul.ts "memory local: ALIAS"), which is precisely solc's
+          // memory arm (witness W2b: a write through the ternary result IS visible in the source local). Its
+          // FIXED-outer sibling is the memAggregate kind already admitted above.
+          x.arr.base.kind === 'memArray')) ||
+      // NOTE: a CALLDATA branch is deliberately NOT admitted here. This gate runs from the localDecl /
+      // resolveArrayExpr consumers BEFORE checkExpr's RC-3 data-location gate, so admitting
+      // `calldataArray` here lets a cd|storage MIX through - an OVER-ACCEPTANCE (solc raises a TypeError:
+      // a calldata branch cannot unify with a storage branch). Verified during this lift: adding it made
+      // `let q: In[] = c ? cdP : this.st` compile while solc rejects. A-LIT-RESID's calldata branch is
+      // admitted on the bare-value `lowerable` path instead, which sits AFTER that location gate.
       x.kind === 'structArrayElem';
     if (!aliasable(unified[0]) || !aliasable(unified[1])) return undefined;
     return { kind: 'ternary', type: t, cond, then: unified[0], else: unified[1], ptrHeaded: true };
@@ -23691,6 +23737,40 @@ export class Analyzer {
           isDynamicType(e.type) &&
           (e.kind === 'memAggregate' ||
             e.kind === 'ternary' ||
+            (e.kind === 'arrayValue' &&
+              (e.arr.base.kind === 'fixedArray' ||
+                e.arr.base.kind === 'stateArray' ||
+                e.arr.base.kind === 'mapArray' ||
+                e.arr.base.kind === 'placeArray' ||
+                // A-LIT-RESID: a whole CALLDATA-param branch (`let q: Arr<u256[],2> = c ? p : [a,b]`).
+                // aggArgToMemPtr's calldataArray case DEEP-COPIES it into a fresh pointer-headed image
+                // reusing solc's own calldata-decode revert semantics, and lowerExpr emits that copy
+                // INSIDE the branch's own switch-case block, so malformed calldata reverts ONLY on the
+                // arm that actually reads it - byte-identical to solc, which likewise validates a
+                // calldata reference lazily (verified with a malformed-calldata witness on both arms).
+                // Hoisting the copy out of its arm would revert where solc returns a value. The cd|storage
+                // MIX never reaches here: the RC-3 data-location gate above rejects it (solc TypeError).
+                e.arr.base.kind === 'calldataArray')))) ||
+        // TERN-STRUCT-ARR (dynamic outer): a STORAGE branch of a DYNAMIC-outer static-struct-leaf array
+        // (In[]: `return c ? m : this.st`). lowerExpr's dyn-array ternary case materializes the TAKEN
+        // branch only, per-branch via aggArgToMemPtr INSIDE its own switch-case block: a memArray branch
+        // returns its pointer VERBATIM (solc's aliased memory arm, witness W2b) and a storage branch
+        // deep-copies to a fresh [len][inline elems] image (solc's copied storage arm, witnesses W1/W2) -
+        // the same asymmetry the accepted let-bind `let p: In[] = c ? m : this.st` already lowers. Unlike
+        // the FIXED-outer Arr<In,N> twin below, an ALL-DYNAMIC chain has NO flat-vs-pointer-headed ambiguity
+        // (its image IS the [len][inline elems] block every ABI consumer of In[] reads), so the bare-value
+        // consumers are safe here - which leaves the fixed-outer RC-2 / MC-2..MC-6 pointer-word-leak reject
+        // exactly as it was.
+        //
+        // The predicate is isStaticStructLeafArray (ALL levels dynamic down to the static-struct leaf), NOT
+        // `isStaticStructAnyLeafArray && length === undefined`. The latter reads like a dynamic-outer
+        // restriction but only ever constrained the OUTERMOST level: isStaticStructAnyLeafArray descends
+        // through ANY mix, so a FIXED level just moved INSIDE and `Arr<In,2>[]` / `Arr<Arr<In,2>,2>[]` were
+        // admitted here too - and the latter's read path and ABI encoder disagree about the memory image
+        // (B-21, KEEP THE REJECT). isStaticStructLeafArray cannot hide a fixed level at any depth.
+        (e.type.kind === 'array' &&
+          isStaticStructLeafArray(e.type) &&
+          (e.kind === 'ternary' ||
             (e.kind === 'arrayValue' &&
               (e.arr.base.kind === 'fixedArray' ||
                 e.arr.base.kind === 'stateArray' ||

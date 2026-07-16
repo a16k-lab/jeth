@@ -151,3 +151,27 @@ describe('new Array<Arr<P,N>>(n) zero image - byte-identical to solc 0.8.35', ()
   });
 });
 
+describe('TERN-STRUCT-ARR gate - the family gate is a per-shape predicate, not the codec one', () => {
+  it('a ternary over a MIXED dyn-outer/fixed-inner chain rejects; the all-dynamic scope stays lifted', () => {
+    const D = `${IN} class C { st: Arr<Arr<In,2>,2>[]; `;
+    // Arr<Arr<In,2>,2>[] through the ternary MISCOMPILED its storage arm (a raw 0x440 where solc gives 100)
+    // when the gate used the codec-dispatch predicate isStaticStructAnyLeafArray, which descends through ANY
+    // mix of levels so the fixed level hid INSIDE the `length === undefined` outer restriction.
+    expect(
+      rejects(
+        `${D} get bind(c: bool): External<u256> { let m: Arr<Arr<In,2>,2>[] = new Array<Arr<Arr<In,2>,2>>(1); let p: Arr<Arr<In,2>,2>[] = c ? m : this.st; return p[0n][0n][0n].a; } }`,
+      ),
+    ).toBe(true);
+    // the ALL-DYNAMIC scope the lift actually verified stays admitted.
+    expect(
+      rejects(
+        `${IN} class C { st: In[]; get bind(c: bool): External<u256> { let m: In[] = new Array<In>(2); m[0n]=In(1n,2n); m[1n]=In(3n,4n); let p: In[] = c ? m : this.st; return p[0n].a; } }`,
+      ),
+    ).toBe(false);
+    expect(
+      rejects(
+        `${IN} class C { st: In[][]; get bind(c: bool): External<u256> { let m: In[][] = new Array<In[]>(1); m[0n]=new Array<In>(1); m[0n][0n]=In(1n,2n); let p: In[][] = c ? m : this.st; return p[0n][0n].a; } }`,
+      ),
+    ).toBe(false);
+  });
+});
