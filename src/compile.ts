@@ -458,6 +458,76 @@ function collectImportedMethodTypeCollisions(
     }
   });
   if (declByFinal.size === 0) return;
+  // BARE-BODYLESS SHORT-CIRCUIT EMULATION (single-file parity for the JETH489 gate). On the single-file
+  // path the JETH133 member-vs-file-level gate runs inside analyzeContract, and the NON-DEPLOYABLE route
+  // (no deployed contract in the unit) only reaches it through analyzeNonDeployableUnit, which RETURNS
+  // EARLY when any abstract class declares a bodyless method/get that is neither @virtual nor `abstract`
+  // (JETH489, "must be marked virtual") - so the single-file code list for such a program is [JETH489]
+  // with NO JETH133, the ill-formed member never being counted. The multi-file analyzer fires the same
+  // JETH489 over the merged bundle (imported abstract bases included - verified: the inherited bare-bodyless
+  // cell rejects JETH489 in both modes), so when this pre-pass would ADD a JETH133 the single-file path
+  // cannot emit, the bundle would reject with a DIFFERENT code list. Emulate the short-circuit: if the
+  // bundle will take the non-deployable analyzer route AND some abstract class trips the JETH489 gate,
+  // emit NOTHING here - the analyzer's own JETH489 (or its earlier JETH040/JETH041 gates, which return
+  // before JETH489 the same way) is the reject, exactly as in the single-file all-in-one.
+  // The DEPLOYED route has no such short-circuit (witnessed: a deployed contract with a bare-bodyless
+  // colliding method rejects [JETH483,JETH380,JETH133] single-file, the linearization gate still counting
+  // the member), so a bundle WITH a deployed contract keeps the full pre-pass - suppressing there would
+  // LOSE the JETH133 the single-file path emits. Both scans mirror the analyzer's own predicates
+  // (findContractClasses / isNativeContractClass / extendedClassNames / the analyzeNonDeployableUnit
+  // JETH489 loop) on pristine names via finalNameIn, recursing exactly as those visitors do.
+  const hasMod = (node: ts.Node, kind: ts.SyntaxKind): boolean =>
+    ts.canHaveModifiers(node) && (ts.getModifiers(node) ?? []).some((m) => m.kind === kind);
+  const KIND_DECS = ['contract', 'struct', 'interface', 'abstract', 'library', 'proxy', 'beacon', 'facet', 'diamond'];
+  // extends targets by FINAL name - the analyzer computes extendedClassNames on the post-rename AST, where
+  // every identifier already carries its `$mN$` scoped spelling; finalNameIn reproduces that spelling here.
+  const extendedFinal = new Set<string>();
+  const collectExtends = (n: ts.Node): void => {
+    if (ts.isClassDeclaration(n)) {
+      for (const h of n.heritageClauses ?? []) {
+        if (h.token === ts.SyntaxKind.ExtendsKeyword) {
+          for (const b of h.types)
+            if (ts.isIdentifier(b.expression)) extendedFinal.add(finalNameIn(fileOf(b.expression), b.expression.text));
+        }
+      }
+    }
+    ts.forEachChild(n, collectExtends);
+  };
+  ts.forEachChild(sf, collectExtends);
+  // Will the analyzer take the DEPLOYED route? Mirrors findContractClasses: a @contract/@proxy/@beacon/
+  // @facet class deploys (@diamond expands to a synthesized @contract upstream of this pre-pass, so treat
+  // it as deployable too), else the native fallback - a bare class (no kind decorator, not `abstract`, not
+  // `static`) that no other class extends.
+  const isDeployedContractClass = (cls: ts.ClassDeclaration): boolean => {
+    const decs = decoratorNames(cls);
+    if (decs.includes('contract') || decs.includes('proxy') || decs.includes('beacon') || decs.includes('facet') || decs.includes('diamond'))
+      return true;
+    if (hasMod(cls, ts.SyntaxKind.AbstractKeyword) || hasMod(cls, ts.SyntaxKind.StaticKeyword)) return false;
+    if (KIND_DECS.some((d) => decs.includes(d))) return false;
+    return !(cls.name && extendedFinal.has(finalNameIn(fileOf(cls.name), cls.name.text)));
+  };
+  // The exact JETH489 trigger (analyzeNonDeployableUnit): a bodyless method or `get` accessor on an
+  // abstract class, with neither the @virtual decorator nor the `abstract` member keyword.
+  const tripsBodylessVirtualGate = (cls: ts.ClassDeclaration): boolean => {
+    for (const m of cls.members) {
+      if (!((ts.isMethodDeclaration(m) || ts.isGetAccessorDeclaration(m)) && m.body === undefined)) continue;
+      if (decoratorNames(m).includes('virtual') || hasMod(m, ts.SyntaxKind.AbstractKeyword)) continue;
+      return true;
+    }
+    return false;
+  };
+  let anyDeployed = false;
+  let anyBareBodyless = false;
+  const scanClasses = (n: ts.Node): void => {
+    if (ts.isClassDeclaration(n)) {
+      if (isDeployedContractClass(n)) anyDeployed = true;
+      const isAbstract = hasMod(n, ts.SyntaxKind.AbstractKeyword) || decoratorNames(n).includes('abstract');
+      if (n.name && isAbstract && tripsBodylessVirtualGate(n)) anyBareBodyless = true;
+    }
+    ts.forEachChild(n, scanClasses);
+  };
+  ts.forEachChild(sf, scanClasses);
+  if (!anyDeployed && anyBareBodyless) return;
   // A class that carries solc's contract MEMBER namespace: a bare / @contract-family / abstract class. A
   // @library / `static class` (library) / @struct object type / native `interface`-as-class / @diamond does
   // not participate in this member-vs-file-level collision. (Dep files cannot declare contracts, so in
