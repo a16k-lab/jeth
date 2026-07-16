@@ -22866,12 +22866,13 @@ export class Analyzer {
     return p.type;
   }
 
-  /** Batch B (B4): fold the COMMON element type over intrinsically-typed literal elements: exact
-   *  type equality, or solc's common type of two same-family numerics / bytesN (the WIDEST width:
-   *  [u8(1n), u256(x)] -> uint256[2], [i8(-1n), i256(x)] -> int256[2] - probed at 0.8.35). A
-   *  cross-family int mix (u8|i16) has NO solc common type ("Unable to deduce common type",
-   *  probed) - undefined keeps the reject. Enums/brands: commonNumericType's brand guard already
-   *  refuses cross-brand; identical enum/brand types pass the typesEqual arm. */
+  /** Batch B (B4): the COMMON type of CONCRETELY-typed literal elements: exact type equality, or
+   *  solc's common type of two same-family numerics / bytesN (the WIDEST width: [u8(1n), u256(x)]
+   *  -> uint256[2], [i8(-1n), i256(x)] -> int256[2] - probed at 0.8.35). A cross-family int mix
+   *  (u8|i16, and even u8|i256) has NO solc common type ("Unable to deduce common type", probed) -
+   *  undefined keeps the reject. Enums/brands: commonNumericType's brand guard already refuses
+   *  cross-brand; identical enum/brand types pass the typesEqual arm. Used pairwise by
+   *  litElemConvertibleTo as solc's implicit-conversion oracle over concrete types. */
   private unifyLitElemTypes(types: JethType[]): JethType | undefined {
     let acc: JethType = types[0]!;
     for (const t of types) {
@@ -22893,45 +22894,102 @@ export class Analyzer {
     return acc;
   }
 
-  /** Batch B (B4/B1): SELF-TYPE an array literal that has NO outer expected type from its elements'
-   *  intrinsic types, mirroring solc's array-literal typing over explicitly-typed elements
-   *  (abi.encode([u256(1n), u256(2n)]) -> uint256[2], c ? [a, b] : [b, a] with a,b: u256[] ->
-   *  uint256[][2]). undefined when any element is mobile-typed (bare int literal - the L2-MOBILE
-   *  deliberate gate), does not type quietly, or the element types have no probed common type.
-   *  The result is the FIXED array type T[n] solc gives a literal. */
+  /** L2-MOBILE: solc's MOBILE type for a bare int literal - the SMALLEST uintN (non-negative) or
+   *  intN (negative) with N a multiple of 8 whose range holds the value. Probed at 0.8.35 via the
+   *  `bytes32 z = [..]` type-error oracle: 255 -> uint8, 256/300 -> uint16, 70000 -> uint24 (NOT
+   *  uint32), 2**255 -> uint256, -1 -> int8, -(2**255) -> int256. undefined when the value fits no
+   *  256-bit type (solc: "Invalid rational number" - a reject either way). */
+  private litMobileType(v: bigint): JethType | undefined {
+    if (v >= 0n) {
+      for (let bits = 8; bits <= 256; bits += 8) if (v < 1n << BigInt(bits)) return { kind: 'uint', bits };
+      return undefined;
+    }
+    for (let bits = 8; bits <= 256; bits += 8) if (v >= -(1n << BigInt(bits - 1))) return { kind: 'int', bits };
+    return undefined;
+  }
+
+  /** L2-MOBILE: is a BARE int literal `v` implicitly convertible to `t` in solc? True exactly when
+   *  `t` is a plain (unbranded, non-enum) uintN/intN whose range holds v. bytesN is deliberately
+   *  EXCLUDED: solc converts ONLY the zero literal to bytesN ([bytes1(hex"01"), 0] -> bytes1[2],
+   *  probed), a one-value quirk this fold keeps REJECTING (a safe over-rejection, never a
+   *  miscompile). address/bool likewise take no int literal in 0.8 ([address(0), 0] and [true, 1]
+   *  both "Unable to deduce common type" - probed). */
+  private litFitsType(v: bigint, t: JethType): boolean {
+    if ((t as { brand?: string }).brand || isEnum(t)) return false;
+    if (t.kind === 'uint') return v >= 0n && v < 1n << BigInt(t.bits);
+    if (t.kind === 'int') {
+      const half = 1n << BigInt(t.bits - 1);
+      return v >= -half && v < half;
+    }
+    return false;
+  }
+
+  /** L2-MOBILE: is array-literal element `d` implicitly convertible to `t`? A concrete element uses
+   *  the pairwise common type (X converts to T exactly when common(X, T) IS T: uint8->uint16 yes,
+   *  uint16->uint8 no, bytes1->bytes2 yes, int8->uint8 no). */
+  private litElemConvertibleTo(d: { lit?: bigint; type?: JethType }, t: JethType): boolean {
+    if (d.lit !== undefined) return this.litFitsType(d.lit, t);
+    const c = this.unifyLitElemTypes([d.type!, t]);
+    return !!c && typesEqual(c, t);
+  }
+
+  /** L2-MOBILE: solc's `Type::commonType(acc, d)` with `acc` already CONCRETE (so acc's mobile type
+   *  IS acc): prefer acc when d converts to it, else d's mobile type when acc converts to THAT,
+   *  else no common type (reject). */
+  private solcCommonElemType(acc: JethType, d: { lit?: bigint; type?: JethType }): JethType | undefined {
+    if (this.litElemConvertibleTo(d, acc)) return acc;
+    const mb = d.type ?? this.litMobileType(d.lit!);
+    if (mb && this.litElemConvertibleTo({ type: acc }, mb)) return mb;
+    return undefined;
+  }
+
+  /** Batch B (B4/B1) + L2-MOBILE: SELF-TYPE an array literal that has NO outer expected type,
+   *  mirroring solc's inline-array typing exactly: seed with element 0's MOBILE type, then fold
+   *  `Type::commonType` over the rest. The seed-then-fold is ORDER-SENSITIVE and that asymmetry is
+   *  REAL, not an artifact: [-1, 1] -> int8[2] but [1, -1] REJECTS (seed uint8, and -1 does not fit
+   *  uint8 while uint8 does not fit int8) - both probed at 0.8.35.
+   *
+   *  The element type is solc's EXACT width (uint8/uint16/uint24/int8/...), NOT a widened u256/i256.
+   *  Width is invisible to abi.encode/encodePacked (both pad every ARRAY element to a full 32-byte
+   *  word - probed: encodePacked([uint8(1),uint8(2)]) is 64 bytes, not 2; only bare SCALAR
+   *  encodePacked args pack tight), but it is NOT invisible to the type system: solc types each
+   *  ternary branch on its own and rejects a branch mismatch ("True expression's type uint8[2]
+   *  memory does not match false expression's type uint16[2] memory"), so widening to u256 here
+   *  would erase that reject and OVER-ACCEPT `c ? [1n, 2n] : [300n, 4n]` (it did - fixed by this
+   *  exact typing). undefined when an element does not type quietly or the fold finds no common
+   *  type. The result is the FIXED array type T[n] solc gives a literal. */
   private selfTypeArrayLit(lit: ts.ArrayLiteralExpression): (JethType & { kind: 'array' }) | undefined {
     if (lit.elements.length === 0) return undefined;
-    // L2-MOBILE: an ALL-bare-integer-literal array self-types to solc's mobile common type. abi.encode
-    // and abi.encodePacked BOTH pad every array element to a full 32-byte word regardless of the
-    // element width (verified: encode/encodePacked of [1,300] equal uint256[2] AND uint16[2]), so the
-    // ENCODED bytes are width-independent - u256 (all non-negative) / i256 (all negative) is
-    // byte-identical to solc's smallest-fitting mobile type. Mixed sign has NO solc common type (solc
-    // rejects [1,-1], [0,-1], [200,-1] - verified), so we return undefined (reject) too. An
-    // out-of-range value is caught by the element range check when the array is coerced to this type.
-    const bareVals = lit.elements.map((el) => this.bareIntLiteralValue(el));
-    if (bareVals.length > 0 && bareVals.every((v) => v !== undefined)) {
-      const vs = bareVals as bigint[];
-      const anyNeg = vs.some((v) => v < 0n);
-      const anyNonNeg = vs.some((v) => v >= 0n);
-      if (anyNeg && anyNonNeg) return undefined; // mixed sign: no solc common type
-      return { kind: 'array', element: anyNeg ? I256 : U256, length: lit.elements.length };
-    }
-    const ets: JethType[] = [];
+    const descs: { lit?: bigint; type?: JethType }[] = [];
     for (const el of lit.elements) {
+      // A BARE int literal is mobile-typed (participates as solc's rational-number type); anything
+      // else must carry a concrete intrinsic type. The two probes have complementary guards (a
+      // cast / bytesN / address / enum literal is never "bare"), so exactly one arm takes each element.
+      const v = this.bareIntLiteralValue(el);
+      if (v !== undefined) {
+        descs.push({ lit: v });
+        continue;
+      }
       const t = this.litElemIntrinsicType(el);
       // ENUM elements ([ca, cb] with Color locals, Color.Red members) self-type to the enum's fixed
       // array (Color[2]), exactly like solc. The enum fixed-array encode path is the value-word
       // fixed-array codec (an enum is a value word), already verified byte-identical for an
-      // explicitly-typed `let a: Arr<Color,N>`; unifyLitElemTypes keeps enums NOMINAL (same enum
-      // passes typesEqual; two different enums / an enum-plus-int have no common type -> undefined,
+      // explicitly-typed `let a: Arr<Color,N>`; the fold keeps enums NOMINAL (same enum passes the
+      // typesEqual arm; two different enums / an enum-plus-int have no common type -> undefined,
       // matching solc's reject). Enum params are range-validated at ABI-decode entry, so an element
       // reaching the encoder is always in range (Panic 0x21 parity is at the boundary, not here).
       if (!t || t.kind === 'void' || t.kind === 'mapping' || t.kind === 'funcref') return undefined;
-      ets.push(t);
+      descs.push({ type: t });
     }
-    const u = this.unifyLitElemTypes(ets);
-    if (!u) return undefined;
-    return { kind: 'array', element: u, length: lit.elements.length };
+    const d0 = descs[0]!;
+    let acc = d0.type ?? this.litMobileType(d0.lit!);
+    if (!acc) return undefined;
+    for (let i = 1; i < descs.length; i++) {
+      const c = this.solcCommonElemType(acc, descs[i]!);
+      if (!c) return undefined;
+      acc = c;
+    }
+    return { kind: 'array', element: acc, length: lit.elements.length };
   }
 
   private checkExpr(node: ts.Expression, expected?: JethType): Expr | undefined {

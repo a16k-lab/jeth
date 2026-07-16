@@ -549,14 +549,17 @@ describe('long-tail batch B: array-literal crosses (B1-B4) byte-identical to sol
       ['pck()', ''],
     ] as const);
     // OR cluster 4 lifted both bare-literal and mixed-bytesN self-typing. BARE integer-literal arrays
-    // now self-type to solc's mobile common type (all-nonneg -> u256, all-neg -> i256): abi.encode and
-    // encodePacked pad every element to a 32-byte word regardless of width, so the encoding is
-    // width-independent and byte-identical to solc's uint8[2]/etc. Mixed bytesN widths widen (A-LIT-RESID).
-    // Still rejected: the cast+BARE MIX (a cast fixes one width, a bare literal is mobile - no common
-    // type), CROSS-FAMILY casts (u8|i16, no common type), and MIXED-SIGN bare literals. Enum elements
-    // now self-type to the enum's fixed array (see the enum gate below) - byte-identical to solc.
+    // now self-type to solc's EXACT common type ([1, 2] -> uint8[2], [1, 300] -> uint16[2]): abi.encode
+    // and encodePacked pad every element to a 32-byte word regardless of width, so the encoding is
+    // width-independent and byte-identical to solc. Mixed bytesN widths widen (A-LIT-RESID).
+    // The cast+BARE MIX is now LIFTED (L2-MOBILE): solc seeds the inline-array type with element 0's
+    // mobile type and folds Type::commonType over the rest, so [uint256(1), 2] IS uint256[2] - see
+    // test/lift-l2-mobile-mixed-array-literal.test.ts for the byte-identity matrix. Still rejected:
+    // CROSS-FAMILY casts (u8|i16, no common type) and MIXED-SIGN bare literals under an UNSIGNED seed
+    // ([1, -1] rejects; [-1, 1] seeds int8 and accepts). Enum elements self-type to the enum's fixed
+    // array (see the enum gate below) - byte-identical to solc.
     expect(rejects(`class C { get f(): External<bytes> { return abi.encode([1n, 2n]); } }`)).toBe(false);
-    expect(rejects(`class C { get f(): External<bytes> { return abi.encode([u256(1n), 2n]); } }`)).toBe(true);
+    expect(rejects(`class C { get f(): External<bytes> { return abi.encode([u256(1n), 2n]); } }`)).toBe(false);
     expect(rejects(`class C { get f(): External<bytes> { return abi.encode([u8(1n), i16(2n)]); } }`)).toBe(true);
     expect(rejects(`class C { get f(): External<bytes> { return abi.encode([1n, -1n]); } }`)).toBe(true);
     expect(

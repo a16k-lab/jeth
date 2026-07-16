@@ -5,11 +5,12 @@
 //   left-aligned in its 32-byte word and the pad bytes are zero, so widening is a no-op on the word
 //   (unifyLitElemTypes picks the widest; coerce re-types a bytesN literal to a wider bytesN).
 //
-// L2-MOBILE: an all-BARE-integer-literal array self-types to solc's mobile common type. abi.encode
-//   and abi.encodePacked pad every array element to a full 32-byte word regardless of element width,
-//   so the encoding is WIDTH-INDEPENDENT - u256 (all non-negative) / i256 (all negative) is
-//   byte-identical to solc's smallest-fitting mobile type. MIXED SIGN has no solc common type
-//   (rejects). Cast+bare mix and cross-family casts still reject (no common type).
+// L2-MOBILE: an array literal self-types to solc's common type, mirroring solc's inline-array
+//   typing: SEED with element 0's MOBILE type (the smallest uintN/intN holding it), then fold
+//   Type::commonType over the rest. This covers all-bare literals AND the cast+bare mix
+//   ([uint256(1), 2] -> uint256[2], [uint8(1), 300] -> uint16[2]) - the full matrix lives in
+//   test/lift-l2-mobile-mixed-array-literal.test.ts. The seed makes MIXED SIGN order-sensitive:
+//   [1, -1] rejects but [-1, 1] is int8[2]. Cross-family casts still reject (no common type).
 import { describe, it, expect } from 'vitest';
 import { Address } from '@ethereumjs/util';
 import { compile } from '../src/compile.js';
@@ -101,14 +102,29 @@ describe('OR cluster 4: literal typing (A-LIT-RESID + L2-MOBILE) byte-identical 
   });
 
   it('gates that must stay rejects', () => {
-    // MIXED SIGN: no solc common type.
+    // MIXED SIGN with an UNSIGNED seed: solc seeds the inline-array type with element 0's mobile
+    // type (uint8 here) and -1 neither fits uint8 nor takes uint8 into int8 -> "Unable to deduce
+    // common type". NOTE the seed makes this ORDER-SENSITIVE: [-1n, 1n] seeds int8 and ACCEPTS
+    // (int8[2]) - see test/lift-l2-mobile-mixed-array-literal.test.ts.
     expect(rejects(`class C { get f(): External<bytes> { return abi.encode([1n, -1n]); } }`)).toBe(true);
     expect(rejects(`class C { get f(): External<bytes> { return abi.encode([0n, -1n]); } }`)).toBe(true);
-    // cast + BARE mix (a cast fixes one width, a bare literal is mobile): no common type.
-    expect(rejects(`class C { get f(): External<bytes> { return abi.encode([u256(1n), 2n]); } }`)).toBe(true);
-    // CROSS-FAMILY casts.
+    // CROSS-FAMILY casts (no common type at ANY width, u8|i16 and even u8|i256 - probed).
     expect(rejects(`class C { get f(): External<bytes> { return abi.encode([u8(1n), i16(2n)]); } }`)).toBe(true);
     // an untyped array-literal local (would need width-sensitive inference) still rejects.
     expect(rejects(`class C { get f(): External<u256> { let x = [200n, 100n]; return x[0n] + x[1n]; } }`)).toBe(true);
+  });
+
+  // L2-MOBILE lift: a cast + BARE mix DOES have a solc common type - the cast fixes the seed and the
+  // bare literal folds into it when it fits ([uint256(1), 2] -> uint256[2], probed at 0.8.35). This
+  // row previously asserted a REJECT on the mistaken premise that "a bare literal is mobile, so
+  // there is no common type"; it is lifted and byte-identity-verified in
+  // test/lift-l2-mobile-mixed-array-literal.test.ts (all consumers).
+  it('cast + BARE mix self-types to solc common type, byte-identical', async () => {
+    expect(rejects(`class C { get f(): External<bytes> { return abi.encode([u256(1n), 2n]); } }`)).toBe(false);
+    await run(
+      `class C { get f(): External<bytes> { return abi.encode([u256(1n), 2n]); } }`,
+      `contract C { function f() public pure returns (bytes memory) { return abi.encode([uint256(1), 2]); } }`,
+      [['f()', '']],
+    );
   });
 });
