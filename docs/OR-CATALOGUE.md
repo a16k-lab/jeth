@@ -1308,3 +1308,90 @@ Documented residuals (all reject-side or solc-correct, none a bar violation):
 - SCOPE BOUNDARY (correct, not a defect): a colliding type reachable only in dep-file scopes with no path to
   the route class ACCEPTS in multi while the FLATTENED single twin rejects - flattening changes scope; the
   multi behavior equals solc multi-file scoping and is the documented pre-pass boundary.
+
+### 2026-07-16 USER-DIRECTED ROUND: 2 lifts, 2 Group-A rulings, 1 live OA closed, 2 liftability rulings
+
+**LIFTED (both byte-identical, adversarially verified CLEAN):**
+- **L2-MOBILE (was JETH213) - LIFTED `017799b`**: an array literal mixing a CAST element with BARE int
+  literals now self-types to solc's common type. The rule was DERIVED from solc via a `bytes32 z = [..]`
+  type-error oracle (which forces solc to name its inferred type), not guessed: seed with element 0's MOBILE
+  type, then fold Type::commonType over the rest. Two witnesses killed the first model AND an in-repo comment:
+  the fold is ORDER-SENSITIVE (`[-1,1]` IS int8[2] but `[1,-1]` REJECTS - the old comment claimed "mixed sign
+  has NO common type", an over-generalization, now corrected + `[-1,1]` lifted), and widening is SMALLEST-FIT
+  not next-power-of-two (`[uint16(1),70000]` -> uint24[2], NOT uint32). Elements now carry solc's EXACT width.
+  Verified: 648-case sweep + a 484-pair TERNARY WIDTH ORACLE (`abi.encode(c?A:B)` compiles iff type(A)==type(B),
+  so JETH's inferred types must partition the literals into exactly solc's classes - 78 accepts each, 0
+  divergences). 0 MC / 0 OA. Deliberate narrow keep: solc converts ONLY the zero literal to bytesN.
+- **FALLBACK-EXTERNAL-MARKER (was JETH386) - LIFTED `b5bc190`**: `External<T>` on `receive`/`fallback` is now a
+  REDUNDANT SYNONYM of the bare canonical form, byte-identical BY CONSTRUCTION (it unwraps to the bare return
+  type; the identical path decides it). Every reject witnessed against solc first and matched: returning receive
+  / parameterized receive / `fallback(bytes)` with no return / `fallback():External<u256>` -> JETH384; nested
+  markers rejected; `receive(): Payable<void>` stays JETH385. NON-VACUITY over RAW calldata dispatch: the
+  non-payable `External<void>` fallback still REVERTS on value while the Payable twin succeeds (the marker
+  cannot smuggle payability).
+
+**NEW Group-A DELIBERATE DESIGN rejects (USER RULING - moved out of the miscompile-avoiding table, now with
+targeted diagnostics per the JETH492/493/494 pattern; `5a1f43a`, diagnostic-only, proven set-identical):**
+- **JETH495 REC-STRUCT-MEMLOCAL** (was JETH200/JETH243/JETH074): a recursive struct as a MEMORY LOCAL /
+  uninit-or-ctor local / internal `P memory` return. Deliberate: solc lowers it to an UNBOUNDED runtime-recursive
+  DEEP COPY; JETH deliberately has no runtime-recursive struct-copy codegen (its back-edge is a compile-time
+  recursiveRef sentinel), so materializing one would SILENTLY DROP the nested payload. Workaround in-message.
+- **JETH496 TYPED-CATCH** (was JETH074/JETH361): `catch Error(string)` / `catch Panic(uint)`. Deliberate: the
+  native `catch (e: bytes)` + `this.reason`/`this.panic` forms cover it and are byte-identical.
+
+**LIVE OVER-ACCEPTANCE CLOSED (bar violation, PRE-EXISTING at base, exposed by the L2-MOBILE lift): `6655898`,
+new code JETH497.** JETH pushed the declared/expected type INTO an array literal, so it accepted any MEMORY
+landing whose declared element type was merely WIDER than solc's element-inferred type. THE RULE (derived from a
+~20-position solc witness matrix = ArrayType::isImplicitlyConvertibleTo's two branches): a copy INTO STORAGE
+converts ELEMENT-WISE (so `uint256[2] s; s = [1,2]` ACCEPTS, and dyn-sizedness/length checks are skipped),
+while MEMORY / calldata / a storage POINTER requires an IDENTICAL element type. The location is decided at the
+LITERAL's LANDING, not the enclosing statement (`s = S([1,2])` and `s = id([1,2])` are TypeErrors even though `s`
+is storage, because the literal lands in a MEMORY parameter). 13 live OA cells closed (memory local/assign/return/
+internal-arg/external-arg/struct-ctor-field/event-arg/nested/struct-ctor-into-storage/memory-elem/ternary-at-memory);
+the whole STORAGE path + exact-width memory rows keep accepting byte-identically (orchestrator re-verified: 11/11
+rows byte-identical to base, zero drift; 106 live over-rejection-hunt cells byte-identical). Suite 488/4790.
+
+**LIFTABILITY RULINGS (evidence-based, this round):**
+- **#6 B-21 / L6 / L7a - USER RULING: KEEP THE REJECT.** Two CORRECTIONS to this catalogue's own prior text:
+  (1) the anchor `yul.ts:8944` is STALE - at HEAD it is `src/yul.ts:8989` (aggArgToMemPtr) with a twin gate at
+  `src/yul.ts:7667` (assertInlineAggCaptureSound, JETH465); origin commit 034bd6f. (2) the row MISCHARACTERIZES
+  the divergence: it is NOT "JETH lays fixed arrays INLINE while solc is pointer-headed" - a STANDALONE
+  `Arr<In,N>` memory local IS pointer-headed in JETH and byte-identical to solc (a passing control in
+  test/inline-struct-ctor-pointer-headed-static-array-field.test.ts). The true divergence is at the MEMBER level:
+  JETH inlines a static aggregate member into the parent image (memory image == ABI image), while solc gives
+  EVERY member exactly one word (value, or a POINTER if reference-typed) at every nesting level; proof at
+  analyzer.ts:17743 (memFieldOffset computes the MEMORY offset as `w += abiHeadWords(f.type)`). It also affects
+  VALUE-array members (`Arr<u256,2>`), not just struct arrays. HONEST SCOPE (the "~400-site" claim is wrong in
+  both directions): the assumption concentrates in ONE predicate, abiHeadWords (src/types.ts:186), which
+  CONFLATES the ABI head-word count (correct) with the memory word offset (wrong vs solc) across 176 call sites /
+  ~70 functions, plus ~50 mcopy contiguity assumptions = ~200-230 direct sites; 391 of 485 test files touch memory
+  aggregates. There is NO single chokepoint (abiHeadWords cannot tell whether a caller wants ABI or memory
+  semantics). KEPT because adopting solc's model destroys the "memory image == ABI image" invariant that makes
+  static-aggregate ABI encode a zero-cost mcopy (every encode/decode becomes a recursive transcode = worse gas)
+  for a rare shape with a working workaround.
+- **#11 MULTI-CONTRACT-FILE (JETH041) - USER RULING: LIFT IT.** NOT YET DONE (queued). Verdict LIFTABLE-WITH-WORK
+  (~2-3 days, mostly verification). The stated blocker (analyzer.ts:2016-2018: "two INDEPENDENT abstract contracts
+  would require running analyzeContract more than once, which accumulates shared selector/registry state") is
+  SIDESTEPPABLE: use a FRESH Analyzer per route class rather than making analyzeContract reentrant. Multi-artifact
+  emission ALREADY EXISTS and was verified running (a 2-library file returns N independent Yul objects through the
+  backend in ONE compile() call, compile.ts:1344-1392), but CompiledLibrary is a narrow subordinate shape (no
+  abi/ir/storageLayout) so it is not reusable as a peer type. Separability PROVEN by run+decode (not "both
+  compile"): each contract's slice matches solc's artifact for that contract, incl. constructor + immutables +
+  independent storage layouts. PLAN: outer loop over findContractClasses() in compileUnit with a fresh Analyzer/
+  YulEmitter per route; make CompileResult ADDITIVE (`contracts?: CompileResult[]`, singular fields stay =
+  classes[0]) so the 1076 existing compile() call sites are untouched; drop ONLY the deployed-path JETH041
+  (analyzer.ts:746-748); KEEP the abstract-leaf JETH041 (analyzer.ts:2019-2021) and diamond.ts:68. RISK is
+  concentrated in the collision pre-pass (compile.ts:528-572 hard-codes ONE route), not in codegen.
+- **#10 TERN-STRUCT-ARR / A-LIT-RESID - THE BLOCKER IS GONE; LIFT PENDING.** The row said "lift candidate only
+  with an aliasing-witness study" - THE STUDY IS DONE and it CLEARS the lift. solc does NOT hold a live
+  reference: it unifies `c ? <In[] memory> : <In[] storage>` to a MEMORY reference with an ASYMMETRIC rule -
+  the MEMORY branch is ALIASED (pointer passthrough), the STORAGE branch is DEEP-COPIED (recursively, incl.
+  nested dyn fields). Witnesses: post-bind `st[0].a=999` reads 100 through the binding (copy); a write through
+  the binding never reaches storage; but a write through the binding IS visible in the memory source (777) =
+  alias. EQUIVALENCE: the ternary vs the desugar `In[] memory r; if(c){r=m;}else{r=st;}` are 14/14 OBSERVABLY
+  IDENTICAL in solc-vs-solc (because `r=m` mem->mem IS an alias and `r=st` storage->mem IS a deep copy, the
+  desugar reproduces the asymmetry for free). A JETH constructive proof matched solc on every decoded cell.
+  TRAP: a BLANKET copy of both arms MISCOMPILES the memory arm (write-through returns 1 instead of 777) - each
+  arm must lower INSIDE ITS OWN ARM (lazy); the calldata arm's cd->mem copy likewise (hoisting it REVERTS where
+  solc returns 7). SITE: the gate at analyzer.ts:22765 (`isStaticStructFixedLeafArray`, types.ts:538-545, excludes
+  a dyn outer at :539); the sibling `isStaticStructAnyLeafArray` is the natural target.
