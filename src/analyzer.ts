@@ -14417,6 +14417,14 @@ export class Analyzer {
           out.push({ kind: 'localDecl', name: decl.name.text, type: declared, init: e });
           return;
         }
+        // REC-STRUCT-MEMLOCAL (JETH495): a RECURSIVE-struct memory local is a DELIBERATE reject, not a
+        // "not supported yet" gap - give it the targeted code + ruling. Covers the storage-initialized
+        // local, the UNINITIALIZED local and the constructor local (all reach this one gate). Every OTHER
+        // unsupported dynamic-struct local keeps JETH200 (those are real, liftable gaps).
+        if (this.typeContainsRecursiveRef(declared)) {
+          this.diags.error(decl, 'JETH495', this.recStructMemMsg(`a memory local of ${displayName(declared)}`));
+          return;
+        }
         this.diags.error(
           decl,
           'JETH200',
@@ -16520,6 +16528,17 @@ export class Analyzer {
       funcRefOK(rt) ||
       (aggOK && (isMemByRef(rt) || aggArrayByRef(rt) || this.isSupportedDynStructLocal(rt)));
     if (!returnSupported) {
+      // REC-STRUCT-MEMLOCAL (JETH495): an internal function returning a RECURSIVE struct BY MEMORY is the
+      // same DELIBERATE reject as the memory local (the caller would have to materialize the tree). Every
+      // other unsupported internal return type keeps JETH243 (those are real, liftable gaps).
+      if (this.typeContainsRecursiveRef(rt)) {
+        this.diags.error(
+          node,
+          'JETH495',
+          this.recStructMemMsg(`internal call to '${name}' (it returns ${displayName(rt)} by memory)`),
+        );
+        return undefined;
+      }
       const hint =
         isMemByRef(rt) && !aggOK ? ' (aggregate returns require the callee to be @internal or @private)' : '';
       this.diags.error(
@@ -26556,11 +26575,14 @@ export class Analyzer {
       return this.buildBinary(op, left, right, node);
     }
 
-    // DELIBERATE-REJECT diagnostics: three shapes that solc accepts but JETH intentionally does not
-    // support (see deliberateRejectDiag). They otherwise fall to the generic JETH074 catch-all below;
-    // give them a CLEAR, targeted message instead. Reached only after every real resolver has declined,
-    // so accepted programs are byte-identical - this only reclassifies an already-guaranteed reject.
+    // DELIBERATE-REJECT diagnostics: shapes that solc accepts but JETH intentionally does not support
+    // (see deliberateRejectDiag / typedCatchDiag / recStructCallMemberDiag). They otherwise fall to the
+    // generic JETH074 catch-all below; give them a CLEAR, targeted message instead. Reached only after
+    // every real resolver has declined, so accepted programs are byte-identical - this only reclassifies
+    // an already-guaranteed reject.
     if (ts.isCallExpression(node) && this.deliberateRejectDiag(node)) return undefined;
+    if (ts.isCallExpression(node) && this.typedCatchDiag(node)) return undefined;
+    if (ts.isPropertyAccessExpression(node) && this.recStructCallMemberDiag(node)) return undefined;
 
     this.diags.error(node, 'JETH074', `unsupported expression: ${ts.SyntaxKind[node.kind]}`);
     return undefined;
@@ -26623,6 +26645,83 @@ export class Analyzer {
       }
     }
     return false;
+  }
+
+  /** DELIBERATE-REJECT (JETH495) shared message. `what` names the offending position. Used by all three
+   *  REC-STRUCT-MEMLOCAL sites (memory local, internal recursive-struct return, member read on such a
+   *  return) so the one design ruling is stated identically wherever it is enforced. */
+  private recStructMemMsg(what: string): string {
+    return (
+      `${what} is not supported - a DELIBERATE design choice, not a gap: solc lowers a recursive-struct ` +
+      `memory value to an UNBOUNDED runtime-recursive DEEP COPY of the whole tree, and JETH deliberately ` +
+      `has no runtime-recursive struct-copy codegen (its back-edge is a compile-time recursiveRef sentinel, ` +
+      `an empty-fields leaf), so materializing one would lay out zero or one word per element and SILENTLY ` +
+      `DROP the nested payload; read the fields you need directly (e.g. this.p.x) or keep the tree in storage`
+    );
+  }
+
+  /** DELIBERATE-REJECT diagnostic (JETH495), tail case: a member read on an internal call that returns a
+   *  RECURSIVE struct by memory (`this.h().x`, where `h(): P` and `type P = { x: u256; kids: P[] }`). The
+   *  call-position form is caught loudly at checkInternalCall; this member form declines quietly there and
+   *  would otherwise land on the generic JETH074. Called at the tail of checkExpr (every real resolver has
+   *  declined), and GATED on the callee's return type actually containing a recursiveRef sentinel, so no
+   *  accepted program and no other JETH074 user is affected. */
+  private recStructCallMemberDiag(node: ts.PropertyAccessExpression): boolean {
+    const call = node.expression;
+    if (!ts.isCallExpression(call)) return false;
+    let name: string | undefined;
+    if (ts.isIdentifier(call.expression)) name = call.expression.text;
+    else if (
+      ts.isPropertyAccessExpression(call.expression) &&
+      call.expression.expression.kind === ts.SyntaxKind.ThisKeyword
+    )
+      name = call.expression.name.text;
+    if (name === undefined) return false;
+    const rt = this.resolveOverloadNoDiag(call, name)?.returnType;
+    if (!rt || !this.typeContainsRecursiveRef(rt)) return false;
+    this.diags.error(
+      node,
+      'JETH495',
+      this.recStructMemMsg(`reading member '${node.name.text}' of the ${displayName(rt)} returned by '${name}'`),
+    );
+    return true;
+  }
+
+  /** DELIBERATE-REJECT diagnostic (JETH496): solc's TYPED catch clauses, `catch Error(string reason)` /
+   *  `catch Panic(uint code)`. JETH's untyped `catch (e: bytes)` plus the `this.reason` / `this.panic`
+   *  accessors cover exactly the same ground, byte-identically, so the typed forms are a DELIBERATE reject.
+   *
+   *  TS has NO typed-catch grammar, so `} catch Error(string) { h(); }` is ERROR-RECOVERED (TS1005) by
+   *  INSERTING a ZERO-WIDTH synthetic `{}` catch block, which leaves `Error(string)` behind as an ordinary
+   *  ExpressionStatement immediately after the TryStatement - that CallExpression is what reaches here and
+   *  would otherwise be the generic JETH074. HARD GUARD: a REAL `catch {}` / `catch (e) {}` has a
+   *  SOURCE-WIDTH block, so a genuine call to a user function named Error/Panic after a real try/catch is
+   *  never mis-flagged (and a resolvable one never reaches this tail anyway). */
+  private typedCatchDiag(node: ts.CallExpression): boolean {
+    if (!ts.isIdentifier(node.expression)) return false;
+    const which = node.expression.text;
+    if (which !== 'Error' && which !== 'Panic') return false;
+    const stmt = node.parent;
+    if (!stmt || !ts.isExpressionStatement(stmt) || stmt.expression !== node) return false;
+    const blk = stmt.parent;
+    if (!blk || !ts.isBlock(blk)) return false;
+    const i = blk.statements.indexOf(stmt);
+    if (i <= 0) return false;
+    const prev = blk.statements[i - 1];
+    if (!prev || !ts.isTryStatement(prev) || !prev.catchClause) return false;
+    const cc = prev.catchClause;
+    // The TS-INSERTED block: no `catch (e)` binding, no statements, and ZERO SOURCE WIDTH.
+    if (cc.variableDeclaration || cc.block.statements.length !== 0) return false;
+    if (cc.block.getEnd() !== cc.block.getStart()) return false;
+    this.diags.error(
+      node,
+      'JETH496',
+      `a typed catch clause (catch ${which}(...)) is not supported - a DELIBERATE design choice, not a gap: ` +
+        `the untyped catch plus the this.reason / this.panic accessors cover the same ground byte-identically ` +
+        `(this.reason == solc's catch Error(string), this.panic == solc's catch Panic(uint)); write ` +
+        `\`} catch (e: bytes) { ... }\` and read this.${which === 'Error' ? 'reason' : 'panic'} inside it`,
+    );
+    return true;
   }
 
   private checkUnary(node: ts.PrefixUnaryExpression, expected?: JethType): Expr | undefined {

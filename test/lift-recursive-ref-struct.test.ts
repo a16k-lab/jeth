@@ -120,7 +120,11 @@ describe('RECURSIVE-REF-STRUCT: self / mutual reference through a P[] / mapping 
     expect(codes(`${P} class C { p: P; h(): P { return this.p; } g(): External<u256> { return this.h().x; } }`).length).toBeGreaterThan(0);
   });
 
-  it('REC-STRUCT-MEMLOCAL: a recursive struct memory local stays a clean over-rejection (JETH200/JETH074)', () => {
+  it('REC-STRUCT-MEMLOCAL: a recursive struct memory local stays a clean over-rejection (JETH495)', () => {
+    // RULING (2026-07-16): this shape is a DELIBERATE DESIGN reject, not a "not supported yet" gap, so it
+    // was reclassified off the generic JETH200/JETH074 catch-alls onto the targeted JETH495 (the Group-A
+    // "Deliberate DESIGN rejects" family, alongside JETH492/493/494). DIAGNOSTIC-ONLY: the ACCEPT/REJECT
+    // sets are unchanged (every shape below still rejects; only the code + message moved).
     // WITNESS (differential, populated 3-level tree): solc lowers `P memory m = p` to an UNBOUNDED
     // RUNTIME-RECURSIVE DEEP COPY of the whole tree (a pointer-headed memory image whose size depends on
     // every level's runtime array length; mutating m leaves storage untouched). JETH represents the
@@ -132,12 +136,16 @@ describe('RECURSIVE-REF-STRUCT: self / mutual reference through a P[] / mapping 
     // REC-STRUCT-CONSUMERS) or build a wrong image. A clean reject beats a miscompile; KEEP the reject.
     const P = 'type P = { x: u256; kids: P[] };';
     // (a) the exact item shape - storage-initialized memory local + static-value-leaf read (solc ACCEPTS).
-    expect(codes(`${P} class C { p: P; get g(): External<u256> { let m: P = this.p; return m.x; } }`)).toEqual(['JETH200', 'JETH074']);
+    expect(codes(`${P} class C { p: P; get g(): External<u256> { let m: P = this.p; return m.x; } }`)).toEqual(['JETH495', 'JETH074']);
     // (b) uninitialized memory local; (c) deep recursive read - all reject.
-    expect(codes(`${P} class C { get g(): External<u256> { let m: P; return m.x; } }`)).toEqual(['JETH200', 'JETH074']);
-    expect(codes(`${P} class C { p: P; get g(): External<u256> { let m: P = this.p; return m.kids[0n].x; } }`)).toEqual(['JETH200', 'JETH074']);
-    // (d) internal function returning P memory (solc ACCEPTS).
-    expect(codes(`${P} class C { p: P; h(): P { return this.p; } get g(): External<u256> { return this.h().x; } }`)).toContain('JETH074');
+    expect(codes(`${P} class C { get g(): External<u256> { let m: P; return m.x; } }`)).toEqual(['JETH495', 'JETH074']);
+    expect(codes(`${P} class C { p: P; get g(): External<u256> { let m: P = this.p; return m.kids[0n].x; } }`)).toEqual(['JETH495', 'JETH074']);
+    // (d) internal function returning P memory (solc ACCEPTS), in both the member-read and call-statement
+    // forms. The trailing JETH074 in (a)-(c) is the cascade from reading `m.x` after the local was refused.
+    expect(codes(`${P} class C { p: P; h(): P { return this.p; } get g(): External<u256> { return this.h().x; } }`)).toEqual(['JETH495']);
+    expect(codes(`${P} class C { p: P; h(): P { return this.p; } f(): External<void> { this.h(); } }`)).toEqual(['JETH495']);
+    // (e) constructor local.
+    expect(codes(`${P} class C { p: P; constructor() { let m: P; } get g(): External<u256> { return this.p.x; } }`)).toEqual(['JETH495']);
     // NON-VACUITY: solc genuinely ACCEPTS the read shapes above (so these are real over-rejections, not
     // shapes solc also rejects) - proves the reject is a deliberate soundness choice, not a parser gap.
     const solcOk = (s: string) => { try { compileSolidity(SPDX + s, 'C'); return true; } catch { return false; } };

@@ -1,5 +1,5 @@
-// DELIBERATE-REJECT diagnostics (JETH492/493/494). Three shapes solc accepts but JETH intentionally
-// does NOT support are given a CLEAR, targeted message instead of the generic JETH074 catch-all. These
+// DELIBERATE-REJECT diagnostics (JETH492/493/494 + JETH495/496). Shapes solc accepts but JETH
+// intentionally does NOT support are given a CLEAR, targeted message instead of a generic catch-all. These
 // shapes stay REJECTED (this is a diagnostic-quality change, not a lift):
 //   - JETH492: `<address>.transfer(v)` / `<address>.send(v)` - solc's ETH send with a fixed 2300-gas
 //     stipend (a footgun since EIP-1884). JETH's canonical value transfer is the checked low-level
@@ -9,6 +9,16 @@
 //     appended element, conflicting with JETH's deliberate "no storage-reference locals" design. The
 //     no-arg push STATEMENT (append a zero element) stays fully supported; `arr.push(value)` is the
 //     supported byte-identical value form.
+//   - JETH495 (REC-STRUCT-MEMLOCAL, 2026-07-16): a RECURSIVE struct (`type P = { x: u256; kids: P[] }`)
+//     in a MEMORY-AGGREGATE position - a memory local, an uninitialized/constructor local, or an internal
+//     `P memory` return. solc lowers these to an UNBOUNDED RUNTIME-RECURSIVE DEEP COPY of the whole tree;
+//     JETH deliberately has no runtime-recursive struct-copy codegen (its back-edge is a compile-time
+//     `recursiveRef` empty-fields sentinel), so admitting them would lay out zero/one word per `kids`
+//     element and SILENTLY DROP the nested payload. The recursive struct itself stays fully supported in
+//     STORAGE (byte-identical - see lift-recursive-ref-struct.test.ts). Was JETH200/JETH243/JETH074.
+//   - JETH496 (TYPED-CATCH, 2026-07-16): solc's typed catch clauses `catch Error(string)` /
+//     `catch Panic(uint)`. JETH's untyped `catch (e: bytes)` plus the `this.reason` / `this.panic`
+//     accessors cover the same ground byte-identically (see try-catch.test.ts). Was JETH074.
 //
 // HARD GUARD (verified below): the JETH492 diagnostic fires ONLY for the BUILT-IN member on a PLAIN
 // address/payable receiver. A contract/interface-VALUE `.transfer`/`.send` is real external DISPATCH
@@ -112,6 +122,44 @@ describe('DELIBERATE-REJECT diagnostics: targets stay rejected with a targeted c
       ),
     ).toBe(true);
   });
+
+  it('JETH495: a RECURSIVE struct in a memory-aggregate position (local / ctor local / internal ret)', () => {
+    const P = 'type P = { x: u256; kids: P[] };';
+    // (a) storage-initialized memory local; (b) uninitialized local; (c) deep recursive read
+    expect(rejectsWith(`${P} class C { p: P; get g(): External<u256> { let m: P = this.p; return m.x; } }`, 'JETH495')).toBe(true);
+    expect(rejectsWith(`${P} class C { get g(): External<u256> { let m: P; return m.x; } }`, 'JETH495')).toBe(true);
+    expect(
+      rejectsWith(`${P} class C { p: P; get g(): External<u256> { let m: P = this.p; return m.kids[0n].x; } }`, 'JETH495'),
+    ).toBe(true);
+    // (d) constructor local
+    expect(
+      rejectsWith(`${P} class C { p: P; constructor() { let m: P; } get g(): External<u256> { return this.p.x; } }`, 'JETH495'),
+    ).toBe(true);
+    // (e) internal function returning P memory - BOTH the member-read and the call-statement form
+    expect(
+      rejectsWith(`${P} class C { p: P; h(): P { return this.p; } get g(): External<u256> { return this.h().x; } }`, 'JETH495'),
+    ).toBe(true);
+    expect(rejectsWith(`${P} class C { p: P; h(): P { return this.p; } f(): External<void> { this.h(); } }`, 'JETH495')).toBe(true);
+    // (f) MUTUAL recursion (A -> B[] -> A[]) reaches the same sentinel and the same ruling
+    expect(
+      rejectsWith(
+        `type A = { b: B[]; v: u256 }; type B = { a: A[]; w: u256 }; class C { a: A; get g(): External<u256> { let m: A = this.a; return m.v; } }`,
+        'JETH495',
+      ),
+    ).toBe(true);
+  });
+
+  it('JETH496: solc typed catch clauses (catch Error(string) / catch Panic(uint))', () => {
+    const I = 'interface IFoo { echo(v: u256): u256; }';
+    const TRY = (c: string) =>
+      `${I} class C { f(t: address): External<u256> { try { let r: u256 = IFoo(t).echo(1n); return r; } ${c} } }`;
+    expect(rejectsWith(TRY('catch Error(string) { return 1n; }'), 'JETH496')).toBe(true);
+    expect(rejectsWith(TRY('catch Error(string reason) { return 1n; }'), 'JETH496')).toBe(true);
+    expect(rejectsWith(TRY('catch Error(string memory reason) { return 1n; }'), 'JETH496')).toBe(true);
+    expect(rejectsWith(TRY('catch Panic(uint) { return 1n; }'), 'JETH496')).toBe(true);
+    expect(rejectsWith(TRY('catch Panic(uint code) { return 1n; }'), 'JETH496')).toBe(true);
+    expect(rejectsWith(TRY('catch Panic(uint256 code) { return 1n; }'), 'JETH496')).toBe(true);
+  });
 });
 
 describe('DELIBERATE-REJECT diagnostics: HARD GUARD - real dispatch / supported forms are UNAFFECTED', () => {
@@ -161,6 +209,69 @@ describe('DELIBERATE-REJECT diagnostics: HARD GUARD - real dispatch / supported 
       ),
     ).toBe(true);
   });
+
+  it('JETH495 is gated on RECURSION: non-recursive structs keep their own codes / stay accepted', () => {
+    // a NON-recursive dynamic-struct local is a real (liftable) gap and KEEPS the generic JETH200 - it must
+    // never be relabelled as the deliberate JETH495 ruling.
+    expect(rejectsWith(`class C { get g(): External<u256> { let xs: u256[]; return xs[0n]; } }`, 'JETH200')).toBe(true);
+    // a non-recursive internal return that JETH cannot lower KEEPS the generic JETH243.
+    expect(
+      rejectsWith(
+        `class C { m: mapping<u256,u256>; h(): mapping<u256,u256> { return this.m; } f(): External<void> { this.h(); } }`,
+        'JETH243',
+      ),
+    ).toBe(true);
+    // supported NON-recursive dynamic-struct locals and internal returns still COMPILE.
+    expect(jethAccepts(`type S = { xs: u256[] }; class C { s: S; get g(): External<u256> { let m: S = this.s; return m.xs[0n]; } }`)).toBe(true);
+    expect(jethAccepts(`type Q = { a: u256; b: u256 }; class C { h(): Q { return Q(1n,2n); } get g(): External<u256> { return this.h().a; } }`)).toBe(true);
+    // the RECURSIVE struct itself stays fully supported in STORAGE, and merely DECLARING a P-returning
+    // internal function (never calling it) is accepted - JETH495 fires at the USE, exactly like solc's own
+    // lowering boundary.
+    const P = 'type P = { x: u256; kids: P[] };';
+    expect(jethAccepts(`${P} class C { p: Visible<P>; setx(v: u256): External<void> { this.p.x = v; } get gx(): External<u256> { return this.p.x; } }`)).toBe(true);
+    expect(jethAccepts(`${P} class C { p: P; h(): P { return this.p; } get g(): External<u256> { return this.p.x; } }`)).toBe(true);
+  });
+
+  it('JETH496 is gated on the TS-INSERTED catch block: real catch clauses are UNAFFECTED', () => {
+    const I = 'interface IFoo { echo(v: u256): u256; }';
+    // the supported native forms still compile (untyped catch + this.reason / this.panic)
+    const TRY = (c: string) =>
+      `${I} class C { f(t: address): External<u256> { try { let r: u256 = IFoo(t).echo(1n); return r; } ${c} } }`;
+    expect(jethAccepts(TRY('catch (e: bytes) { return 999n; }'))).toBe(true);
+    expect(jethAccepts(TRY('catch (e: bytes) { return this.panic; }'))).toBe(true);
+    expect(jethAccepts(TRY('catch {} return 5n;'))).toBe(true);
+    expect(
+      jethAccepts(
+        `${I} class C { f(t: address): External<string> { try { let r: u256 = IFoo(t).echo(1n); return ""; } catch (e: bytes) { return this.reason; } } }`,
+      ),
+    ).toBe(true);
+    // THE DISCRIMINATOR. TS has no typed-catch grammar, so `catch Error(string) {...}` is error-recovered by
+    // INSERTING a ZERO-WIDTH `{}` catch block, leaving `Error(string)` as the next statement. A REAL
+    // `catch {}` / `catch (e: bytes) {}` has a SOURCE-WIDTH block, so a bare Error(...)/Panic(...) call after
+    // one is structurally identical EXCEPT for that width - it must stay the generic JETH074, never JETH496.
+    const after = (cat: string, fn: string) =>
+      `${I} class C { f(t: address): External<u256> { try { let r: u256 = IFoo(t).echo(1n); return r; } ${cat} ${fn}(1n); return 0n; } }`;
+    expect(rejectsWith(after('catch {}', 'Error'), 'JETH074')).toBe(true);
+    expect(rejectsWith(after('catch {}', 'Error'), 'JETH496')).toBe(false);
+    expect(rejectsWith(after('catch {}', 'Panic'), 'JETH074')).toBe(true);
+    expect(rejectsWith(after('catch {}', 'Panic'), 'JETH496')).toBe(false);
+    expect(rejectsWith(after('catch (e: bytes) {}', 'Error'), 'JETH496')).toBe(false);
+    // an Error(...)/Panic(...) call with NO try/catch anywhere keeps the generic JETH074
+    expect(rejectsWith(`class C { f(): External<void> { Error(1n); } }`, 'JETH074')).toBe(true);
+    expect(rejectsWith(`class C { f(): External<void> { Error(1n); } }`, 'JETH496')).toBe(false);
+    expect(rejectsWith(`class C { f(): External<void> { Panic(1n); } }`, 'JETH496')).toBe(false);
+    // a user method named Error / Panic called after a real try/catch is an ordinary call and COMPILES
+    expect(
+      jethAccepts(
+        `${I} class C { Error(v: u256): u256 { return v; } f(t: address): External<u256> { try { let r: u256 = IFoo(t).echo(1n); return r; } catch {} return this.Error(7n); } }`,
+      ),
+    ).toBe(true);
+    expect(
+      jethAccepts(
+        `${I} class C { Panic(v: u256): u256 { return v; } f(t: address): External<u256> { try { let r: u256 = IFoo(t).echo(1n); return r; } catch {} return this.Panic(7n); } }`,
+      ),
+    ).toBe(true);
+  });
 });
 
 describe('DELIBERATE-REJECT diagnostics: guards are non-vacuous (byte-identical to solc 0.8.35 at runtime)', () => {
@@ -175,6 +286,26 @@ describe('DELIBERATE-REJECT diagnostics: guards are non-vacuous (byte-identical 
         ['ry(uint256)', W(0n)],
         ['rx(uint256)', W(1n)],
         ['ry(uint256)', W(1n)],
+      ],
+    );
+  });
+
+  it('JETH495 workaround: reading the recursive tree in STORAGE is byte-identical to solc', async () => {
+    // The JETH495 message tells the user to read fields directly / keep the tree in storage. Prove that
+    // workaround is REAL: the same recursive struct, read + written through storage, matches solc exactly.
+    await eqCalls(
+      `type P = { x: u256; kids: P[] };
+       class C { p: P; setx(v: u256): External<void> { this.p.x = v; } get gx(): External<u256> { return this.p.x; }
+                 grow(): External<void> { this.p.kids.push(); } get nk(): External<u256> { return this.p.kids.length; } }`,
+      `contract C { struct P { uint256 x; P[] kids; } P p;
+                    function setx(uint256 v) external { p.x = v; } function gx() external view returns(uint256){ return p.x; }
+                    function grow() external { p.kids.push(); } function nk() external view returns(uint256){ return p.kids.length; } }`,
+      [
+        ['setx(uint256)', W(0xdeadbeefn)],
+        ['gx()', ''],
+        ['grow()', ''],
+        ['grow()', ''],
+        ['nk()', ''],
       ],
     );
   });
