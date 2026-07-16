@@ -36,9 +36,13 @@ describe('imported base extended by a contract whose member shares the base name
     expect(imported).toBe(inline);
   });
 
-  it('the value-member shadow of an imported ERROR still rejects (OA stays closed)', () => {
+  it('the value-member collision with an imported ERROR still rejects (OA stays closed; JETH133 == single-file)', () => {
+    // USER RULING (2026-07-16): multi-file == single-file EXACTLY across the name-collision family. The
+    // single-file twin rejects [JETH133] at the declaration (blanket cross-scope gate), so the bundle now
+    // rejects the identical [JETH133] (decl-level, collectImportedMemberTypeCollisions) instead of the old
+    // use-site JETH129 - the OA this test guarded stays closed, with the single-file code.
     const depE = { './e.jeth': `export type Bad = error<{ z: u256 }>;` };
     const entry = `import { Bad } from './e.jeth';\nclass C { Bad: u256; g(): External<void> { revert(Bad(1n)); } }`;
-    expect(codes(entry, depE)).toContain('JETH129');
+    expect(codes(entry, depE)).toEqual(['JETH133']);
   });
 });

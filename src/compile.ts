@@ -15,6 +15,7 @@ import { emitAbi, AbiItem } from './abi.js';
 import { bundleImports, detectLegacyPragma, isReferenceIdentifier, remapDiagnostics, BundleSegment } from './imports.js';
 import type { ContractIR } from './ir.js';
 import { displayName } from './types.js';
+import { resolvePrimitiveName } from './typeresolver.js';
 
 export interface StorageLayoutEntry {
   name: string;
@@ -255,6 +256,17 @@ function rewriteModuleScopes(
   sf: ts.SourceFile,
   segments: BundleSegment[],
   renamesByFile: Map<string, Map<string, string>>,
+  // Names the member-vs-imported-type pre-pass (collectImportedMemberTypeCollisions) already REJECTED
+  // (JETH133) for a class, keyed by every class in the rejected contract's `extends` chain. For exactly
+  // those (class, name) pairs the member shadow below is DISABLED, so the reference is renamed to the
+  // import as usual and binds the file-level symbol - reproducing the SINGLE-FILE analyzer's resolution
+  // (its blanket decl-level JETH133 fires and a bare `Bad(...)` still binds the file-level declaration,
+  // so no companion JETH129/JETH147/JETH013 is emitted). The program is already rejected when a name is
+  // in this map, so the override can never turn a reject into an accept - it only aligns the companion
+  // code list with the single-file twin's. Same-kind coexistence pairs (member error<{}> x imported
+  // error, member event<{}> x imported event) never fire the pre-pass, so their shadow - and the C2
+  // member-binding semantics it carries - is untouched.
+  memberCollisionRejects?: Map<ts.ClassDeclaration, Set<string>>,
 ): void {
   if (renamesByFile.size === 0) return;
   const fileOf = (node: ts.Node): string | undefined => {
@@ -282,17 +294,21 @@ function rewriteModuleScopes(
   // `revert(Bad(...))` / `emit(Bad(...))` / a type-position `Bad`/`Bad[]`/`mapping<_,Bad>` / an enum use
   // `Bad.A` / an interface cast `Bad(a)` to the MEMBER, never to the import. The v3 module rename would
   // otherwise rewrite that bare reference to the imported `$mN$Bad` and route AROUND the member (a
-  // pre-existing over-acceptance family: a use fitting the imported symbol but not the member was accepted,
-  // where solc rejects - "This expression is not callable" for an error/event ref, "Name has to refer to a
-  // user-defined type" for a type/enum/interface ref). So a reference identifier whose name matches a value
-  // member of its enclosing class (or of a base reached through `extends`) is left UNRENAMED; downstream name
-  // resolution then binds it to the member and the analyzer's existing member-shadow logic fires the same
-  // reject the single-file path gives. The set is REFERENCE-SENSITIVE (only reference identifiers are
-  // skipped, never the member's own declaration), so a decl collision with a `Bad` that is NEVER referenced
-  // still both-accepts (solc allows the shadow). METHOD members are deliberately EXCLUDED: a bare call to a
-  // same-named method needs true overload-set resolution, and a declaration-level skip there would
-  // over-reject; method behavior is left exactly as it was. The member-access spelling `this.Bad(...)` is a
-  // property name (not a reference identifier), so it is untouched and already resolved to the member.
+  // pre-existing over-acceptance family). So a reference identifier whose name matches a value member of its
+  // enclosing class (or of a base reached through `extends`) is left UNRENAMED; downstream name resolution
+  // then binds it to the member. Since the 2026-07-16 ruling (single-file parity for the whole
+  // name-collision family) the CROSS-KIND collisions this shadow used to surface are rejected at the
+  // DECLARATION by collectImportedMemberTypeCollisions (JETH133, exactly the single-file gate), and
+  // memberCollisionRejects disables the shadow for those names so companions match single-file. What the
+  // shadow still carries: the SAME-KIND coexistence pairs (member error<{}> x imported error, member
+  // event<{}> x imported event - the member shadows, byte-identical to solc), library-body members (a
+  // library is outside the contract-member gate; its use-site rejects are a kept deliberate multi-file
+  // over-rejection), and shadows of imports OUTSIDE the 5-kind gate (an imported class/const). The set is
+  // REFERENCE-SENSITIVE (only reference identifiers are skipped, never the member's own declaration).
+  // METHOD members are deliberately EXCLUDED: a bare call to a same-named method needs true overload-set
+  // resolution, and a declaration-level skip there would over-reject; method behavior is left exactly as it
+  // was. The member-access spelling `this.Bad(...)` is a property name (not a reference identifier), so it
+  // is untouched and already resolved to the member.
   const topClasses: ts.ClassDeclaration[] = [];
   sf.forEachChild((c) => { if (ts.isClassDeclaration(c) && c.name) topClasses.push(c); });
   // a class name resolves, after this file's rename map, to its FINAL (possibly `$mN$`-scoped) name; the
@@ -347,66 +363,94 @@ function rewriteModuleScopes(
   // resolution/merge fails and a previously-valid `class C extends ImportedBase { Base: u256 }` over-rejects).
   const isHeritageBaseIdent = (id: ts.Identifier): boolean =>
     ts.isExpressionWithTypeArguments(id.parent) && ts.isHeritageClause(id.parent.parent);
-  const rewrite = (n: ts.Node, shadow: Set<string> | undefined): void => {
-    // entering a class, the shadow set becomes that class's value-member names (own + inherited); at file
-    // level between classes it is `undefined` again.
-    const inner = ts.isClassDeclaration(n) ? shadowNamesFor(n) : shadow;
+  const rewrite = (n: ts.Node, shadow: Set<string> | undefined, rejected: Set<string> | undefined): void => {
+    // entering a class, the shadow set becomes that class's value-member names (own + inherited) and the
+    // rejected-collision override becomes that class's pre-pass-fired names; at file level between
+    // classes both are `undefined` again.
+    const isCls = ts.isClassDeclaration(n);
+    const inner = isCls ? shadowNamesFor(n as ts.ClassDeclaration) : shadow;
+    const innerRejected = isCls ? memberCollisionRejects?.get(n as ts.ClassDeclaration) : rejected;
     if (ts.isIdentifier(n) && (isReferenceIdentifier(n) || isTopLevelDeclName(n))) {
       const file = fileOf(n);
       const to = file ? renamesByFile.get(file)?.get(n.text) : undefined;
       // skip the rename when a value member of the enclosing class shadows this bare-name reference,
-      // EXCEPT in an `extends` heritage clause (solc never shadows there - the base must still resolve).
-      if (to && !(isReferenceIdentifier(n) && inner?.has(n.text) && !isHeritageBaseIdent(n))) {
+      // EXCEPT in an `extends` heritage clause (solc never shadows there - the base must still resolve)
+      // and EXCEPT for a name whose member/import collision the pre-pass already rejected JETH133 (the
+      // reference then binds the import, exactly as the single-file analyzer binds the file-level decl).
+      if (
+        to &&
+        !(isReferenceIdentifier(n) && inner?.has(n.text) && !innerRejected?.has(n.text) && !isHeritageBaseIdent(n))
+      ) {
         (n as unknown as { escapedText: ts.__String }).escapedText = ts.escapeLeadingUnderscores(to);
       }
     }
-    ts.forEachChild(n, (c) => rewrite(c, inner));
+    ts.forEachChild(n, (c) => rewrite(c, inner, innerRejected));
   };
-  ts.forEachChild(sf, (c) => rewrite(c, undefined));
+  ts.forEachChild(sf, (c) => rewrite(c, undefined, undefined));
 }
 
 /**
- * VISIBLE-METHOD-vs-IMPORTED-TYPE collision (multi-file only). solc rejects a contract whose VISIBLE method
- * name equals a same-named file-level error / event / struct / enum / interface that is IN SCOPE (declared in
- * the file or imported into it): the member SHADOWS the imported symbol, so any use of that name resolves to
- * the 0-arg method, never the import ("Wrong argument count" for an error/event, "Name has to refer to a
- * user-defined type" for a struct/enum/interface). The SINGLE-FILE analyzer already gives this reject
- * (JETH133, its cross-scope member-vs-file-level gate in analyzeContract, which runs over the deployed
- * contract's C3 linearization - own AND inherited methods). But the v3 module rename mangles the imported
- * `Bad` to `$mN$Bad` BEFORE the analyzer runs, so the analyzer never sees the method-vs-import collision and
- * a BUNDLE routes AROUND the gate (a pre-existing over-acceptance). This pre-pass restores the reject by
- * mirroring that gate over IMPORTED (cross-file) declarations only, emitting the SAME JETH133 code and
- * message the single-file path produces.
+ * MEMBER-vs-IMPORTED-TYPE collision (multi-file only). USER RULING (2026-07-16): across the whole
+ * name-collision family, MULTI-FILE behavior must equal SINGLE-FILE behavior EXACTLY, thrown code lists
+ * included. The single-file analyzer's cross-scope gate (analyzeContract, the memberKinds x fileKinds loops)
+ * rejects JETH133 when a file-level error / event / struct / enum / interface / Brand newtype shares a name
+ * with ANY contract member of a single kind - function (method / get accessor), storage (plain / static
+ * constant / immutable / mapping / struct-typed / Visible / funcref / array field), member error<{...}>,
+ * member event<{...}>, or @modifier - with EXACTLY three coexistence exemptions (witnessed): a member
+ * error<{}> with a file-level ERROR, a member event<{}> with a file-level EVENT (the member shadows, C2),
+ * and a @modifier with a file-level TYPE (a modifier name is never used in a type position). The v3 module
+ * rename mangles an imported `Bad` to `$mN$Bad` BEFORE the analyzer runs, so the analyzer never sees the
+ * member-vs-import collision and a BUNDLE routes AROUND the gate. This pre-pass restores the reject by
+ * mirroring that gate over renamed (import-scoped) declarations, emitting the SAME JETH133 code and message
+ * the single-file path produces, for the SAME class the single-file path checks:
  *
- * VISIBLE method = the contract's OWN methods UNION every method it INHERITS by walking the `extends` chain
- * in the merged AST (multi-level, multiple-base / diamond, and interface bases, cycle-guarded), using the
- * same finalName+classByFinal resolution that rewriteModuleScopes' value-member shadow uses to follow
- * `extends` across imported files. An override keeps the name visible; a base reached through several paths
- * is visited once. A base that does not resolve is skipped (fail-safe toward base behavior - never fabricate
- * a collision). This SUBSUMES the earlier own-methods-only pass (own methods are a subset of visible), so the
- * inherited case (`class C extends B` where B declares a method colliding with an in-scope imported type) now
- * rejects exactly as the single-file linearization gate does.
+ * ROUTE CLASS - the one class whose linearized members the single-file gate actually counts:
+ *   - DEPLOYED route: the first deployable class (decorated @proxy/@beacon/@facet/@contract-from-@diamond,
+ *     else the first native bare class not extended by another), exactly findContractClasses' classes[0].
+ *   - NON-DEPLOYABLE route (no deployable class): the single abstract LEAF, with analyzeNonDeployableUnit's
+ *     short-circuits emulated - if TWO OR MORE abstract leaves exist (JETH041) or any abstract class carries
+ *     a bare bodyless method/get (JETH489; JETH040 returns the same way), the analyzer returns BEFORE its
+ *     JETH133 gate, so the single-file code list carries NO JETH133 and this pre-pass emits nothing (the
+ *     analyzer's own JETH041/JETH489 is the reject on both paths).
+ * Member kinds are collected over the route class's OWN members UNION every class reached through `extends`
+ * (multi-level, multiple-base / diamond, cycle-guarded; an interface base is walked through but contributes
+ * NO member - the single-file linearization gate accepts a contract that merely inherits an interface
+ * signature). A member whose type annotation does not resolve (unknown name, or a reference to an
+ * error/event ALIAS - member error/event types must be inline error<{}>/event<{}>) is NOT counted, exactly
+ * as the single-file path leaves it out of memberKinds (it rejects JETH013/JETH045/JETH485 on its own).
+ * A name carrying MORE THAN ONE member kind is skipped here - that is the analyzer's WITHIN-scope member
+ * clash, which fires identically on the merged bundle (members are never renamed).
  *
- * Scope, deliberately narrow: METHODS ONLY (a value-member shadow is handled by rewriteModuleScopes leaving
- * the reference unrenamed; a @modifier is a distinct member kind, skipped on every class in the chain).
- * CROSS-FILE ONLY - a same-file collision (a file-level type + a method in the SAME file) is left to the
- * analyzer's existing gate: for an ENTRY-file type (unrenamed) the analyzer already fires JETH133 over the
- * linearization, and a DEP abstract base whose same-file method shadows a same-file type is exactly the pure
- * shadow solc + the single-file path both accept when that base is not the deployed/inherited contract, so
- * firing there would over-reject. Runs on PRISTINE identifiers (BEFORE rewriteModuleScopes mutates any name);
- * final (scoped) names are computed from renamesByFile exactly as rewriteModuleScopes does, so each
- * declaration maps to a unique `$mN$`-scoped name and lookups are exact. The reject fires regardless of
- * whether the colliding name is USED - matching the single-file path, which also rejects the no-use collision
- * (solc accepts the no-use shadow, so this is the endorsed, consistent single/multi-file deliberate
- * over-rejection: methods are camelCase, types/errors/events are PascalCase).
+ * The colliding declaration is resolved through the scope of the route class's file AND of each file
+ * declaring a chain class (an inherited member collides with a type in scope where it is declared - the
+ * single-file flat namespace makes both arrangements JETH133). A declaration whose FINAL name equals the
+ * member name (an entry-file declaration, never renamed) is left to the analyzer's own gate, which sees
+ * that pair and fires JETH133 with its native companion diagnostics - firing here too would double-report.
+ *
+ * NON-ROUTE contract-kind classes (strays off the deployed/leaf chain, and the extra deployables behind a
+ * JETH041) keep the NARROWER legacy scan - VISIBLE METHODS ONLY, cross-file collisions only. The single-file
+ * gate never counts a stray's members (it accepts them), so the legacy stray reject is a known deliberate
+ * multi-file-only over-rejection kept because removing it would flip a reject to an accept (forbidden).
+ *
+ * Runs on PRISTINE identifiers (BEFORE rewriteModuleScopes mutates any name); final (scoped) names are
+ * computed from renamesByFile exactly as rewriteModuleScopes does. The reject fires regardless of whether
+ * the colliding name is USED - matching the single-file path, which also rejects the no-use collision (solc
+ * accepts the no-use shadow, so this is the endorsed, consistent single/multi-file deliberate
+ * over-rejection: members are camelCase, types/errors/events are PascalCase).
+ *
+ * RETURNS the fired names keyed by every CLASS in the route chain: rewriteModuleScopes disables the
+ * value-member reference shadow for exactly those (class, name) pairs, so a bare reference binds the import
+ * - the single-file analyzer's resolution - and the multi-file companion list matches the single-file one
+ * (e.g. field x error USED is [JETH133] alone on both paths, never [JETH133, JETH129]).
  */
-function collectImportedMethodTypeCollisions(
+function collectImportedMemberTypeCollisions(
   sf: ts.SourceFile,
   segments: BundleSegment[],
   renamesByFile: Map<string, Map<string, string>>,
   diags: DiagnosticBag,
-): void {
-  if (renamesByFile.size === 0) return;
+): Map<ts.ClassDeclaration, Set<string>> {
+  const fired = new Map<ts.ClassDeclaration, Set<string>>();
+  if (renamesByFile.size === 0) return fired;
   const fileOf = (node: ts.Node): string | undefined => {
     const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
     const l = line + 1;
@@ -420,16 +464,18 @@ function collectImportedMethodTypeCollisions(
   // an unmapped name (the entry's own decls, a bare non-imported reference) stays as written.
   const finalNameIn = (file: string | undefined, name: string): string =>
     (file ? renamesByFile.get(file)?.get(name) : undefined) ?? name;
-  // Every file-level error / event / struct / enum / interface declaration in the bundle, keyed by its FINAL
-  // scoped name. Classification MIRRORS the analyzer's file-scope buckets exactly (so the multi-file reject
-  // set matches the single-file one - no spurious JETH133 the single-file path would not give):
+  // Every file-level error / event / struct / enum / interface / Brand-newtype declaration in the bundle,
+  // keyed by its FINAL scoped name. Classification MIRRORS the analyzer's file-scope buckets exactly (so the
+  // multi-file reject set matches the single-file one - no spurious JETH133 the single-file path would not
+  // give):
   //   `type X = error<{...}>`  -> 'error'   (isErrorEventAliasRHS)
   //   `type X = event<{...}>`  -> 'event'
-  //   `type X = { ... }`       -> 'type'    (a STRUCT object literal; structsByName - NOT a newtype/array/
-  //                                          tuple alias, which the single-file gate does not treat as a
-  //                                          colliding file-level type)
+  //   `type X = { ... }`       -> 'type'    (a STRUCT object literal)
+  //   `type X = Brand<T>`      -> 'type'    (a branded newtype - witnessed: the single-file gate counts it;
+  //                                          a NON-Brand alias `type X = u256` / `type X = u256[]` is itself
+  //                                          rejected JETH015 on both paths and is NOT counted)
   //   `enum X { ... }`         -> 'type'
-  //   `interface X { ... }`    -> 'type'    (interfacesByName)
+  //   `interface X { ... }`    -> 'type'
   // v3 scoping guarantees each declaration has a unique final name, so this map never conflates two distinct
   // declarations.
   const declByFinal = new Map<string, { kind: 'error' | 'event' | 'type'; file: string | undefined }>();
@@ -444,6 +490,9 @@ function collectImportedMethodTypeCollisions(
       } else if (ts.isTypeLiteralNode(t)) {
         nameNode = n.name;
         kind = 'type'; // a struct object-literal alias
+      } else if (ts.isTypeReferenceNode(t) && ts.isIdentifier(t.typeName) && t.typeName.text === 'Brand') {
+        nameNode = n.name;
+        kind = 'type'; // a branded newtype (UDVT)
       }
     } else if (ts.isEnumDeclaration(n) && n.name) {
       nameNode = n.name;
@@ -457,25 +506,7 @@ function collectImportedMethodTypeCollisions(
       declByFinal.set(finalNameIn(file, nameNode.text), { kind, file });
     }
   });
-  if (declByFinal.size === 0) return;
-  // BARE-BODYLESS SHORT-CIRCUIT EMULATION (single-file parity for the JETH489 gate). On the single-file
-  // path the JETH133 member-vs-file-level gate runs inside analyzeContract, and the NON-DEPLOYABLE route
-  // (no deployed contract in the unit) only reaches it through analyzeNonDeployableUnit, which RETURNS
-  // EARLY when any abstract class declares a bodyless method/get that is neither @virtual nor `abstract`
-  // (JETH489, "must be marked virtual") - so the single-file code list for such a program is [JETH489]
-  // with NO JETH133, the ill-formed member never being counted. The multi-file analyzer fires the same
-  // JETH489 over the merged bundle (imported abstract bases included - verified: the inherited bare-bodyless
-  // cell rejects JETH489 in both modes), so when this pre-pass would ADD a JETH133 the single-file path
-  // cannot emit, the bundle would reject with a DIFFERENT code list. Emulate the short-circuit: if the
-  // bundle will take the non-deployable analyzer route AND some abstract class trips the JETH489 gate,
-  // emit NOTHING here - the analyzer's own JETH489 (or its earlier JETH040/JETH041 gates, which return
-  // before JETH489 the same way) is the reject, exactly as in the single-file all-in-one.
-  // The DEPLOYED route has no such short-circuit (witnessed: a deployed contract with a bare-bodyless
-  // colliding method rejects [JETH483,JETH380,JETH133] single-file, the linearization gate still counting
-  // the member), so a bundle WITH a deployed contract keeps the full pre-pass - suppressing there would
-  // LOSE the JETH133 the single-file path emits. Both scans mirror the analyzer's own predicates
-  // (findContractClasses / isNativeContractClass / extendedClassNames / the analyzeNonDeployableUnit
-  // JETH489 loop) on pristine names via finalNameIn, recursing exactly as those visitors do.
+  if (declByFinal.size === 0) return fired;
   const hasMod = (node: ts.Node, kind: ts.SyntaxKind): boolean =>
     ts.canHaveModifiers(node) && (ts.getModifiers(node) ?? []).some((m) => m.kind === kind);
   const KIND_DECS = ['contract', 'struct', 'interface', 'abstract', 'library', 'proxy', 'beacon', 'facet', 'diamond'];
@@ -494,18 +525,14 @@ function collectImportedMethodTypeCollisions(
     ts.forEachChild(n, collectExtends);
   };
   ts.forEachChild(sf, collectExtends);
-  // Will the analyzer take the DEPLOYED route? Mirrors findContractClasses: a @contract/@proxy/@beacon/
-  // @facet class deploys (@diamond expands to a synthesized @contract upstream of this pre-pass, so treat
-  // it as deployable too), else the native fallback - a bare class (no kind decorator, not `abstract`, not
-  // `static`) that no other class extends.
-  const isDeployedContractClass = (cls: ts.ClassDeclaration): boolean => {
-    const decs = decoratorNames(cls);
-    if (decs.includes('contract') || decs.includes('proxy') || decs.includes('beacon') || decs.includes('facet') || decs.includes('diamond'))
-      return true;
-    if (hasMod(cls, ts.SyntaxKind.AbstractKeyword) || hasMod(cls, ts.SyntaxKind.StaticKeyword)) return false;
-    if (KIND_DECS.some((d) => decs.includes(d))) return false;
-    return !(cls.name && extendedFinal.has(finalNameIn(fileOf(cls.name), cls.name.text)));
-  };
+  // ROUTE DETERMINATION - mirrors the analyzer's findContractClasses / analyzeNonDeployableUnit predicates
+  // on pristine names via finalNameIn, recursing exactly as those visitors do. Phase 1 (decorated
+  // deployables: @contract - the @diamond expansion synthesizes it upstream of this pre-pass - @proxy,
+  // @beacon, @facet) wins over phase 2 (the native bare-class fallback: no kind decorator, not `abstract`,
+  // not `static`, not extended by another class), and within a phase document order decides classes[0].
+  const decoratedDeployables: ts.ClassDeclaration[] = [];
+  const nativeBareDeployables: ts.ClassDeclaration[] = [];
+  const abstractClasses: ts.ClassDeclaration[] = [];
   // The exact JETH489 trigger (analyzeNonDeployableUnit): a bodyless method or `get` accessor on an
   // abstract class, with neither the @virtual decorator nor the `abstract` member keyword.
   const tripsBodylessVirtualGate = (cls: ts.ClassDeclaration): boolean => {
@@ -516,22 +543,53 @@ function collectImportedMethodTypeCollisions(
     }
     return false;
   };
-  let anyDeployed = false;
   let anyBareBodyless = false;
   const scanClasses = (n: ts.Node): void => {
     if (ts.isClassDeclaration(n)) {
-      if (isDeployedContractClass(n)) anyDeployed = true;
-      const isAbstract = hasMod(n, ts.SyntaxKind.AbstractKeyword) || decoratorNames(n).includes('abstract');
-      if (n.name && isAbstract && tripsBodylessVirtualGate(n)) anyBareBodyless = true;
+      const decs = decoratorNames(n);
+      const isAbstract = hasMod(n, ts.SyntaxKind.AbstractKeyword) || decs.includes('abstract');
+      if (decs.includes('contract') || decs.includes('proxy') || decs.includes('beacon') || decs.includes('facet') || decs.includes('diamond')) {
+        decoratedDeployables.push(n);
+      } else if (
+        !isAbstract &&
+        !hasMod(n, ts.SyntaxKind.StaticKeyword) &&
+        !KIND_DECS.some((d) => decs.includes(d)) &&
+        !(n.name && extendedFinal.has(finalNameIn(fileOf(n.name), n.name.text)))
+      ) {
+        nativeBareDeployables.push(n);
+      }
+      if (n.name && isAbstract) {
+        abstractClasses.push(n);
+        if (tripsBodylessVirtualGate(n)) anyBareBodyless = true;
+      }
     }
     ts.forEachChild(n, scanClasses);
   };
   ts.forEachChild(sf, scanClasses);
-  if (!anyDeployed && anyBareBodyless) return;
+  const anyDeployed = decoratedDeployables.length > 0 || nativeBareDeployables.length > 0;
+  let routeClass: ts.ClassDeclaration | undefined;
+  if (anyDeployed) {
+    routeClass = decoratedDeployables[0] ?? nativeBareDeployables[0];
+  } else {
+    const leaves = abstractClasses.filter(
+      (ac) => ac.name && !extendedFinal.has(finalNameIn(fileOf(ac.name), ac.name.text)),
+    );
+    // SHORT-CIRCUIT EMULATION (single-file parity for the non-deployable route). analyzeNonDeployableUnit
+    // returns BEFORE its JETH133 linearization gate when two or more abstract leaves exist (JETH041) or any
+    // abstract class declares a bare bodyless method/get (JETH489) - so the single-file code list for such
+    // a program carries NO JETH133 ([JETH041] / [JETH489] alone; the earlier JETH040 gate returns the same
+    // way and has no member-bearing class to collide anyway). The multi-file analyzer fires the identical
+    // JETH041/JETH489 over the merged bundle (imported abstract bases included), so BOTH scans emit nothing
+    // here and the analyzer's own reject is the whole code list, exactly as in the single-file all-in-one.
+    // The DEPLOYED route has no such short-circuit (witnessed: a deployed contract with a bare-bodyless
+    // colliding method rejects [JETH483,JETH380,JETH133] single-file, the linearization gate still counting
+    // the member), so a bundle WITH a deployable class never suppresses.
+    if (leaves.length > 1 || anyBareBodyless) return fired;
+    routeClass = leaves[0]; // undefined for an interface-only unit: analyzeContract never runs there either
+  }
   // A class that carries solc's contract MEMBER namespace: a bare / @contract-family / abstract class. A
   // @library / `static class` (library) / @struct object type / native `interface`-as-class / @diamond does
-  // not participate in this member-vs-file-level collision. (Dep files cannot declare contracts, so in
-  // practice only the entry contributes classes here; the check stays general via the per-file discriminator.)
+  // not participate in this member-vs-file-level collision.
   const isContractKindClass = (cls: ts.ClassDeclaration): boolean => {
     const decs = decoratorNames(cls);
     if (decs.includes('library') || decs.includes('struct') || decs.includes('interface') || decs.includes('diamond'))
@@ -542,9 +600,7 @@ function collectImportedMethodTypeCollisions(
   // The INHERITANCE resolver (merged AST). A class/interface declaration is keyed by its FINAL (post-rename)
   // name, so an entry `extends B` reference and the imported dep `class B` decl land on the SAME key - the
   // exact resolution rewriteModuleScopes' value-member shadow uses (finalNameOf + classByFinalName). Both
-  // class bases (abstract/contract) and interface bases participate: a method may be inherited from an
-  // abstract-class body or declared by an interface the contract implements, and either shadows an in-scope
-  // file-level type in solc.
+  // class bases (abstract/contract) and interface bases participate in the walk.
   type BaseNode = ts.ClassDeclaration | ts.InterfaceDeclaration;
   const classByFinal = new Map<string, ts.ClassDeclaration>();
   const ifaceByFinal = new Map<string, ts.InterfaceDeclaration>();
@@ -576,15 +632,149 @@ function collectImportedMethodTypeCollisions(
     }
     return out;
   };
-  // Method names declared directly on a class node as a concrete or bodyless-abstract MethodDeclaration
-  // (excluding a @modifier member, which is a distinct member kind - matching the own-methods pass). An
-  // interface's MethodSignatures are deliberately NOT counted: an unimplemented interface signature does not
-  // shadow a free error / event / type in solc, nor in the single-file JETH133 linearization gate (which
-  // ACCEPTS an abstract contract that merely inherits the signature). Counting it would over-reject that
-  // shape. Only class MethodDeclarations - concrete OR bodyless @virtual / abstract, exactly the members the
-  // single-file gate treats as shadowing - are collected (a class base's body and an abstract class's
-  // bodyless method both shadow an in-scope file-level type). An interface base still participates in the
-  // extends walk; it simply contributes no method name.
+  // The route class's `extends` chain (route class first, cycle-guarded, diamond bases visited once).
+  const chainOf = (root: BaseNode): BaseNode[] => {
+    const seen = new Set<BaseNode>();
+    const out: BaseNode[] = [];
+    const stack: BaseNode[] = [root];
+    while (stack.length > 0) {
+      const cur = stack.pop()!;
+      if (seen.has(cur)) continue;
+      seen.add(cur);
+      out.push(cur);
+      for (const base of basesOf(cur)) stack.push(base);
+    }
+    return out;
+  };
+  // ---- MEMBER-TYPE CLASSIFICATION (mirrors the analyzer's memberKinds buckets) ------------------------
+  // Does this type-annotation node resolve to a JETH STORAGE type? Mirrors resolveType's shapes: primitive
+  // names, `string`, mapping<K,V>, Arr<T,N>, Visible<T>, T[], funcref `(a: T) => R`, a struct/enum/
+  // interface/Brand alias (declByFinal 'type'), and a contract/interface value type (classByFinal /
+  // ifaceByFinal). A reference to an error/event ALIAS or to an unknown name does NOT resolve - the
+  // single-file analyzer rejects such a member JETH013 on its own and never counts it in memberKinds.
+  const isStorageTypeNode = (t: ts.TypeNode, file: string | undefined): boolean => {
+    if (ts.isParenthesizedTypeNode(t)) return isStorageTypeNode(t.type, file);
+    if (t.kind === ts.SyntaxKind.StringKeyword) return true;
+    if (ts.isArrayTypeNode(t)) return isStorageTypeNode(t.elementType, file);
+    if (ts.isFunctionTypeNode(t)) {
+      for (const p of t.parameters) {
+        if (!p.type || !isStorageTypeNode(p.type, file)) return false;
+      }
+      return t.type.kind === ts.SyntaxKind.VoidKeyword || isStorageTypeNode(t.type, file);
+    }
+    if (!ts.isTypeReferenceNode(t)) return false;
+    if (ts.isQualifiedName(t.typeName)) return true; // a library-qualified struct type - permissive
+    const name = t.typeName.text;
+    if (name === 'mapping')
+      return t.typeArguments?.length === 2 && t.typeArguments.every((a) => isStorageTypeNode(a, file));
+    if (name === 'Arr') return t.typeArguments?.length === 2 && isStorageTypeNode(t.typeArguments[0]!, file);
+    if (name === 'Visible') return t.typeArguments?.length === 1 && isStorageTypeNode(t.typeArguments[0]!, file);
+    if (name === 'error' || name === 'event') return false; // inline error/event is its OWN member kind
+    if (resolvePrimitiveName(name) !== undefined) return true;
+    const fn = finalNameIn(file, name);
+    const d = declByFinal.get(fn);
+    if (d) return d.kind === 'type'; // an error/event ALIAS as a member type is JETH013, never storage
+    return classByFinal.has(fn) || ifaceByFinal.has(fn); // contract / interface value type
+  };
+  type MemberKind = 'function' | 'storage' | 'error' | 'event' | 'modifier';
+  // The member kind of one class member, or undefined for a member the single-file gate never counts
+  // (constructor, set accessor - JETH043 - a `#`-private name, an untyped/unresolvable property).
+  const memberKindOf = (m: ts.ClassElement, file: string | undefined): { name: string; kind: MemberKind } | undefined => {
+    if (!m.name || !ts.isIdentifier(m.name)) return undefined;
+    const name = m.name.text;
+    if (ts.isMethodDeclaration(m)) {
+      return { name, kind: decoratorNames(m).includes('modifier') ? 'modifier' : 'function' };
+    }
+    if (ts.isGetAccessorDeclaration(m)) return { name, kind: 'function' };
+    if (ts.isPropertyDeclaration(m)) {
+      const t = m.type;
+      if (!t) return undefined; // untyped member: JETH045/JETH485 on both paths, never counted
+      if (ts.isTypeReferenceNode(t) && ts.isIdentifier(t.typeName) && t.typeName.text === 'error')
+        return { name, kind: 'error' };
+      if (ts.isTypeReferenceNode(t) && ts.isIdentifier(t.typeName) && t.typeName.text === 'event')
+        return { name, kind: 'event' };
+      return isStorageTypeNode(t, file) ? { name, kind: 'storage' } : undefined;
+    }
+    return undefined;
+  };
+  // ---- ROUTE-CLASS SCAN (the single-file gate's mirror, ALL member kinds) -----------------------------
+  const routeChain = routeClass ? chainOf(routeClass) : [];
+  if (routeClass && isContractKindClass(routeClass)) {
+    const kindsByName = new Map<string, Set<MemberKind>>();
+    const scopeFilesByName = new Map<string, Set<string | undefined>>();
+    for (const node of routeChain) {
+      // An interface base is a C3 ordering node only: its method SIGNATURES are never counted (the
+      // single-file gate accepts a contract that merely inherits the signature - witnessed).
+      if (ts.isInterfaceDeclaration(node)) continue;
+      const nfile = fileOf(node.name ?? node);
+      for (const m of node.members) {
+        const mk = memberKindOf(m, nfile);
+        if (!mk) continue;
+        let kinds = kindsByName.get(mk.name);
+        if (!kinds) kindsByName.set(mk.name, (kinds = new Set()));
+        kinds.add(mk.kind);
+        let files = scopeFilesByName.get(mk.name);
+        if (!files) scopeFilesByName.set(mk.name, (files = new Set()));
+        files.add(nfile);
+      }
+    }
+    const routeFile = fileOf(routeClass.name ?? routeClass);
+    for (const [nm, kinds] of kindsByName) {
+      // A name carrying MORE THAN ONE member kind is the analyzer's WITHIN-scope member clash (its own
+      // JETH133, "a function and a storage share the name"), which fires identically on the merged bundle -
+      // the single-file cross-scope loop skips it (mk.size !== 1) and so does this mirror.
+      if (kinds.size !== 1) continue;
+      const mk = [...kinds][0]!;
+      // Resolve the member name through the route class's file scope AND each declaring class's file scope
+      // (an inherited member collides with a type in scope where it is declared; the single-file flat
+      // namespace rejects both arrangements - witnessed).
+      const scopeFiles = new Set<string | undefined>([routeFile, ...(scopeFilesByName.get(nm) ?? [])]);
+      let hit: { kind: 'error' | 'event' | 'type' } | undefined;
+      let analyzerSees = false;
+      for (const f of scopeFiles) {
+        const key = finalNameIn(f, nm);
+        const d = declByFinal.get(key);
+        if (!d) continue;
+        if (key === nm) {
+          // The declaration kept its source name (an entry-file decl): the analyzer's own cross-scope gate
+          // sees this exact pair post-rename and fires JETH133 with its native companion diagnostics -
+          // firing here too would double-report the same collision.
+          analyzerSees = true;
+          break;
+        }
+        if (!hit) hit = d;
+      }
+      if (analyzerSees || !hit) continue;
+      // The witnessed single-file coexistence exemptions - and ONLY these: member error<{}> x file error,
+      // member event<{}> x file event (the member shadows, same-kind - the C2 lift), @modifier x file type
+      // (a modifier name is never used in a type position).
+      const bothError = mk === 'error' && hit.kind === 'error';
+      const bothEvent = mk === 'event' && hit.kind === 'event';
+      const modifierType = mk === 'modifier' && hit.kind === 'type';
+      if (bothError || bothEvent || modifierType) continue;
+      diags.error(
+        routeClass,
+        'JETH133',
+        `identifier '${nm}' is already declared (a file-level ${hit.kind} and a contract-member ${mk} share the name; solc's member shadow leaves the file-level unusable inside the contract - only a matching error/error or event/event pair may coexist)`,
+      );
+      // Record the fired name for EVERY class in the chain: rewriteModuleScopes disables the value-member
+      // reference shadow there, so a bare use binds the import - the single-file resolution - and the
+      // companion code list matches the single-file twin's exactly.
+      for (const node of routeChain) {
+        if (!ts.isClassDeclaration(node)) continue;
+        let set = fired.get(node);
+        if (!set) fired.set(node, (set = new Set()));
+        set.add(nm);
+      }
+    }
+  }
+  // ---- LEGACY NON-ROUTE SCAN (methods only, cross-file only) ------------------------------------------
+  // Strays off the route chain (and the extra deployables behind a JETH041) keep the original narrower
+  // method-vs-imported-type reject: the single-file gate never counts a stray's members, but this multi-file
+  // reject predates the ruling and removing it would flip a reject to an accept (forbidden). A same-file
+  // pair (d.file === cfile) stays exempt here - a dep base whose same-file method shadows a same-file type
+  // is the pure shadow solc + the single-file path both accept when that base is not the route contract.
+  const routeChainSet = new Set<BaseNode>(routeChain);
   const ownMethodNames = (node: BaseNode): string[] => {
     const out: string[] = [];
     for (const m of node.members) {
@@ -595,33 +785,21 @@ function collectImportedMethodTypeCollisions(
     }
     return out;
   };
-  // VISIBLE method names of a contract = own UNION every inherited method, walking the `extends` chain
-  // (cycle-guarded on the declaration node, so a diamond base is counted once and a cyclic `extends` cannot
-  // loop). Runs on pristine identifiers, before any rename mutation.
   const visibleMethodNames = (cls: ts.ClassDeclaration): Set<string> => {
     const names = new Set<string>();
-    const seen = new Set<BaseNode>();
-    const stack: BaseNode[] = [cls];
-    while (stack.length > 0) {
-      const cur = stack.pop()!;
-      if (seen.has(cur)) continue;
-      seen.add(cur);
-      for (const nm of ownMethodNames(cur)) names.add(nm);
-      for (const base of basesOf(cur)) stack.push(base);
+    for (const node of chainOf(cls)) {
+      if (ts.isInterfaceDeclaration(node)) continue;
+      for (const nm of ownMethodNames(node)) names.add(nm);
     }
     return names;
   };
   sf.forEachChild((n) => {
-    if (!ts.isClassDeclaration(n) || !n.name || !isContractKindClass(n)) return;
+    if (!ts.isClassDeclaration(n) || !n.name || !isContractKindClass(n) || routeChainSet.has(n)) return;
     const cfile = fileOf(n.name);
     const reported = new Set<string>();
     for (const mname of visibleMethodNames(n)) {
       if (reported.has(mname)) continue;
       const d = declByFinal.get(finalNameIn(cfile, mname));
-      // Only a CROSS-FILE (imported) collision is surfaced here; a same-file file-level type + method is the
-      // single-file shape and is left to the analyzer's own gate (so its companion diagnostics survive, and a
-      // dep base's own same-file shadow is not over-rejected - solc + the single-file path accept it when the
-      // base is not the deployed/inherited contract).
       if (!d || d.file === cfile) continue;
       reported.add(mname);
       diags.error(
@@ -631,6 +809,7 @@ function collectImportedMethodTypeCollisions(
       );
     }
   });
+  return fired;
 }
 
 /** `$m<N>$` and `$p$` identifiers are reserved for the compiler's internal mangles - the v3
@@ -1038,17 +1217,23 @@ function compileUnit(source: string, opts: CompileOptions): CompileResult {
   // would silently rewrite it to a name that appears nowhere in the source. Reserved EVERYWHERE - checked
   // pre-rename so it sees only user-written spellings (single-file and bundles alike).
   rejectReservedModuleIdentifiers(parsed.sourceFile, diags);
-  // OA close (multi-file): a contract METHOD whose name collides with a same-named IMPORTED file-level
-  // error/event/struct/enum/interface is an "Identifier already declared" reject the SINGLE-FILE analyzer
-  // already gives (JETH133). The v3 rename below would mangle the imported symbol to `$mN$X` and route the
-  // bundle AROUND that gate, so detect the collision here on PRISTINE names (before the rename mutates them)
-  // and emit the same JETH133 the single-file path produces.
-  if (bundleSegments && bundleRenames)
-    collectImportedMethodTypeCollisions(parsed.sourceFile, bundleSegments, bundleRenames, diags);
+  // OA close (multi-file): a contract MEMBER of any kind (method / get accessor / storage field of every
+  // flavor / member error<{}> / member event<{}> / @modifier) whose name collides with a same-named IMPORTED
+  // file-level error/event/struct/enum/interface/Brand is an "Identifier already declared" reject the
+  // SINGLE-FILE analyzer already gives (JETH133, its cross-scope gate). The v3 rename below would mangle the
+  // imported symbol to `$mN$X` and route the bundle AROUND that gate, so detect the collision here on
+  // PRISTINE names (before the rename mutates them) and emit the same JETH133 the single-file path produces.
+  // The fired (class, name) pairs feed rewriteModuleScopes, which disables the value-member reference shadow
+  // for exactly those pairs so the companion code list matches the single-file twin's (see the pre-pass doc).
+  const memberCollisionRejects =
+    bundleSegments && bundleRenames
+      ? collectImportedMemberTypeCollisions(parsed.sourceFile, bundleSegments, bundleRenames, diags)
+      : undefined;
   // v3 module scoping FIRST: rename each dep's top-level declarations (and every file's import bindings)
   // to their `$mN$` scoped names, so every later pass (the # mangle, the static-member rewrite, all name
   // resolution) sees one consistent namespace with per-file scoping already applied.
-  if (bundleSegments && bundleRenames) rewriteModuleScopes(parsed.sourceFile, bundleSegments, bundleRenames);
+  if (bundleSegments && bundleRenames)
+    rewriteModuleScopes(parsed.sourceFile, bundleSegments, bundleRenames, memberCollisionRejects);
   // Item #2: rewrite JS `#` private members to contract-scoped internal names BEFORE validation /
   // analysis, so `#f()` / `this.#x` lower like internal members and derived access rejects.
   manglePrivateMembers(parsed.sourceFile);

@@ -6,7 +6,7 @@
 // The SINGLE-FILE analyzer already rejects this JETH133 over the deployed contract's C3 linearization (own +
 // inherited). But the v3 module rename mangles the imported `Bad` to `$mN$Bad`, and the 786b88e pre-pass only
 // looked at OWN methods, so a bundle where the colliding method reached the use-site contract by INHERITANCE
-// routed AROUND the gate (a residual over-acceptance). collectImportedMethodTypeCollisions now generalizes to
+// routed AROUND the gate (a residual over-acceptance). collectImportedMemberTypeCollisions now generalizes to
 // VISIBLE methods (own UNION inherited via the merged-AST extends chain - multi-level, diamond, override,
 // interface bases), emitting the SAME JETH133 the single-file path gives. Deliberate, user-endorsed reject
 // (methods camelCase vs PascalCase types/errors/events), consistent single/multi-file even for a NO-USE
@@ -131,8 +131,12 @@ describe('786b88e OWN-method collision cell still rejects (visible methods are a
   });
 });
 
-describe('value-member-shadow family still rejects (untouched by the method generalization)', () => {
-  it('inherited value-member Bad shadowing an imported error still rejects (JETH129)', () => {
+describe('value-member-shadow family still rejects (now the decl-level JETH133, single-file parity)', () => {
+  // USER RULING (2026-07-16): multi-file behavior == single-file behavior EXACTLY across the whole
+  // name-collision family. The single-file twin of this cell rejects [JETH133] at the DECLARATION (the
+  // cross-scope member-vs-file-level gate), so the multi-file bundle now rejects the identical [JETH133]
+  // via the generalized collectImportedMemberTypeCollisions pre-pass - not the old use-site JETH129.
+  it('inherited value-member Bad colliding with an imported error rejects JETH133 (== single-file)', () => {
     const entry =
       `import { Bad } from './e.jeth';\nimport { Base } from './b.jeth';\n` +
       `class C extends Base { f(): External<void> { revert(Bad(1n)); } }`;
@@ -141,7 +145,7 @@ describe('value-member-shadow family still rejects (untouched by the method gene
         'e.jeth': 'export type Bad = error<{ a: u256 }>;',
         'b.jeth': 'export abstract class Base { Bad: u256; }',
       }),
-    ).toContain('JETH129');
+    ).toEqual(['JETH133']);
   });
 });
 

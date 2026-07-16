@@ -1,5 +1,5 @@
 // BARE-BODYLESS METHOD vs IMPORTED-TYPE collision: single-vs-multi CODE-LIST parity (the JETH489
-// short-circuit emulation in collectImportedMethodTypeCollisions). The single-file NON-DEPLOYABLE route
+// short-circuit emulation in collectImportedMemberTypeCollisions). The single-file NON-DEPLOYABLE route
 // (analyzeNonDeployableUnit) returns EARLY when any abstract class declares a bodyless method/get that is
 // neither @virtual nor `abstract` (JETH489, "must be marked virtual") - BEFORE its JETH133 linearization
 // gate ever runs - so the single-file code list for such a program is [JETH489] with NO JETH133; the
