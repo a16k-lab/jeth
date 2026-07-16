@@ -1395,3 +1395,71 @@ rows byte-identical to base, zero drift; 106 live over-rejection-hunt cells byte
   arm must lower INSIDE ITS OWN ARM (lazy); the calldata arm's cd->mem copy likewise (hoisting it REVERTS where
   solc returns 7). SITE: the gate at analyzer.ts:22765 (`isStaticStructFixedLeafArray`, types.ts:538-545, excludes
   a dyn outer at :539); the sibling `isStaticStructAnyLeafArray` is the natural target.
+
+### 2026-07-17 #10 + #11 LIFTED; TWO LIVE MISCOMPILES FOUND ON MAIN AND CLOSED (HEAD e563a16, suite 491/4815)
+
+**#10 TERN-STRUCT-ARR + A-LIT-RESID - LIFTED `790135b`.** solc unifies `c ? <mem In[]> : <storage In[]>` to a
+MEMORY reference with an ASYMMETRIC rule: the MEMORY arm is ALIASED (pointer passthrough), the STORAGE arm is
+DEEP-COPIED. The ternary IS the copy-desugar (`In[] memory r; if(c){r=m;}else{r=st;}`) - 14/14 observably
+identical in solc-vs-solc, because `r=m` mem->mem IS an alias and `r=st` storage->mem IS a deep copy. The lift
+needed NO yul change: lowerExpr's ternary cases already emit each arm inside its OWN switch-case block, so the
+per-arm lazy materialization was structurally present. ADMITTED: `In[]`, `In[][]`, `In[][][]` (all-dynamic to a
+static-struct leaf), the pre-existing fixed-outer cluster-1 (`Arr<In,N>`, `Arr<Arr<In,N>,M>`), and A-LIT-RESID
+`Arr<u256[],N>` calldata branch. EXCLUDED: every chain MIXING fixed and dynamic levels. Detector pinned
+non-vacuously: memory-arm write-through reads **777** (a blanket copy would give 1); storage-arm post-bind
+mutation reads **100** (a blanket alias would give 999). Lazy cd-copy proven by an oversized INNER length
+(c=1 REVERTs, c=0 returns 11 == solc) - NOTE the outer-offset witness is VACUOUS (solc's entry decoder rejects
+it before the body runs, so both arms revert regardless).
+
+**LIVE MISCOMPILE #1 FOUND ON MAIN AND FIXED BYTE-IDENTICALLY `682a71f`** (NOT rejected - the first brief's
+premise that this was B-21 was FALSE, and this catalogue's own #6 correction says so). ROOT CAUSE
+(src/yul.ts emptyInnerImage ~L6910): zeroInitNestedMemArray routes a POINTER-HEADED element to emptyInnerImage,
+which had cases for a dyn-field struct and a STATIC struct then fell through to a DYNAMIC-array tail emitting a
+single `[len=0]` word. `Arr<In,2>` is NOT a dynamic array (N absolute-pointer words, no `[len]` header), so
+every outer slot pointed at a ONE-WORD image. `new Array<Arr<In,2>>(n)` then leaked RAW MEMORY POINTERS.
+Closed MANY live base MCs, all now MATCH: `m[0][0].a` (288 vs 1), whole-array return (leaked ptr 0x1e0),
+abi.encode, for-of (499 vs 18), elementwise field assign (303 vs 103), mixed-width packing, and the EVENT/LOG
+path (leaked raw pointer 480 into the log payload). A REJECT was IMPOSSIBLE at minimal scope: three PASSING
+byte-identical tests use the shape (test/storage-multihop-static-struct-array-field.test.ts:46-50). Fix = 3
+lines reusing the existing emptyFixedDynImage builder. *** INVISIBLE unless BOTH inner elements are assigned -
+a one-element probe of this family is VACUOUS, which is why 4790 tests missed it. ***
+RESIDUAL REJECTED (this one genuinely IS B-21, USER RULING KEEP): a DEEPER fixed level `Arr<Arr<In,2>,2>[]` -
+the element READ path and the ABI ENCODER disagree about the image (a storage bind leaked a raw 0x140, also
+live on main). New per-shape predicate isStaticStructFixedElemDynArray (src/types.ts).
+LESSON: `isStaticStructAnyLeafArray`'s own docstring reserves it for CODEC DISPATCH sites ("the local-decl /
+read GATES use the narrower per-shape predicates so the reject set is unchanged"); the first #10 attempt reused
+it AT A GATE. Read a predicate's contract before reusing it at a gate.
+
+**#11 MULTI-CONTRACT-FILE - LIFTED `e563a16`** (USER RULING: lift it). N deployable contracts per entry file,
+one artifact each, byte-identical to solc's artifact for THAT contract from the SAME source. API is ADDITIVE:
+`CompileResult.contracts?: CompileResult[]` in DOCUMENT ORDER with `contracts[0] === the result object`; every
+singular field stays classes[0]'s artifact; a single-contract file leaves `contracts` UNDEFINED, so the ~1076
+existing compile() call sites are untouched (64 single-contract programs, incl. all 34 examples/*.jeth,
+sha256-identical base vs fix over creation+runtime+abi+storageLayout). KEPT: the abstract-leaf JETH041
+(leaves.length > 1 - an abstract-only unit emits NO bytecode so there is no artifact to prove byte-identical;
+its stale "re-analysis is impossible" rationale was corrected) and diamond.ts's one-@diamond-per-file. DROPPED
+only the deployed-path soft JETH041. The collision pre-pass now takes a routeIndex (JETH133 parity NOT
+regressed; 238 collision-family tests green + probed with two deployables present).
+
+**LIVE MISCOMPILE #2 - the FIRST #11 attempt (`8be22da`, NOT LANDED) introduced one; adversarial verify caught
+it.** Its premise "a FRESH Analyzer per route sidesteps the state hazard" is INCOMPLETE: a fresh Analyzer fixes
+INSTANCE state but analyzeContract MUTATES THE SHARED AST BY DESIGN (analyzer.ts:370 says so verbatim: it
+"strips the External/Payable/View/Pure return markers OFF THE SHARED AST NODES"). Route 0 stripped the markers
+off a shared abstract base; every LATER route saw the member as marker-less = INTERNAL and silently dropped it
+from that route's dispatcher/ABI (B.bump() absent, reverts, gn()=0 vs solc 2). `get` accessors survived
+(externality comes from the `get` keyword), making the damage SILENT and PARTIAL. Route order decided the victim.
+THE REDO found the write sites the verifier could not grep - the cast form is
+`(member as unknown as { type?: ts.TypeNode }).type = args[0]`, matching neither `.type =` nor `as any).x =` -
+and there are **FOUR** destructive sites (analyzer.ts:2637 library method, :6279 receive/fallback, :7625
+Visible<T> FIELD, :8328 method markers), which is exactly why the fix is RE-PARSE PER ROUTE (compileUnit is now
+a driver; compileRoute() runs the full pipeline including its own parse()) rather than surgically undoing one
+known mutation. Confirmed no module-level mutable state, so fresh parse + fresh Analyzer = full route
+independence. Non-vacuity proven by INJECTION: re-introducing the shared-AST model turns 4 of the new tests RED.
+*** LESSON (the sharpest of the round): the first attempt shipped a GREEN 30/30 suite WITH the live miscompile,
+because its "shared abstract base" test used `bump(): void` - a MARKER-LESS member with nothing to strip.
+Vacuous coverage of exactly the bug it was meant to catch. A green suite is not evidence. ***
+
+Documented ABI-metadata divergences (PRE-EXISTING, base==fix, NOT bar violations, bytecode unaffected):
+an UNUSED file-level event appears in JETH's ABI but not solc's; JETH never emits `receive`/`fallback` ABI
+entries though the dispatcher is byte-correct; `@diamond class D {}` + a plain contract silently emits ONLY D
+(pre-existing, unchanged by the multi-contract lift - a candidate for a future round).
