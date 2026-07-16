@@ -1253,3 +1253,26 @@ Lifting it would require true overload-set resolution (a name being both a calla
 disambiguated by context) with its own miscompile risk - deliberately declined. Applies single-file and to the
 multi-file import variant (JETH133/074/085). REMOVES this from the "liftable" set: it is now a Group A deliberate
 reject alongside .transfer/.send (JETH492), selfdestruct (JETH493), push-no-arg (JETH494).
+
+### 2026-07-16 CLOSED: the multi-file METHOD-name-collision OVER-ACCEPTANCE family (own + inherited)
+
+The Group-A documentation ruling (method-vs-type/error/event collision = deliberate JETH133 reject) exposed a
+MIRROR bar violation: the single-file path correctly REJECTS a method colliding with a same-named
+type/error/event (JETH133), but the MULTI-FILE bundler alpha-renames imported symbols BEFORE the analyzer runs,
+so the collision routed AROUND the JETH133 gate and JETH ACCEPTED where solc (and single-file JETH) REJECT - an
+over-acceptance. Closed in two verified commits + one corrective:
+- 786b88e: a contract's OWN method colliding with a same-named IMPORTED file-level error/event/struct/enum/
+  interface (5 kinds) now rejects JETH133 in multi-file, matching single-file (new collectImportedMethodType
+  Collisions in src/compile.ts, run before the v3 rename; methods only; cross-file only). Verify CLEAN.
+- 7d7ffaa: the INHERITED-method variant (the method reaches the use-site contract through the extends chain -
+  base+type in the same dep file, three-file, 2-level chain, diamond-through-2nd-base, override) now also rejects
+  JETH133 (generalized to VISIBLE methods = own UNION inherited via a merged-AST extends-chain walk). The first
+  attempt (6bc5726) over-reached by counting unimplemented INTERFACE method SIGNATURES as shadowing members
+  (adversarial verify caught it: single-file + solc both ACCEPT an abstract contract inheriting an unimplemented
+  interface method colliding with an in-scope type); the corrective drops the ts.isMethodSignature branch so only
+  concrete/bodyless-@virtual CLASS MethodDeclarations shadow - the exact single-file line. Verify CLEAN.
+The rule, consistent single/multi-file: a CLASS method (own or inherited, any file) whose name collides with an
+in-scope file-level error/event/struct/enum/interface rejects JETH133; an interface MethodSignature does NOT
+shadow (matches solc + single-file). The no-use collision rejecting JETH133 (solc accepts the pure shadow) is the
+DELIBERATE Group-A over-rejection applied consistently. Suite 483 files / 4531 tests, tsc clean. The whole
+name-collision subsystem (value-member shadow + own-method + inherited-method) is now DRY: zero OA, zero MC.
