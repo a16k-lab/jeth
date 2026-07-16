@@ -1276,3 +1276,35 @@ in-scope file-level error/event/struct/enum/interface rejects JETH133; an interf
 shadow (matches solc + single-file). The no-use collision rejecting JETH133 (solc accepts the pure shadow) is the
 DELIBERATE Group-A over-rejection applied consistently. Suite 483 files / 4531 tests, tsc clean. The whole
 name-collision subsystem (value-member shadow + own-method + inherited-method) is now DRY: zero OA, zero MC.
+
+### 2026-07-16 RULING + UNIFICATION: the name-collision rule is "match single-file everywhere" (89e152f)
+
+USER RULING (final): single-file JETH's blanket DECLARATION-LEVEL JETH133 is the language rule for the whole
+member-vs-file-level-type name-collision family, on BOTH compilation paths. Any contract member (plain field,
+static constant, immutable, mapping, struct-typed field, funcref/array field, Visible<T> field, get accessor,
+@virtual getter, method, @modifier-vs-error/event) whose name collides with an in-scope file-level
+error/event/struct/enum/interface/Brand rejects JETH133, used or unused, own or inherited. EXEMPT (member
+shadows, coexistence allowed): member error<{}> x file-level error, member event<{}> x file-level event,
+@modifier x type. This supersedes the reference-sensitive multi-file value-member design (which matched solc:
+unused shadows accepted, uses rejected via binding); those cells are now DELIBERATE over-rejections per the
+same naming-convention rationale as the Group-A method ruling (types PascalCase, members camelCase).
+Fix 89e152f: collectImportedMethodTypeCollisions generalized to collectImportedMemberTypeCollisions mirroring
+the analyzer's cross-scope gate (same code + kind-worded message) over the route class + extends chain; fired
+names disable the reference shadow so companions match ([JETH133] alone, never [JETH133,JETH129]). Adversarial
+verify CLEAN: 256 paired single-vs-multi cells zero set-mismatches; 99 non-vacuous accept->reject flips + 72
+code realignments; 20 byte-identity guard shapes (F4 coexistence binds the MEMBER, decoded selector 830c4ac2);
+14 solc twins prove every new reject is a deliberate over-rejection (solc accepts each; none masked a solc
+reject); zero reject->accept flips. Suite 485 files / 4683 tests, tsc clean.
+
+Documented residuals (all reject-side or solc-correct, none a bar violation):
+- COMPANION deltas on already-rejected programs: interface-cast/brand bare-construction carries a single-file-
+  only JETH074 next to the shared JETH133; multi-diagnostic bags order the pre-pass JETH133 first (sets equal).
+- STRAY-class scan keeps multi-only JETH133 rejects where single accepts (stray abstract method, second
+  deployable behind JETH041); removing them would be a reject->accept flip, forbidden by the ruling.
+- LIBRARY-body member shadow keeps the multi-only use-site JETH129 (single accepts; the single-file library
+  accept is itself questionable vs solc, out of scope).
+- MODIFIER-APPLICATION x imported STRUCT (@modifier Bad + @Bad applied): multi [JETH329] vs single ACCEPT,
+  pre-existing and unchanged; fixing = forbidden reject->accept flip; candidate for a future ruling.
+- SCOPE BOUNDARY (correct, not a defect): a colliding type reachable only in dep-file scopes with no path to
+  the route class ACCEPTS in multi while the FLATTENED single twin rejects - flattening changes scope; the
+  multi behavior equals solc multi-file scoping and is the documented pre-pass boundary.
