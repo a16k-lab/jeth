@@ -537,12 +537,13 @@ function collectImportedMemberTypeCollisions(
   };
   ts.forEachChild(sf, collectExtends);
   // ROUTE DETERMINATION - mirrors the analyzer's findContractClasses / analyzeNonDeployableUnit predicates
-  // on pristine names via finalNameIn, recursing exactly as those visitors do. Phase 1 (decorated
-  // deployables: @contract - the @diamond expansion synthesizes it upstream of this pre-pass - @proxy,
-  // @beacon, @facet) wins over phase 2 (the native bare-class fallback: no kind decorator, not `abstract`,
-  // not `static`, not extended by another class), and within a phase document order decides classes[0].
-  const decoratedDeployables: ts.ClassDeclaration[] = [];
-  const nativeBareDeployables: ts.ClassDeclaration[] = [];
+  // on pristine names via finalNameIn, recursing exactly as those visitors do. The deployable routes are
+  // the UNION, in DOCUMENT ORDER, of the decorated deployables (@contract - the @diamond expansion
+  // synthesizes it upstream of this pre-pass - @proxy, @beacon, @facet) and the native bare classes (no
+  // kind decorator, not `abstract`, not `static`, not extended by another class); document order decides
+  // classes[0]. This mirrors findContractClasses' single union visitor: the bare scan is NOT a fallback
+  // behind the decorated one (that split silently dropped every bare contract in a mixed file).
+  const deployables: ts.ClassDeclaration[] = [];
   const abstractClasses: ts.ClassDeclaration[] = [];
   // The exact JETH489 trigger (analyzeNonDeployableUnit): a bodyless method or `get` accessor on an
   // abstract class, with neither the @virtual decorator nor the `abstract` member keyword.
@@ -560,14 +561,14 @@ function collectImportedMemberTypeCollisions(
       const decs = decoratorNames(n);
       const isAbstract = hasMod(n, ts.SyntaxKind.AbstractKeyword) || decs.includes('abstract');
       if (decs.includes('contract') || decs.includes('proxy') || decs.includes('beacon') || decs.includes('facet') || decs.includes('diamond')) {
-        decoratedDeployables.push(n);
+        deployables.push(n);
       } else if (
         !isAbstract &&
         !hasMod(n, ts.SyntaxKind.StaticKeyword) &&
         !KIND_DECS.some((d) => decs.includes(d)) &&
         !(n.name && extendedFinal.has(finalNameIn(fileOf(n.name), n.name.text)))
       ) {
-        nativeBareDeployables.push(n);
+        deployables.push(n);
       }
       if (n.name && isAbstract) {
         abstractClasses.push(n);
@@ -577,16 +578,14 @@ function collectImportedMemberTypeCollisions(
     ts.forEachChild(n, scanClasses);
   };
   ts.forEachChild(sf, scanClasses);
-  const anyDeployed = decoratedDeployables.length > 0 || nativeBareDeployables.length > 0;
+  const anyDeployed = deployables.length > 0;
   let routeClass: ts.ClassDeclaration | undefined;
   if (anyDeployed) {
-    // MULTI-CONTRACT FILE: the analyzer's findContractClasses applies the decorated-deployables phase and
-    // ONLY falls back to the native bare classes when that phase found NOTHING - so the route LIST is one
-    // phase or the other, never a concatenation. Index into whichever phase won, exactly as the analyzer's
-    // classes[routeIndex] does. Clamped to [0] for safety (the driver derives the count from routeCount,
-    // which comes from this same predicate).
-    const routes = decoratedDeployables.length > 0 ? decoratedDeployables : nativeBareDeployables;
-    routeClass = routes[routeIndex] ?? routes[0];
+    // MULTI-CONTRACT FILE: the analyzer's findContractClasses collects the decorated deployables and the
+    // native bare classes into ONE document-order list, so the route list here is that same union. Index
+    // into it exactly as the analyzer's classes[routeIndex] does. Clamped to [0] for safety (the driver
+    // derives the count from routeCount, which comes from this same predicate).
+    routeClass = deployables[routeIndex] ?? deployables[0];
   } else {
     const leaves = abstractClasses.filter(
       (ac) => ac.name && !extendedFinal.has(finalNameIn(fileOf(ac.name), ac.name.text)),

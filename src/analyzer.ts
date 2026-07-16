@@ -556,9 +556,11 @@ export class Analyzer {
   constructor(
     private readonly sourceFile: ts.SourceFile,
     private readonly diags: DiagnosticBag,
-    // Phase 3: set when this compilation unit's deployed contract is a synthesized @diamond (the source
-    // was expanded from `@diamond('array')`); marks the ContractIR so emitRuntime adds the router.
-    private readonly diamond?: { name: string; variant: 'array' | 'packed' | 'solidstate' },
+    // Phase 3: set when this compilation unit's SOURCE was expanded from a `@diamond('array')` class; names
+    // the synthesized @diamond contract + its storage model. FILE-level, NOT route-level: a file may declare
+    // the @diamond AND other (bare) contracts, and only the diamond's OWN route is a diamond. Read it via
+    // `this.diamond` (route-scoped) - never directly - so a sibling contract is never flagged as a diamond.
+    private readonly fileDiamond?: { name: string; variant: 'array' | 'packed' | 'solidstate' },
     // Multi-file only: per-file name visibility (own declarations + named imports) keyed by original file,
     // with the bundle's segment map for node -> file attribution. Used to scope `self`-convention ATTACHED
     // calls (which name no library identifier) to each file's import edges.
@@ -580,6 +582,21 @@ export class Analyzer {
     // backend is ~92% of a compile).
     private readonly routeIndex: number = 0,
   ) {}
+
+  /** True only while analyzing the route that IS the file's synthesized @diamond contract (set per route by
+   *  analyzeContract). */
+  private routeIsDiamond = false;
+
+  /** The @diamond expansion AS IT APPLIES TO THE ROUTE BEING ANALYZED - `fileDiamond` for the diamond's own
+   *  route, undefined for every sibling contract in the same file. A @diamond file may also declare ordinary
+   *  bare contracts; those are NOT diamonds and must get no router, no diamond storage base, and no access
+   *  to the synthesis-only diamond builtins (JETH414). Reading the file-level flag directly here would flag
+   *  a sibling as a diamond: for the 'solidstate' variant that surfaced LOUDLY (the router resolves the
+   *  DiamondBase '_fallbackAddress' slot, which a sibling does not declare -> internal JETH900), but for the
+   *  'array' / 'packed' variants it would SILENTLY emit a diamond fallback router into the sibling. */
+  private get diamond(): { name: string; variant: 'array' | 'packed' | 'solidstate' } | undefined {
+    return this.routeIsDiamond ? this.fileDiamond : undefined;
+  }
 
   /** Multi-file: the ORIGINAL file containing `node` (via the bundle segment map), or undefined when
    *  compiling a single file. */
@@ -2097,38 +2114,40 @@ export class Analyzer {
 
   private findContractClasses(): ts.ClassDeclaration[] {
     const out: ts.ClassDeclaration[] = [];
+    const extended = this.extendedClassNames();
     const visit = (n: ts.Node): void => {
-      // Phase 2a: `@proxy class P` is a deployable contract too (the EIP-1967 upgradeable proxy). It is
-      // the deployed @contract for this file (it needs no separate @contract decorator).
       if (ts.isClassDeclaration(n)) {
         const decs = decoratorNames(n);
+        // Phase 2a: `@proxy class P` is a deployable contract too (the EIP-1967 upgradeable proxy). It is
+        // the deployed @contract for this file (it needs no separate @contract decorator).
         // Phase 2d: `@beacon class B` is a deployable contract too (the OZ UpgradeableBeacon-equivalent);
         // like @proxy it needs no separate @contract decorator.
         // Phase 3: `@facet class F` is a deployable contract too (it compiles to an ORDINARY contract -
         // own bytecode + selector dispatch; it may use @storage('ns') freely - and is deployed standalone
         // then cut into a diamond, like an external library). The only difference from @contract is the tag.
-        if (decs.includes('contract') || decs.includes('proxy') || decs.includes('beacon') || decs.includes('facet'))
+        if (decs.includes('contract') || decs.includes('proxy') || decs.includes('beacon') || decs.includes('facet')) {
           out.push(n);
+        } else if (this.isNativeContractClass(n) && !(n.name && extended.has(n.name.text))) {
+          // Item #4 (native mode): a bare `class C { ... }` is a deployed contract - no @contract needed.
+          // This is a UNION with the decorated deployables above, in DOCUMENT ORDER - NOT a fallback. It
+          // used to run only when the decorated phase found NOTHING, on the rationale that "an existing
+          // decorated file may carry unrelated bare helper classes". That rationale died with native-only
+          // mode (JETH481): a user cannot write @contract, and item #4 makes a bare non-abstract unextended
+          // class THE deployable - so "an unrelated bare helper class" is not a category any more, a bare
+          // class IS a contract. Under the old fallback a file mixing a decorated deployable (including the
+          // `@contract` that the @diamond expansion SYNTHESIZES) with a bare one SILENTLY DROPPED every
+          // bare contract: compile() succeeded and the artifact simply did not exist. A synthesized helper
+          // never enters here - the expansion emits its helpers as `@struct class __Diamond*`, and the
+          // @struct class-KIND decorator excludes them via isNativeContractClass.
+          // The deployed contract is a bare class (no class-KIND decorator, no TS `abstract` keyword) that
+          // is NOT extended by another class: an extended base is inlined into its most-derived leaf (like
+          // solc's `contract C is Base` where Base is itself concrete), so only the LEAF bare class deploys.
+          out.push(n);
+        }
       }
       ts.forEachChild(n, visit);
     };
     ts.forEachChild(this.sourceFile, visit);
-    // Item #4 (native mode): a bare `class C { ... }` is the deployed contract - no @contract needed.
-    // This is a pure FALLBACK: it activates ONLY when the file declares no decorated deployable contract,
-    // so an existing decorated file (which may carry unrelated bare helper classes) is never re-read. The
-    // deployed contract is a bare class (no class-KIND decorator, no TS `abstract` keyword) that is NOT
-    // extended by another class: an extended base is inlined into its most-derived leaf (like solc's
-    // `contract C is Base` where Base is itself concrete), so only the LEAF bare class deploys. Two
-    // unrelated bare classes are still two contracts -> JETH041.
-    if (out.length === 0) {
-      const extended = this.extendedClassNames();
-      const visitNative = (n: ts.Node): void => {
-        if (ts.isClassDeclaration(n) && this.isNativeContractClass(n) && !(n.name && extended.has(n.name.text)))
-          out.push(n);
-        ts.forEachChild(n, visitNative);
-      };
-      ts.forEachChild(this.sourceFile, visitNative);
-    }
     return out;
   }
 
@@ -3140,6 +3159,9 @@ export class Analyzer {
 
   private analyzeContract(cls: ts.ClassDeclaration, lin: ts.ClassDeclaration[]): ContractIR | undefined {
     const name = cls.name?.text ?? 'Contract';
+    // Route-scope the @diamond expansion: only the synthesized diamond class itself is a diamond, never a
+    // sibling contract declared in the same file (see the `diamond` getter).
+    this.routeIsDiamond = this.fileDiamond !== undefined && name === this.fileDiamond.name;
     // CONST-ARRAY-DIM: the in-scope constant names for `Arr<T, N>` dimension resolution are exactly this
     // contract plus its bases (the linearization). Set here so namedDim only accepts a bare constant name
     // that solc would also resolve (own / inherited), never one leaking from an unrelated contract.
