@@ -801,6 +801,9 @@ export class Analyzer {
     const analyzed = new Set(lin);
     analyzed.add(route);
     this.checkStandaloneClassMemberDuplicates(analyzed);
+    // UNEXTENDED-ABSTRACT: type-check the SIGNATURES of the stray classes too (solc type-checks every
+    // contract in the file, extended or not; JETH only ever analyzed the route chain).
+    this.checkStandaloneClassMemberTypes(analyzed);
     // LAST: if the analyzer accepted the source but TS saw a (non-1011) syntax error, the AST was
     // silently error-recovered into something else (BYTE-SLICE-MC) - reject instead of miscompiling.
     this.rejectSilentlyAcceptedSyntaxErrors();
@@ -2295,6 +2298,71 @@ export class Analyzer {
    *  collectNativeInterfaces (JETH342), and interface nodes are ts.InterfaceDeclaration, so they are out of
    *  scope here. `analyzed` is the deployed contract plus its linearization (fed the exact node objects),
    *  so no class the merged path already checks is re-reported. */
+  /** UNEXTENDED-ABSTRACT (solc parity): solc type-checks EVERY contract a file declares, whether or not
+   *  anything deploys or derives from it - an abstract base naming an undefined type is an error even as
+   *  dead code ("Identifier not found or not unique"). JETH analyzes only the ROUTE class + its
+   *  linearization, so an abstract sibling nothing extends was never type-checked at ALL and silently
+   *  accepted every unknown/misspelled type in its signatures. This walks the stray classes (the same set
+   *  the duplicate-identifier pass above already covers) and RESOLVES their signature types, reporting the
+   *  same JETH013 the deployed path reports.
+   *
+   *  SCOPE - SIGNATURES ONLY (fields, parameters, returns), deliberately NOT bodies. An unextended abstract
+   *  base legitimately contains code that only makes sense in a deriving contract (a `this.x` on a field a
+   *  derived contract declares, a super call, an unimplemented obligation), and re-running full body
+   *  analysis over a class with no linearization would over-reject a long tail of LEGAL bases - and a
+   *  reject of a program solc accepts is a capability loss, never wrong bytes but never free either. The
+   *  signature surface is where an undefined type is observable and unambiguous, so it is the sound half.
+   *  A body-level type error inside a never-extended base stays accepted (a narrower, documented gap).
+   *
+   *  A return/field MARKER (External/Payable/View/Pure/Visible) is unwrapped to its payload first: the
+   *  markers are stripped in place by the deployed path, which never ran for a stray class, so resolving
+   *  the raw annotation would report a spurious "unknown type 'External'". */
+  private checkStandaloneClassMemberTypes(analyzed: Set<ts.ClassDeclaration>): void {
+    const visit = (n: ts.Node): void => {
+      if (ts.isClassDeclaration(n) && n.name && !analyzed.has(n) && this.isDupCheckableClass(n)) {
+        this.checkOneClassMemberTypes(n);
+      }
+      ts.forEachChild(n, visit);
+    };
+    ts.forEachChild(this.sourceFile, visit);
+  }
+
+  /** Unwrap ONE return/field marker layer (`External<T>` -> `T`), so a stray class's annotation resolves
+   *  like the deployed path's post-strip annotation. A marker with no type argument (or an unrelated
+   *  generic) is returned untouched. */
+  private unwrapMemberMarker(t: ts.TypeNode | undefined): ts.TypeNode | undefined {
+    if (!t || !ts.isTypeReferenceNode(t) || !ts.isIdentifier(t.typeName)) return t;
+    const head = t.typeName.text;
+    if (!['External', 'Payable', 'View', 'Pure', 'Visible'].includes(head)) return t;
+    return t.typeArguments?.length === 1 ? t.typeArguments[0]! : undefined;
+  }
+
+  /** Resolve the signature types of ONE un-analyzed class into the real diagnostic bag (JETH013 on an
+   *  unknown type). Mirrors the member routing of checkOneClassMemberDuplicates. */
+  private checkOneClassMemberTypes(cls: ts.ClassDeclaration): void {
+    const resolve = (t: ts.TypeNode | undefined): void => {
+      const inner = this.unwrapMemberMarker(t);
+      if (!inner) return;
+      // A multi-value return `[T1, T2]` is a TUPLE of return types, not a type of its own (the deployed
+      // path resolves it element-wise too); resolving the tuple node itself would be a spurious JETH014.
+      if (ts.isTupleTypeNode(inner)) {
+        for (const el of inner.elements) resolve(el);
+        return;
+      }
+      resolveType(inner, this.diags, this.structsByName, this.namedDim, this.interfacesByName, this.contractRefNames());
+    };
+    for (const m of cls.members) {
+      if (ts.isPropertyDeclaration(m)) {
+        if (this.isErrorEventFieldDecl(m)) continue; // a declaration, not a typed field (its own gates apply)
+        resolve(m.type);
+      } else if (ts.isMethodDeclaration(m) || ts.isGetAccessorDeclaration(m)) {
+        if (decoratorNames(m).includes('modifier')) continue; // a @modifier is not an ABI signature
+        for (const p of m.parameters) resolve(p.type);
+        resolve(m.type);
+      }
+    }
+  }
+
   private checkStandaloneClassMemberDuplicates(analyzed: Set<ts.ClassDeclaration>): void {
     const probe = new DiagnosticBag(this.sourceFile, 'dup-probe'); // silent type resolution for signatures
     const visit = (n: ts.Node): void => {
