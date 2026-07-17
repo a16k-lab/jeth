@@ -53,8 +53,8 @@ const MARKER_J = `abstract class Base {
   tag(): External<u256> { this.n = 1n; return 7n; }
   bump(): External<void> { this.n = this.n + 1n; }
   take(): Payable<void> { this.n = this.n + msg.value; }
-  get peek(): View<u256> { return this.n; }
-  get calc(): Pure<u256> { return 3n; }
+  get peek(): External<u256> { return this.n; }
+  get calc(): External<u256> { return 3n; }
 }
 class A extends Base { get gn(): External<u256> { return this.n; } }
 class B extends Base { get gn(): External<u256> { return this.n + 100n; } }`;
@@ -214,8 +214,8 @@ contract B { function sum() external pure returns (uint256) { P memory p = P(10,
 
   // ---- the gates that STAY -----------------------------------------------------------------------------
   it('KEEPS JETH041 for two independent ABSTRACT leaves (no deployable contract)', () => {
-    expect(codes(`abstract class X { get a(): View<u256> { return 1n; } }
-abstract class Y { get b(): View<u256> { return 2n; } }`)).toEqual(['JETH041']);
+    expect(codes(`abstract class X { get a(): External<u256> { return 1n; } }
+abstract class Y { get b(): External<u256> { return 2n; } }`)).toEqual(['JETH041']);
   });
 
   it('KEEPS JETH041 for two @diamond classes in one file', () => {
@@ -223,8 +223,8 @@ abstract class Y { get b(): View<u256> { return 2n; } }`)).toEqual(['JETH041']);
   });
 
   it('a single abstract leaf / a deployable + its abstract base still compile as ONE route', () => {
-    expect(codes(`abstract class X { get a(): View<u256> { return 1n; } }`)).toEqual(['ACCEPT']);
-    const r = compile(`abstract class X { get a(): View<u256> { return 1n; } }
+    expect(codes(`abstract class X { get a(): External<u256> { return 1n; } }`)).toEqual(['ACCEPT']);
+    const r = compile(`abstract class X { get a(): External<u256> { return 1n; } }
 class A extends X { get b(): External<u256> { return 2n; } }`, { fileName: 'C.jeth' });
     expect(r.contracts).toBeUndefined(); // an inlined base is NOT a second route
     expect(r.contractName).toBe('A');

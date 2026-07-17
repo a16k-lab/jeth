@@ -345,6 +345,11 @@ describe('CONTRACT-VALUE-CALL: an external-method call on a contract/abstract-ty
       ),
     ).toBe(true);
     // a pure caller invoking a view method is a STATICCALL that reads state -> solc rejects.
+    // NOT MIGRATED (deliberate): a DECLARED-pure class method is inexpressible since View<T>/Pure<T>
+    // became interface-only (JETH498), so this JETH side now rejects on the marker ban rather than on
+    // JETH164 - it stays a reject either way, and solc still rejects the declared-pure mirror. Rewriting
+    // it to External<u256> would infer VIEW, making it a different (accepted) program and the pairing
+    // vacuous.
     expect(
       bothReject(
         JT + `class C { get f(t: T): Pure<u256> { return t.v(); } }`,

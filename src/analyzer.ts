@@ -3357,8 +3357,10 @@ export class Analyzer {
             //   get f(args): T             = INTERNAL read-only        (callable as this.f(...))
             //   get #f(args): T            = PRIVATE read-only         (this contract only)
             //   get f(args): External<T>   = EXTERNAL read-only        (the ABI accessor, mutability inferred)
-            //   get f(args): View<T>       = EXTERNAL, DECLARED view   (solc's explicit `view` keyword)
-            //   get f(args): Pure<T>       = EXTERNAL, DECLARED pure   (solc's explicit `pure` keyword)
+            // A `get f(args): View<T>` / `Pure<T>` is REJECTED (JETH498): the mutability markers are
+            // interface-only, and a class body is inferred instead. NOTE they used to imply EXTERNAL as
+            // well, so the migration of an exposed accessor is `View<T>`/`Pure<T>` -> `External<T>`;
+            // dropping to a bare `T` would silently make it INTERNAL and remove it from the ABI.
             // The synthesis adds NO visibility of its own - the accessor's return-type marker (unwrapped
             // by collectFunction) or its `#` name decides; a Payable<T> get is a contradiction (payable
             // is a writer property; a get is read-only).
@@ -3381,7 +3383,7 @@ export class Analyzer {
               ts.factory.createMethodDeclaration(gModifiers.length > 0 ? gModifiers : undefined, undefined, g.name, undefined, undefined, g.parameters, g.type, g.body),
               g,
             );
-            const fn = this.collectFunction(synthMethod, { getAccessor: true });
+            const fn = this.collectFunction(synthMethod);
             if (fn) {
               fn.isGetter = true;
               fn.definingContract = cn;
@@ -5652,6 +5654,14 @@ export class Analyzer {
         // mutability: a state/immutable getter is VIEW - solc accepts overriding a VIEW or NONPAYABLE base
         // (view is equal or stricter) but REJECTS a PURE base (view is looser than pure) or a PAYABLE one.
         // A CONSTANT getter counts as PURE (witnessed vs 0.8.35), so only a payable base rejects for it.
+        // KNOWN HOLE (pre-existing, NOT introduced by the View/Pure ban - see JETH498): `base.mutability`
+        // is only final here when the base DECLARES it (an interface head - handled above at the ifaceHeads
+        // loop). A native CONTRACT base spells its pureness with a BODY, so this slot still holds the
+        // provisional nonpayable default and an inferred-pure base slips through - solc rejects it
+        // ("Overriding public state variable changes state mutability from \"pure\" to \"view\""). Deferring
+        // this to the post-fixpoint ladder does NOT fix it: a base whose only override is a getter VAR
+        // contributes no deployed function, so it is never inferred at all. Left as-is deliberately rather
+        // than forced; the interface-head axis above still rejects the same loosening.
         if ((base.mutability === 'pure' && !getterIsPure) || base.mutability === 'payable') {
           this.diags.error(info.node, 'JETH433', `getter '${name}' (${getterMutLabel}) cannot override a @${base.mutability} base function (a getter changes state mutability)`);
           bad = true;
@@ -8281,7 +8291,7 @@ export class Analyzer {
     this.immutableOrder.push(name);
   }
 
-  private collectFunction(member: ts.MethodDeclaration, opts?: { getAccessor?: boolean }): RawFunction | undefined {
+  private collectFunction(member: ts.MethodDeclaration): RawFunction | undefined {
     if (!ts.isIdentifier(member.name)) {
       this.diags.error(member, 'JETH049', 'method name must be a plain identifier');
       return undefined;
@@ -8309,28 +8319,45 @@ export class Analyzer {
       );
       return undefined;
     }
-    let markerExternal = false;
-    let markerPayable = false;
-    // GET-MUT-HEADROOM: `View<T>` / `Pure<T>` on a CONTRACT `get` accessor DECLARE its mutability
-    // (exactly solc's explicit `view`/`pure` keywords): the DECLARED value - not the body inference -
-    // anchors the override ladder and the ABI stateMutability, so a base `@virtual get f(): View<u256>`
-    // with a pure body keeps view HEADROOM for a state-reading override (solc accepts a view override
-    // of a declared-view virtual, where the inferred-pure base would reject it, JETH378). The body may
-    // be STRICTER than declared (a pure body under View<T> is fine, like solc); a LOOSER body rejects
-    // via the existing declared-mutability checks (JETH054 view-writes / JETH055+JETH164 pure-reads -
-    // solc's "declared view/pure but this expression ..." TypeErrors). Like External<T> the marker
-    // implies EXTERNAL and never enters the signature/selector. GET-ONLY: on a plain method the markers
-    // keep their existing reject (JETH013 unknown type - a read-only external METHOD is spelled `get`),
-    // on a field JETH482 (Visible<T> owns fields), on special entries JETH386, in interfaces they stay
-    // the per-method mutability markers (collectNativeInterfaces, untouched).
-    let markerDeclaredMut: Mutability | undefined;
+    // CLASS-MUT-BAN: `View<T>` / `Pure<T>` are INTERFACE-ONLY markers. An interface method has no body,
+    // so it MUST declare its mutability; a CLASS member (contract `class C`, `abstract class B`, library
+    // `static class L`) HAS a body, so its mutability is INFERRED from that body - or forced pure by
+    // `static`. One uniform rule, no second way to say the same thing. This is the single choke point for
+    // every class member (the method path, the library path, and the synthesized `get` path all land
+    // here), so the ban covers all three class contexts at once. Interfaces are collected elsewhere
+    // (collectNativeInterfaces) and keep the markers untouched.
+    // KNOWN + ACCEPTED CONSEQUENCE (ruled by the language author): a DECLARED-view accessor over a PURE
+    // body (`get f(): View<u256> { return 1n; }`) now infers `pure`, so declaring view-on-a-pure-body -
+    // which solc accepts - becomes INEXPRESSIBLE in JETH: a deliberate OVER-REJECTION (an over-rejection
+    // never emits wrong bytes). This also retires the GET-MUT-HEADROOM idiom (a base `@virtual get f():
+    // View<u256>` with a pure body reserving view headroom for a state-reading override): give the base
+    // a body that reads state, or keep the ladder pure.
     if (
       member.type &&
       ts.isTypeReferenceNode(member.type) &&
       ts.isIdentifier(member.type.typeName) &&
-      (member.type.typeName.text === 'External' ||
-        member.type.typeName.text === 'Payable' ||
-        (opts?.getAccessor === true && (member.type.typeName.text === 'View' || member.type.typeName.text === 'Pure')))
+      (member.type.typeName.text === 'View' || member.type.typeName.text === 'Pure')
+    ) {
+      const mk = member.type.typeName.text;
+      const nm = member.name.text.startsWith('$p$') ? '#' + member.name.text.split('$').pop() : member.name.text;
+      this.diags.error(
+        member.type,
+        'JETH498',
+        `${mk}<T> is an interface-only marker; in a class, mutability is inferred from the body - use \`get ${nm}(...): T\` (inferred view/pure, add External<T> to expose it), or \`static ${nm}(...): T\` / \`static get ${nm}(...): T\` for pure`,
+      );
+      return undefined;
+    }
+    let markerExternal = false;
+    let markerPayable = false;
+    // A marker RETURN type declares VISIBILITY: External<T> = external (mutability inferred as usual),
+    // Payable<T> = external + payable. The marker is stripped BEFORE the return type resolves and never
+    // enters the signature/selector. The MUTABILITY markers View<T>/Pure<T> are banned above (interfaces
+    // only); on a field the marker is Visible<T> (JETH482), on special entries JETH386.
+    if (
+      member.type &&
+      ts.isTypeReferenceNode(member.type) &&
+      ts.isIdentifier(member.type.typeName) &&
+      (member.type.typeName.text === 'External' || member.type.typeName.text === 'Payable')
     ) {
       const markerName = member.type.typeName.text;
       const args = member.type.typeArguments;
@@ -8368,8 +8395,6 @@ export class Analyzer {
       }
       markerExternal = true;
       markerPayable = markerName === 'Payable';
-      if (markerName === 'View') markerDeclaredMut = 'view';
-      else if (markerName === 'Pure') markerDeclaredMut = 'pure';
       (member as unknown as { type?: ts.TypeNode }).type = args[0];
     }
 
@@ -8519,12 +8544,8 @@ export class Analyzer {
       }
       mutability = 'payable';
     }
-    // GET-MUT-HEADROOM: a View<T>/Pure<T> get marker fixes the mutability to the DECLARED value (never
-    // re-inferred): the post-fixpoint inference only fills a still-nonpayable slot, so the declared
-    // anchor survives to the override ladder (JETH378) and the ABI stateMutability, and the
-    // JETH054/055/164 declared-mutability body checks fire exactly like solc's "declared view/pure
-    // but ..." TypeErrors (a pure body under View<T> stays fine - stricter is allowed, ABI says view).
-    if (markerDeclaredMut) mutability = markerDeclaredMut;
+    // CLASS-MUT-BAN: there is no DECLARED-mutability anchor on a class member any more (View<T>/Pure<T>
+    // are interface-only, JETH498), so the slot is always filled by the body inference below.
     // solc: internal/private functions can never be payable (no message context of their own).
     // @hidden is an explicitly-internal function, so it is rejected with @payable too.
     if (decs.includes('payable') && !decs.includes('external') && !markerExternal) {
@@ -8540,17 +8561,14 @@ export class Analyzer {
     // are incompatible, and reentrancy only meaningfully protects externally-reachable entries.
     const nonReentrant = decs.includes('nonReentrant');
     if (nonReentrant) {
-      // A DECLARED read-only get (View<T>/Pure<T>) is the native twin of the explicit @view/@pure
-      // spellings and is rejected at collection like them; without this the declared anchor would skip
-      // the post-inference JETH473 net (it only floors a still-nonpayable slot) and the ABI would claim
-      // view/pure while the guard TSTOREs - every staticcall of the entry would revert (wrong bytes).
-      if (read || decs.includes('view') || decs.includes('pure') || markerDeclaredMut) {
+      // A read-only class member carries no DECLARED mutability any more (View<T>/Pure<T> are
+      // interface-only, JETH498), so an INFERRED read-only guard is caught by the post-inference
+      // JETH473 net; the explicit @read/@view/@pure spellings stay rejected here at collection.
+      if (read || decs.includes('view') || decs.includes('pure')) {
         this.diags.error(
           member,
           'JETH260',
-          markerDeclaredMut
-            ? `@nonReentrant cannot be combined with a declared ${markerDeclaredMut === 'view' ? 'View' : 'Pure'}<T> accessor (a reentrancy guard writes transient storage; the function must be state-mutating)`
-            : '@nonReentrant cannot be combined with @read/@view/@pure (a reentrancy guard writes transient storage; the function must be state-mutating)',
+          '@nonReentrant cannot be combined with @read/@view/@pure (a reentrancy guard writes transient storage; the function must be state-mutating)',
         );
       }
       if (!decs.includes('external') && !markerExternal) {

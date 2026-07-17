@@ -36,8 +36,8 @@ async function eqCalls(jeth: string, sol: string, calls: [string, string][]) {
 describe('LIB-MODIFIER: a modifier declared in a library (solc parity)', () => {
   it('(a) an UNUSED library modifier is dead code (runtime == the no-library contract)', () => {
     const withMod = `static class L { @modifier only() { _; } }
-      class C { get f(): View<u256> { return 42n; } }`;
-    const noLib = `class C { get f(): View<u256> { return 42n; } }`;
+      class C { get f(): External<u256> { return 42n; } }`;
+    const noLib = `class C { get f(): External<u256> { return 42n; } }`;
     expect(codes(withMod)).toEqual([]);
     // truly dead: the emitted runtime bytecode is identical to the contract with no library at all.
     expect(compile(withMod, { fileName: 'C.jeth' }).runtimeBytecode)
@@ -145,23 +145,23 @@ describe('LIB-MODIFIER: a modifier declared in a library (solc parity)', () => {
       expect(codes(j)).toContain('JETH329');
     });
     it('a duplicate library modifier of the same name rejects (JETH046)', () => {
-      const j = `static class L { @modifier m() { _; } @modifier m() { _; } } class C { get f(): View<u256> { return 1n; } }`;
+      const j = `static class L { @modifier m() { _; } @modifier m() { _; } } class C { get f(): External<u256> { return 1n; } }`;
       expect(codes(j)).toContain('JETH046');
     });
     it('a library modifier name colliding with a library function rejects (JETH133)', () => {
-      const j = `static class L { @modifier m() { _; } m(): u256 { return 1n; } } class C { get f(): View<u256> { return 1n; } }`;
+      const j = `static class L { @modifier m() { _; } m(): u256 { return 1n; } } class C { get f(): External<u256> { return 1n; } }`;
       expect(codes(j)).toContain('JETH133');
     });
     it('a library modifier name colliding with a library constant rejects (JETH133)', () => {
-      const j = `static class L { static m: u256 = 3n; @modifier m() { _; } } class C { get f(): View<u256> { return 1n; } }`;
+      const j = `static class L { static m: u256 = 3n; @modifier m() { _; } } class C { get f(): External<u256> { return 1n; } }`;
       expect(codes(j)).toContain('JETH133');
     });
     it('@virtual / @override on a library modifier rejects (a library cannot be inherited)', () => {
-      expect(codes(`static class L { @modifier @virtual m() { _; } } class C { get f(): View<u256> { return 1n; } }`)).toContain('JETH390');
-      expect(codes(`static class L { @modifier @override m() { _; } } class C { get f(): View<u256> { return 1n; } }`)).toContain('JETH390');
+      expect(codes(`static class L { @modifier @virtual m() { _; } } class C { get f(): External<u256> { return 1n; } }`)).toContain('JETH390');
+      expect(codes(`static class L { @modifier @override m() { _; } } class C { get f(): External<u256> { return 1n; } }`)).toContain('JETH390');
     });
     it('a generic library modifier is deferred (JETH390) - would leak its template into contract scope', () => {
-      const j = `static class L { @modifier lim<T>(v: T) { require(abi.encode(v).length >= 1n, "e"); _; } } class C { get f(): View<u256> { return 1n; } }`;
+      const j = `static class L { @modifier lim<T>(v: T) { require(abi.encode(v).length >= 1n, "e"); _; } } class C { get f(): External<u256> { return 1n; } }`;
       expect(codes(j)).toContain('JETH390');
     });
   });

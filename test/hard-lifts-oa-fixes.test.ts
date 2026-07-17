@@ -17,7 +17,7 @@ describe('MERGE-OA-1: a bodyless function in an abstract class must be @virtual 
   it('rejects an unmarked bodyless method/getter on the non-deployable path; @virtual / abstract accept', () => {
     // Unmasked when ABSTRACT-ONLY-FILE lifted JETH040. solc: "Functions without implementation must be virtual".
     rejects(`abstract class C { f(): External<u256>; }`);
-    rejects(`abstract class C { get f(): View<u256>; }`);
+    rejects(`abstract class C { get f(): External<u256>; }`);
     rejects(`abstract class C { f(): u256; }`);
     accepts(`abstract class C { @virtual f(): External<u256>; }`);
     accepts(`abstract class C { abstract f(): External<u256>; }`); // native `abstract` keyword = bodyless @virtual

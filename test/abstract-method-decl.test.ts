@@ -105,11 +105,11 @@ describe('ABSTRACT-METHOD-DECL: `abstract` member == bodyless @virtual, byte-ide
       abstract class B { ${d('get g(): External<u256>')} }
       class C extends B { x: u256; h(v: u256): External<void> { this.x = v; } @override get g(): External<u256> { return this.x; } }`);
     identical((d) => `
-      abstract class B { ${d('get g(): View<u256>')} }
-      class C extends B { x: u256; h(v: u256): External<void> { this.x = v; } @override get g(): View<u256> { return this.x; } }`);
+      abstract class B { ${d('get g(): External<u256>')} }
+      class C extends B { x: u256; h(v: u256): External<void> { this.x = v; } @override get g(): External<u256> { return this.x; } }`);
     identical((d) => `
-      abstract class B { ${d('get g(): Pure<u256>')} }
-      class C extends B { @override get g(): Pure<u256> { return 41n + 1n; } x: u256; h(v: u256): External<void> { this.x = v; } }`);
+      abstract class B { ${d('get g(): External<u256>')} }
+      class C extends B { @override get g(): External<u256> { return 41n + 1n; } x: u256; h(v: u256): External<void> { this.x = v; } }`);
   });
 
   it('chain shapes: abstract middle, bodyless-over-bodyless redeclare, diamond @override(A,B)', () => {
@@ -165,8 +165,8 @@ describe('ABSTRACT-METHOD-DECL: runtime differential vs the solc mirror (distinc
 
   it('abstract get with declared View<T>: seeded state read back equal to solc', async () => {
     const rs = await runBoth(
-      `abstract class B { abstract get g(): View<u256>; }
-       class C extends B { x: u256; h(v: u256): External<void> { this.x = v; } @override get g(): View<u256> { return this.x; } }`,
+      `abstract class B { abstract get g(): External<u256>; }
+       class C extends B { x: u256; h(v: u256): External<void> { this.x = v; } @override get g(): External<u256> { return this.x; } }`,
       `abstract contract B { function g() external view virtual returns (uint256); }
        contract C is B { uint256 x; function h(uint256 v) external { x = v; } function g() external view override returns (uint256) { return x; } }`,
       [

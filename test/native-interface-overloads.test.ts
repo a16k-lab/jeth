@@ -19,7 +19,7 @@
 // diamond (JETH430) stay catalogued rejects; the IFACE-CHAIN-OVERLOAD row is LIFTED (a chain is an
 // overload union, witnessed).
 //
-// ROW B - PURE-GET-OBLIGATION: the recorded pin (`p(): Pure<u256>` obligation + `get p(): Pure<u256>`
+// ROW B - PURE-GET-OBLIGATION: the recorded pin (`p(): Pure<u256>` obligation + `get p(): External<u256>`
 // impl rejects) was STALE - GET-MUT-HEADROOM (9a77971) already resolved it. Pinned here: the accept
 // (runtime vs the solc mirror) + the solc mutability ladder (pure impl of view obligation accepts;
 // state-reading/view impl of a pure obligation rejects JETH387 - solc: 'Overriding function changes
@@ -271,7 +271,7 @@ describe('interface overloads: reject parity (every cell solc-witnessed)', () =>
 describe('PURE-GET-OBLIGATION (Row B): resolved pin + the mutability ladder', () => {
   it('a Pure obligation implemented by a declared-Pure get runs equal to the solc mirror (the recorded pin, now resolved)', async () => {
     await runDiff(
-      `interface I { p(): Pure<u256>; } class C extends I { get p(): Pure<u256> { return 5n; } }`,
+      `interface I { p(): Pure<u256>; } class C extends I { get p(): External<u256> { return 5n; } }`,
       `interface I { function p() external pure returns (uint256); } contract C is I { function p() external pure override returns (uint256) { return 5; } }`,
       [['p()']],
     );
@@ -279,16 +279,21 @@ describe('PURE-GET-OBLIGATION (Row B): resolved pin + the mutability ladder', ()
 
   it('ladder: pure impl of a View obligation accepts (runtime-equal); a pure obligation with an arg accepts', async () => {
     await runDiff(
-      `interface I { p(): View<u256>; } class C extends I { get p(): Pure<u256> { return 5n; } }`,
+      `interface I { p(): View<u256>; } class C extends I { get p(): External<u256> { return 5n; } }`,
       `interface I { function p() external view returns (uint256); } contract C is I { function p() external pure override returns (uint256) { return 5; } }`,
       [['p()']],
     );
-    expect(codes(`interface I { p(a: u256): Pure<u256>; } class C extends I { get p(a: u256): Pure<u256> { return a * 2n; } }`)).toEqual([]);
+    expect(codes(`interface I { p(a: u256): Pure<u256>; } class C extends I { get p(a: u256): External<u256> { return a * 2n; } }`)).toEqual([]);
   });
 
   it('ladder rejects (solc parity): a view/state-reading impl cannot satisfy a pure obligation', () => {
     // solc: 'Overriding function changes state mutability from "pure" to "view".'
+    // NON-VACUOUS: the impl is view because its BODY READS STATE (the only way to be view in a class
+    // now that View<T> is interface-only, JETH498) - a pure-bodied impl would accept, see below.
     expect(codes(`interface I { p(): Pure<u256>; } class C extends I { s: u256; get p(): External<u256> { return this.s; } }`)).toContain('JETH387');
-    expect(codes(`interface I { p(): Pure<u256>; } class C extends I { get p(): View<u256> { return 5n; } }`)).toContain('JETH387');
+    // CLASS-MUT-BAN control: the SAME impl with a PURE body infers pure and satisfies the obligation.
+    // Pre-ban this shape could be DECLARED view (`get p(): View<u256> { return 5n; }`) and rejected
+    // JETH387; that declared axis no longer exists - a class body alone decides the mutability.
+    expect(codes(`interface I { p(): Pure<u256>; } class C extends I { get p(): External<u256> { return 5n; } }`)).toEqual([]);
   });
 });

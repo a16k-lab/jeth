@@ -89,7 +89,7 @@ describe('JETH490: FIELD-position decorator gate', () => {
 describe('JETH490: PARAM-position decorator gate', () => {
   // Pre-fix a parameter decorator was silently ACCEPTED; now ANY parameter decorator rejects.
   it('@foo on a getter parameter rejects', () => {
-    expect(codes(`class C { x:u256; get gg(@foo v: u256): View<u256> { return this.x+v; } }`)).toContain('JETH490');
+    expect(codes(`class C { x:u256; get gg(@foo v: u256): External<u256> { return this.x+v; } }`)).toContain('JETH490');
   });
   it('@foo on a method parameter rejects', () => {
     expect(codes(`class C { f(@foo v: u256): External<void> {} }`)).toContain('JETH490');
@@ -124,7 +124,7 @@ describe('JETH490: adjacent territories are untouched (no double-report / no cod
     const fld = codes(`class C { @state x: u256;${G} }`);
     expect(fld).toContain('JETH481');
     expect(fld).not.toContain('JETH490');
-    const par = codes(`class C { x:u256; get gg(@indexed v: u256): View<u256> { return this.x+v; } }`);
+    const par = codes(`class C { x:u256; get gg(@indexed v: u256): External<u256> { return this.x+v; } }`);
     expect(par).toContain('JETH481');
     expect(par).not.toContain('JETH490');
   });

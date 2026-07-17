@@ -39,7 +39,7 @@ JETH used to accept two per-file syntaxes: a legacy decorator syntax (opted into
 | `@public m()` | `m(args): External<T>` (`Payable<T>` if payable) |
 | `@internal m()` | drop it - a bare method/field is internal |
 | `@private` member | a leading `#` (e.g. `#x`, `#f()`) |
-| `@view` / `@pure` / `@read` | drop it - mutability is inferred; to DECLARE it (solc's explicit `view`/`pure`, e.g. for override headroom) write `get m(args): View<T>` / `get m(args): Pure<T>`; inside an `interface` the `View<T>`/`Pure<T>` markers state the per-method mutability |
+| `@view` / `@pure` / `@read` | drop it - in a CLASS, mutability is INFERRED from the body: `get m(args): T` (view if it reads state/env, pure if it reads nothing; add `External<T>` to expose it), or `static m(args): T` / `static get m(args): T`. `View<T>`/`Pure<T>` are INTERFACE-ONLY markers (JETH498) - an interface method has no body, so it must state its per-method mutability |
 | `@payable m()` | `m(args): Payable<T>` |
 | `@state x: T` | a bare field `x: T` |
 | `@constant K: T = v` | a `static K: T = v` field |
@@ -460,7 +460,8 @@ array / `string[]`) encoded from the runtime `keccak(key . base)` slot.
   state/env, transitively) or view (reads, never writes), a read-only value-returning external is
   spelled with `get` (`get f(): External<T>`, else `JETH352`), and a payable function returns
   `Payable<T>`. A transitive write in a would-be read-only function is rejected (JETH056). Inside an
-  `interface`, the `View<T>` / `Pure<T>` / `Payable<T>` markers state the declared mutability. All
+  `interface` - and ONLY there (a class body is inferred instead, JETH498) - the `View<T>` / `Pure<T>`
+  markers state the declared mutability, alongside `Payable<T>`. All
   inference resolves to a concrete visibility+mutability before ABI emission, so the generated ABI is
   the true one.
 - Constant state initializers (a bare `x: u256 = 42n` field) -> written in creation code.

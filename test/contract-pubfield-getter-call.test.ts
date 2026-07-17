@@ -225,6 +225,11 @@ describe('CTR-PUBFIELD-CALL: a Visible<T> public-field auto-getter called on a c
       ),
     ).toBe(true);
     // a PURE caller invoking a getter is a STATICCALL that reads env -> solc requires view; both reject.
+    // NOT MIGRATED (deliberate): a DECLARED-pure class method is inexpressible since View<T>/Pure<T>
+    // became interface-only (JETH498), so this JETH side now rejects on the marker ban rather than on
+    // JETH164 - it stays a reject either way, and solc still rejects the declared-pure mirror. Rewriting
+    // it to External<u256> would infer VIEW, making it a different (accepted) program and the pairing
+    // vacuous.
     expect(
       bothReject(
         JT + `class C { get f(t: T): Pure<u256> { return t.pub(); } }`,

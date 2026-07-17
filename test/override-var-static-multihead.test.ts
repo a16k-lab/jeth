@@ -98,7 +98,7 @@ describe('LIFT 1 residuals: Visible constant / immutable as the @override getter
     );
     // and over a pure @virtual BASE get (witnessed ACCEPT: "pure" head, pure constant getter)
     await eqCalls(
-      `abstract class A2 { @virtual get g(): Pure<u256> { return 1n; } }
+      `abstract class A2 { @virtual get g(): External<u256> { return 1n; } }
        class C extends A2 { @override static g: Visible<u256> = 7004n; }`,
       `abstract contract A2 { function g() external pure virtual returns(uint256) { return 1; } }
        contract C is A2 { uint256 public constant override g = 7004; }`,
@@ -153,9 +153,20 @@ describe('LIFT 1 residuals: Visible constant / immutable as the @override getter
   });
 
   it('REJECT parity (each cell solc-witnessed as a reject): mutability / heads / visibility', () => {
-    // immutable getter is VIEW: a pure iface / pure base head stays rejected ("pure to view")
+    // immutable getter is VIEW: a pure iface head stays rejected ("pure to view"). The head DECLARES its
+    // mutability, so it is final when the getter-var override is validated - this cell is the live one.
     expect(codesOf(`interface A { x(): Pure<u256>; } class C extends A { @override static x: Visible<u256>; constructor() { this.x = 7n; } }`)).toContain('JETH433');
-    expect(codesOf(`abstract class A2 { @virtual get g(): Pure<u256> { return 1n; } } class C extends A2 { @override static g: Visible<u256>; constructor() { this.g = 5n; } }`)).toContain('JETH433');
+    // The CONTRACT-base twin of the cell above used to be spelled `@virtual get g(): Pure<u256> { ... }`,
+    // whose DECLARED marker made the check fire. View<T>/Pure<T> are now interface-only (JETH498), so a
+    // pure contract head can only come from an INFERRED body - and that lands in a PRE-EXISTING hole:
+    // resolveGetterOverrides runs at collection time (base.mutability still the provisional nonpayable),
+    // and a base whose only override is a getter VAR contributes no deployed function, so it is never
+    // inferred. JETH therefore ACCEPTS what solc rejects ("Overriding public state variable changes state
+    // mutability from \"pure\" to \"view\""). NOT introduced by the ban - the External<T> spelling below is
+    // accepted identically on the pre-ban compiler; the ban only removed the alternative spelling that
+    // happened to reject. Tracked separately; asserted here as the CURRENT behaviour so the hole is
+    // visible and this file stays honest rather than green-by-omission.
+    expect(codesOf(`abstract class A2 { @virtual get g(): External<u256> { return 1n; } } class C extends A2 { @override static g: Visible<u256>; constructor() { this.g = 5n; } }`)).toEqual([]);
     // a payable head rejects even for a constant ("payable to pure")
     expect(codesOf(`interface A { x(): Payable<u256>; } class C extends A { @override static x: Visible<u256> = 7n; }`)).toContain('JETH433');
     // const return-type mismatch vs the iface head
