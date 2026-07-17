@@ -1614,3 +1614,51 @@ LESSONS (the orchestrator was wrong THREE times this round; every catch came fro
    body, it REJECTS the program (an over-rejection, always safe). That error let the rule drift.
 6. AUDIT DIAGNOSTIC REACHABILITY AFTER A LANGUAGE CHANGE: JETH054/055/056/149/164 all became dead code the moment
    nothing could declare a mutability. Dead diagnostics rot (JETH149 still named a banned decorator).
+
+### 2026-07-17 CLOSED: getter-var-override of an INFERRED-PURE base (OA), single-head + multi-head (c3db959 + cde3a9f)
+
+A pre-existing OVER-ACCEPTANCE (found during the JETH498 round, independent of it, live on main c4a1b0f). A public
+getter VAR overriding a native contract base whose body INFERS pure was accepted; solc REJECTS the pure->view
+loosening ("Overriding public state variable changes state mutability from pure to view").
+  `abstract class A2 { @virtual get g(): External<u256> { return 1n; } }` (body infers PURE)
+  `class C extends A2 { @override static g: Visible<u256>; constructor() { this.g = 5n; } }` -> JETH ACCEPT, solc REJECT
+ROOT CAUSE: the JETH433 getter-var mutability check ran at COLLECTION time (analyzer.ts:5851), when a native base's
+`base.mutability` still held the provisional nonpayable default (pureness is only inferred later by the purity
+fixpoint). The interface-head axis was ALWAYS sound (an interface DECLARES its mutability, final at collection).
+The obvious defer-to-post-fixpoint fix FAILS: a base whose ONLY override is a getter var is DROPPED from the
+dispatched winners (analyzer.ts:5015-5018 - a public state-var override is terminal in solc), so it never reaches
+the `functions` array the fixpoint iterates and is never inferred at all.
+FIX (c3db959): a byte-neutral BASE-EFFECTS PASS runs checkFunction on each dropped, non-bodyless base and stores
+its direct effects into the `effects` MAP ONLY (never into `functions`, so nothing is emitted); the transitive
+fixpoint then closes those effects through the base's ordinary callees (TRANSITIVE-correct: a base calling a
+storage/env helper stays view->ACCEPT; a base calling only pure helpers is pure->REJECT). The check moved
+post-fixpoint. *** It snapshots + restores the 6 GLOBAL EMISSION collections (addressTaken/internallyCalled/
+specialization/etc.) around the base checkFunction *** - without that, a constructed witness (a dropped base body
+taking `&writer` + an external fn with an unresolvable storage-funcref call) flipped that fn's mutability AND its
+BYTECODE. A getter over an inferred-VIEW base still ACCEPTS (view->view legal); a CONSTANT getter (pure) over a
+pure base still ACCEPTS.
+
+*** ADVERSARIAL VERIFY CAUGHT A SURVIVING OA IN THE SAME FAMILY (c3db959 shipped 495/4881 GREEN over it) ***:
+multi-head `@override(A2, B2)` with ONE pure head + one view head was still accepted (deploys, emits g:view,
+runs) while solc rejects. ROOT CAUSE: the base-effects pass keyed the effects map by the bare getter fkey, so two
+same-signature jointly-overridden heads (A2.g + B2.g) COLLIDED on the single key "g" and `effects.has(bkey)`
+skipped all-but-first; the deferred check's `be.rf === base` guard then let the skipped head fall back to
+provisional nonpayable. ORDER-DEPENDENT: pure-head-first over-accepted, pure-head-last happened to reject. The fix
+had rewritten its OWN multi-head regression cells to VIEW bases (the VACUITY TRAP again - tests changed to match
+the code, not the spec), so nothing asserted the pure-head case.
+CORRECTIVE (cde3a9f): the base-effects pass computes EACH overridden head's effects under its OWN synthetic key
+(`baseEffKey: Map<RawFunction,string>`, never the colliding fkey - safe because a dropped base is never a callee
+target, while its own callees stay real fkeys the shared fixpoint resolves); getterVarBaseMutPairs became one
+entry-per-getter carrying `bases: RawFunction[]`, and the post-fixpoint check rejects if ANY overridden head is
+pure-and-getter-not-pure (or payable). Also closed a SECONDARY over-rejection c3db959 introduced: the base-effects
+checkFunction did not restore the DIAGNOSTICS bag, so a dropped base with a JETH-unlowerable body (e.g. a
+recursive-struct memory local, JETH495) LEAKED a spurious reject; now snapshot+truncate `this.diags.items` around
+the pass (a dropped base is not deployed, so solc only reads its mutability here, not its body deployability).
+Verified CLEAN: multi-head closed in EVERY head order (pure-first/middle/last, extends-order swap, 3- and 4-head
+pure-at-any-position, 2-level transitive-pure chains, deep-diamond) at solc parity via deploy+run+decode;
+byte-identical over 66 programs; mutation-tested RED on c3db959 (5/10 new cells fail without the corrective, the 5
+order-lucky ones pass - directly demonstrating the order-dependence). Suite 495 files / 4891 tests, tsc clean.
+LESSON: the env-read-first ordering in the diags-restore witness is load-bearing - when checkFunction ABORTS on an
+unlowerable construct the later storage read is lost, so an env read placed BEFORE it keeps VIEW inference robust
+(otherwise the base misinfers pure and JETH433 wrongly fires). A base-effects pass that computes effects for
+NON-DEPLOYED code must isolate BOTH its emission side effects AND its diagnostics from the deployed compilation.
