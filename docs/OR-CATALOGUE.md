@@ -1463,3 +1463,52 @@ Documented ABI-metadata divergences (PRE-EXISTING, base==fix, NOT bar violations
 an UNUSED file-level event appears in JETH's ABI but not solc's; JETH never emits `receive`/`fallback` ABI
 entries though the dispatcher is byte-correct; `@diamond class D {}` + a plain contract silently emits ONLY D
 (pre-existing, unchanged by the multi-contract lift - a candidate for a future round).
+
+### 2026-07-17 SILENT CONTRACT DROP closed (`58820e8`) - it was never a @diamond bug
+
+USER-REPORTED as "@diamond + a plain contract silently emits ONLY D". Investigation showed the diamond is only
+the shape the bug was SEEN through. ROOT CAUSE: findContractClasses (src/analyzer.ts:2098) pushed DECORATED
+deployables (@contract/@proxy/@beacon/@facet) and ran the native-bare scan ONLY inside `if (out.length === 0)`.
+Its own comment gave the rationale - "a pure FALLBACK ... so an existing decorated file (which may carry
+unrelated bare helper classes) is never re-read" - which was TRUE in the legacy era and is STALE in native-only
+mode: legacy decorators were removed (JETH481), a user CANNOT write @contract, and native item #4 makes a bare
+non-abstract unextended class THE deployable contract, so "unrelated bare helper classes" no longer exist as a
+category. @diamond enters this path only because expandDiamond SYNTHESIZES `@contract class D`. The same phase
+split was mirrored in the collision pre-pass (compile.ts:588).
+BLAST RADIUS (all silently dropped, compile() SUCCEEDED, artifact simply absent): @facet+bare, bare+@facet
+(document order IGNORED), @proxy+bare, @beacon+bare, @diamond+bare, @diamond+2-bare (BOTH gone), across all 3
+diamond variants x both orders = 12 rows. A SILENT DROP is the worst failure mode available - worse than a
+reject.
+FIX (enabled by #11 e563a16): routes = the UNION of decorated + native-bare in DOCUMENT ORDER, per #11's
+convention (contracts[] document order, contracts[0] === the result object, singular fields = classes[0]).
+Native-bare eligibility unchanged (isNativeContractClass + not-extended).
+
+A SECOND, UNPINNED BUG THE UNION EXPOSED (found + fixed in the same commit): the diamond route-scoping flags
+(isDiamond / diamondVariant / diamondStorageBase / diamondSel2FacetSlot, analyzer.ts:4171-4179, and the JETH414
+builtin gate at :22366) read `this.diamond` = the FILE-level expansion flag, NOT whether the ROUTE is the
+diamond. Its ctor doc said "this compilation unit's deployed contract" (singular) - an assumption that only held
+while bare siblings were being dropped. Now route-scoped via `private get diamond()` gated on `routeIsDiamond`
+(set as analyzeContract's first act). LESSON: a latent singular-deployable assumption can hide behind a bug that
+made it true; lifting the bug exposes it.
+
+ONE INTENTIONAL REJECT CHANGE (an OVER-ACCEPTANCE CLOSURE, not a regression): `@diamond('array') class D {}` +
+`class C { c(): External<void> { diamondInit(msg.sender); } }` was ACCEPTED at base ONLY because C was dropped
+wholesale so its invalid call was never analyzed; now JETH414 ("only valid inside a @diamond"). A loud reject
+replacing a silent drop.
+
+VERIFIED (adversarial, CLEAN): 12/12 drop rows fixed + every newly-emitted contract DEPLOYS and DECODES;
+zero synthesized helpers leaked into contracts[] (all 3 diamond variants + proxy/beacon/facet; the verifier went
+further and declared USER classes named like every synthesized helper - array synthesizes all 4 -> JETH272 each;
+packed/solidstate synthesize only 2, so the other names are genuine user contracts, correctly emitted and
+byte-identical to their solo twins); the DECORATED artifact did NOT shift (sha256 creation+runtime+ABI+layout ==
+its decorated-only file's, both orders - diamond bytecode did not move); 51 programs (all 34 examples/*.jeth + 17
+synthetic) sha256-identical base vs fix with `contracts` presence unshifted; every gate still fires (two @diamond
+JETH041, two abstract leaves JETH041, duplicate names JETH037, contract-vs-file-level-type JETH272, no-deployable
+JETH040, @beacon's ctor rule JETH407); #11 invariants intact. Suite 492 files / 4847 tests, tsc clean.
+
+AUDIT NOTE: the `bare + decorated` singular-field shift (contractName F -> C) required ZERO test/example updates -
+no examples/*.jeth carries a decorated deployable at all, and the only test matching the shape uses it for the
+two-@diamond JETH041 gate. Nothing had been asserting the dropped-contract behaviour.
+NOTE on the earlier "@beacon + bare -> JETH407" pin: that probe was MALFORMED (`@beacon class B { }` declares no
+constructor; the gate legitimately requires `constructor(impl: address) {}`). With the canonical spelling the
+beacon row is the SAME silent drop and is fixed by the union; the JETH407 rule itself is sound and untouched.
