@@ -131,9 +131,12 @@ above are now consistent with the campaign narrative in the header (they had nev
 
 Parity footnotes (both-reject, never ORs): FIXED-outer cd|storage array-literal element mixes and
 cd|storage ternary mixes (solc TypeErrors); oversize state-init literals (JETH065+JETH211).
-Likely-deliberate singleton: trailing-hole destructure `let [p, ] = g(a, b)` (JETH066+JETH072; TS
+~~Likely-deliberate singleton: trailing-hole destructure `let [p, ] = g(a, b)` (JETH066+JETH072; TS
 parses `[p,]` as 1 element, so JETH sees an arity mismatch; the leading-hole form `let [, q]` is
-lifted and byte-identical).
+lifted and byte-identical).~~ **RETIRED 2026-07-17 (STALE ROW): live-audited at HEAD 5d87e86 -
+`let [p, ] = this.g(1n, 2n)` ACCEPTS and is byte-identical to solc's `(uint256 p, ) = g(1, 2)`
+(run+decode MATCH). Both the leading- AND trailing-hole forms are lifted; the row had never been
+retired after the lift.**
 
 ### Deliberate DESIGN rejects (footgun / deprecated / no-storage-ref locals): JETH492 / JETH493 / JETH494
 
