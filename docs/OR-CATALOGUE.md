@@ -1515,3 +1515,102 @@ two-@diamond JETH041 gate. Nothing had been asserting the dropped-contract behav
 NOTE on the earlier "@beacon + bare -> JETH407" pin: that probe was MALFORMED (`@beacon class B { }` declares no
 constructor; the gate legitimately requires `constructor(impl: address) {}`). With the canonical spelling the
 beacon row is the SAME silent drop and is fixed by the union; the JETH407 rule itself is sound and untouched.
+
+### 2026-07-17 MUTABILITY-SURFACE ROUND (USER RULINGS): JETH498 marker ban + `static` DECLARES pure, 2 live OAs closed
+
+Four commits on `c4a1b0f`, each adversarially verified CLEAN. HEAD `d0d08fd`, suite 495 files / 4881 tests, tsc
+clean, bar met. TWO of these are USER LANGUAGE RULINGS that deliberately ADD over-rejections; two are soundness
+fixes. The rulings are recorded here so a future exhaustion audit sees them on the deliberate list and never
+re-flags them as gaps.
+
+**RULING 1 - `View<T>` / `Pure<T>` are INTERFACE-ONLY (JETH498, `ee9702e`).** In a class context (contract
+`class C`, `abstract class B`, library `static class L`) the ONLY mutability forms are `get` (inferred),
+`static` (pure) and `static get` (pure). The markers are banned in every class context; an interface is bodyless
+so it MUST declare mutability, a class has a body so mutability is inferred. One choke point (analyzer
+collectFunction) covers all three contexts; interfaces use a separate collector and are untouched by
+construction. 34 spellings rejected, 0 holes (incl. bodyless `@virtual get a(): View<T>;`, private `get #a`,
+nested `View<Arr<u256,2>>`, and the previously-ACCIDENTAL rejects `static a(): View<T>` which used to report
+"unknown type" JETH013). A library `get` stays JETH043 (marker-independent, fires first - JETH498's pointer
+"use `get a(): T`" would be wrong advice inside a library). Interfaces verified 23/23 byte-identical.
+- *** THE TRAP IN THE ORCHESTRATOR'S OWN BRIEF ***: `View<T>` on a `get` did not only declare mutability, it
+  ALSO implied EXTERNAL (`get f(): View<T>` was documented "EXTERNAL, DECLARED view"). The briefed migration
+  ("just drop the marker") would have SILENTLY made every exposed accessor INTERNAL and deleted it from the ABI.
+  The correct migration is `get f(): External<T>`. 30 markers across 7 test files; examples/ had zero.
+- DELIBERATE OVER-REJECTIONS this creates (accepted by the author with the cost named): declaring `view` on a
+  PURE body is now INEXPRESSIBLE (solc ACCEPTS `function f() external view returns (uint256) { return 1; }`);
+  12 migrated sites flip ABI view -> pure (a flip happens EXACTLY when a `View<T>` site had a pure body). A
+  DECLARED-pure caller is likewise inexpressible (2 contract-value-call parity cells kept, now JETH498 instead
+  of JETH164). The removed feature's own test (get-declared-mutability.test.ts, GET-MUT-HEADROOM) is retired.
+
+**RULING 2 - `static` DECLARES the member PURE (`d0d08fd`).** Previously `static` meant ONLY "class-level, no
+`this`" and mutability was ALWAYS body-inferred; JETH354 is a `this`-BAN pre-pass (compile.ts:228), NOT a purity
+gate. So `static a(): u256 { return msg.value; }` inferred `view` and MATCHED solc's honest twin
+(`function a() internal view`) byte-for-byte + ABI-identical. The author ruled that `static` must DECLARE pure.
+This is a DELIBERATE OVER-REJECTION, not a soundness fix - every newly-rejected program is one solc compiles as
+`view`. Implementation: collectFunction sets mutability='pure' for a static member, and the get-accessor
+synthesis now FORWARDS StaticKeyword (it was DROPPING it - mutation-tested: removing that alone fails 8 tests,
+i.e. every `static get` silently escaped the ruling).
+- REVIVES three DEAD codes. After JETH481 (decorator ban) + JETH498, NOTHING could declare a mutability, so
+  JETH054/055/056/149/164 were all unreachable (the repo already knew: phase3-diagnostics.test.ts:6 and
+  internal-calls-gate.test.ts:44 carried comments asserting exactly that). Now live: **JETH164** = a declared-pure
+  static reads the environment (msg.*/block.*/tx.*/address(this), or an IMMUTABLE); **JETH055** = touches state
+  (transitive emit via a callee; alongside JETH354 on storage-via-`this`); **JETH149** = a direct emit (its
+  message named `@pure`, a JETH481-banned decorator - reworded to name the declared PROPERTY, never a spelling).
+- PURE-LEGAL SET MATCHES SOLC EXACTLY (verified at the source, checkGlobal ~analyzer.ts:21529: `msg.data` returns
+  EARLY before any env flag, `msg.sig` is cat 'calldata' and flags nothing, only cat 'value'/'env' set
+  currentReadsEnv - so readsEnv already encoded solc's boundary and needed no change): msg.sig / msg.data /
+  keccak256 / type(u256).max / a `static` constant stay PURE-LEGAL and still publish `pure`; an IMMUTABLE read is
+  JETH164 (solc calls it environment). A constant folds (pure); an immutable does not.
+- NEW REJECT THE RULING IMPLIES: `@nonReentrant static ...` -> JETH260. `static` declares pure; a reentrancy
+  guard TSTOREs. See the miscompile below - rejecting is the only sound answer.
+
+*** THE MISCOMPILE THE RULING'S OWN ~15-LINE PLAN WOULD HAVE SHIPPED (found + closed in the same commit) ***: a
+declared-pure static SKIPS the post-fixpoint inference branch, which is ALSO the only home of JETH043 / JETH473 /
+JETH352. The planned change alone silently dropped all three for statics. Two were lost diagnostics; the third
+shipped a WRONG ARTIFACT - `@nonReentrant static a(): External<void>` went from ACCEPT/nonpayable (correct) to
+ACCEPT with an ABI row claiming **pure** while the body TSTOREs the reentrancy mutex, so every staticcall /
+eth_call reverts against a pure promise. NEITHER the 4856-test suite NOR a 141-case single-axis static sweep
+caught it; it took crossing `static` with the CONSUMER axis (decorators x markers). Closed twice: RawFunction.
+staticPure splits the branch (the mutability ASSIGNMENT stays inference-only, the VALIDATION runs for a
+declared-pure static) PLUS a root-cause JETH260 at collection.
+
+**SOUNDNESS FIX - an UNEXTENDED ABSTRACT CLASS WAS NEVER TYPE-CHECKED (`8a0ece0`, a live OA).** JETH analyzed
+only the ROUTE class + its extends chain, so an abstract base nothing extends was DEAD CODE that was never
+checked: `abstract class B { get a(): NoSuchType { return 1n; } }` + a deployable ACCEPTED, while solc
+type-checks EVERY contract in a file and REJECTS. New checkStandaloneClassMemberTypes walks the SAME stray-class
+set the existing checkStandaloneClassMemberDuplicates pass already walks (precedent: DUP-ID-ABSTRACT), resolving
+each member's SIGNATURE types into the real bag (the same JETH013 the deployed path emits). Two load-bearing
+details: a return/field MARKER is unwrapped FIRST (the deployed path strips markers in place and never ran for a
+stray class, so the raw annotation would report a spurious "unknown type 'External'"), and a multi-value return
+`[T1,T2]` resolves ELEMENT-WISE. NARROWED BY DESIGN: BODY-level type errors in a never-extended abstract still
+accept (`get a(): u256 { return "not a number"; }`) - closing that needs full body analysis over a class with no
+linearization, which is where the over-rejection tail lives; signatures were the sound half. 30/30 legit
+unextended abstract bases still compile with the deployable byte-identical.
+
+**DIAGNOSTIC FIX - JETH055 stopped lying (`a5488e6`).** It claimed "@pure function 'b' accesses state" for a
+function that touches NO state (the funcref sig-union poisoning), and named `@pure`, a JETH481-banned decorator.
+RETARGETED on discovery that the whole family was unreachable (see RULING 2). Now reworded to name the declared
+PROPERTY, never a spelling, so it survives a future anchor change - which RULING 2 promptly proved right by
+reviving it.
+
+LESSONS (the orchestrator was wrong THREE times this round; every catch came from an agent refusing the brief):
+1. *** THE VACUITY TRAP, ON THIS EXACT TOPIC ***: comparing `static a(): u256 { return 1n; }` to
+   `a(): u256 { return 1n; }` proves NOTHING about whether `static` forces pure - a body that reads nothing
+   infers pure EITHER WAY. That vacuous probe produced the false claim "static is silently ignored". EVERY
+   mutability probe needs a DISCRIMINATING body: reads storage / reads env / writes / genuinely pure.
+2. *** CIRCULAR SEVERITY ***: "solc REJECTS the twin" was argued from a twin that DECLARED pure - i.e. it assumed
+   the conclusion. Against the HONEST twin (what JETH actually infers: `internal view`) the artifact MATCHED
+   byte-for-byte. When asking "is this a bug", compare against the honest twin; the declared twin only answers
+   "what would the ruling make illegal".
+3. *** BUGS LIVE AT THE CROSSING OF TWO AXES ***: the @nonReentrant x static wrong-ABI was invisible to the full
+   suite and to a 141-case single-axis sweep. Sweep the CONSUMER axis (decorators / markers / positions), not
+   just the shape axis.
+4. A MARKER CAN CARRY MORE THAN ITS NAME: `View<T>` on a `get` also implied EXTERNAL. "Just drop the marker"
+   would have silently deleted accessors from the ABI. Check what a spelling ACTUALLY anchors before migrating it.
+5. A TEST WHOSE HEADER CONTRADICTS ITS BODY IS RULE-DRIFT: class-mutability-marker-ban.test.ts asserted
+   "static => PURE" in its header while its body asserted the opposite and warned "do not fix without an author
+   ruling". The header was right. The body's reasoning had a concrete WRONG STEP - it claimed forcing pure "would
+   emit an ABI solc REJECTS = an OVER-ACCEPTANCE", but forcing pure does NOT emit a pure ABI for an env-reading
+   body, it REJECTS the program (an over-rejection, always safe). That error let the rule drift.
+6. AUDIT DIAGNOSTIC REACHABILITY AFTER A LANGUAGE CHANGE: JETH054/055/056/149/164 all became dead code the moment
+   nothing could declare a mutability. Dead diagnostics rot (JETH149 still named a banned decorator).
