@@ -589,15 +589,18 @@ export class Analyzer {
   // legitimate read-only impl as a loosening).
   private ifaceImplMutPairs: { w: RawFunction; ifaceMut: Mutability; ifaceName: string; methodName: string }[] = [];
   // GETTER-VAR-BASE-MUT (closes the former KNOWN HOLE at resolveGetterOverrides): a public getter VAR
-  // overriding a native CONTRACT base function loosens mutability iff the base body infers PURE (a getter
+  // overriding a native CONTRACT base function loosens mutability iff a base body infers PURE (a getter
   // is VIEW). The base spells its pureness with a BODY, only known after the transitive-purity fixpoint,
   // and a base whose ONLY override is a getter var is dropped from dispatch so it is never a deployed
   // winner - so its effects are computed on the side (see the base-effects pass in analyzeContract) and
-  // this check runs POST-fixpoint. Each pair carries the base RawFunction (its effects entry keys the
-  // fixpoint result), the getter's diagnostic node + label, and whether the getter counts as pure (a
-  // CONSTANT getter is pure, an immutable/state getter is view). Interface heads are NOT recorded here:
-  // an interface DECLARES its mutability, final at collection, handled inline in resolveGetterOverrides.
-  private getterVarBaseMutPairs: { base: RawFunction; node: ts.Node; name: string; getterIsPure: boolean; getterMutLabel: string }[] = [];
+  // this check runs POST-fixpoint. One entry per GETTER carries ALL of its overridden base heads (a
+  // multi-head @override(A2, B2) unifies same-signature heads that would otherwise COLLIDE on the bare
+  // getter fkey - each head's effects are computed under its OWN key), the getter's diagnostic node +
+  // label, and whether the getter counts as pure (a CONSTANT getter is pure, an immutable/state getter
+  // is view). solc rejects the loosening if ANY head is pure-and-the-getter-is-not (or payable), so the
+  // check must see EVERY head, not just one. Interface heads are NOT recorded here: an interface DECLARES
+  // its mutability, final at collection, handled inline in resolveGetterOverrides.
+  private getterVarBaseMutPairs: { bases: RawFunction[]; node: ts.Node; name: string; getterIsPure: boolean; getterMutLabel: string }[] = [];
 
   constructor(
     private readonly sourceFile: ts.SourceFile,
@@ -3847,7 +3850,7 @@ export class Analyzer {
       }
     }
 
-    // GETTER-VAR-BASE-MUT: compute the transitive effects of each dropped getter-override BASE, WITHOUT
+    // GETTER-VAR-BASE-MUT: compute the transitive effects of each dropped getter-override BASE HEAD, WITHOUT
     // deploying it OR perturbing any other function's emission. A native contract base whose only override
     // is a public getter var is dropped from dispatch (a public state-var override is terminal in solc, so
     // the base neither dispatches nor lingers as a callable version - see resolveOverrides). That drop is
@@ -3855,7 +3858,7 @@ export class Analyzer {
     // inferred and the getter-var mutability check had no base mutability to test (the former KNOWN HOLE).
     // Check its body here so the fixpoint below computes its transitive effects (pure iff no writes/reads/
     // readsEnv, transitively through its ORDINARY callees which are all deployed winners already in the map),
-    // then read the result in the post-fixpoint check. The base's effects entry is added to the EFFECTS MAP
+    // then read the result in the post-fixpoint check. Each head's effects entry is added to the EFFECTS MAP
     // ONLY, never to `functions`, so NO code is emitted for it. Crucially, checkFunction has GLOBAL emission
     // side effects (address-takes -> the funcref dispatch table; internal-call marks -> which userfns emit;
     // generic specializations -> which specializations emit; external-lib references -> linking). On the
@@ -3864,30 +3867,52 @@ export class Analyzer {
     // around the pass and restore them, so the base contributes ONLY its effects (via the local `effects`
     // map + the fixpoint), never a byte. Transitivity is unaffected: the fixpoint propagates a callee's
     // effects through the effects map, which needs neither internallyCalled nor the global funcref grouping.
+    //
+    // MULTI-HEAD: a jointly-overridden getter (`@override(A2, B2) g`) has TWO same-signature heads A2.g and
+    // B2.g that COLLIDE on the bare getter fkey "g" - keying by that fkey would keep only the first head's
+    // effects and DROP the second head's pureness, so a pure head that happened to be processed second (or
+    // whose entry was overwritten) slipped through (an ORDER-DEPENDENT over-acceptance). Each head therefore
+    // gets its OWN effects entry under a UNIQUE synthetic key recorded in `baseEffKey`. A synthetic key is
+    // safe: a dropped base is never a callee target, so nothing ever LOOKS IT UP by key; the head's own
+    // callees stay real fkeys the shared fixpoint resolves. The post-fixpoint check reads each head's entry
+    // back through `baseEffKey` and rejects if ANY head is pure.
+    const baseEffKey = new Map<RawFunction, string>();
     if (this.getterVarBaseMutPairs.length > 0) {
+      const diagMark = this.diags.items.length;
       const snapAddressTaken = new Set(this.addressTaken);
       const snapInternallyCalled = new Set(this.internallyCalled);
       const snapSpecQueue = [...this.specializationQueue];
       const snapSpecNames = new Map(this.specializedNames);
       const snapFuncsByName = new Map(this.funcsByName);
       const snapExtLibs = new Set(this.referencedExternalLibraries);
-      for (const { base } of this.getterVarBaseMutPairs) {
-        const bkey = this.fkey(base);
-        // A BODYLESS base has no body to analyze (and is not pure - handled by declared mutability in the
-        // check below); skip it. A base that is ALSO a deployed winner (getter invalid, so it stayed
-        // dispatched) is already in `effects` under its own entry; skip it to avoid a double body-check.
-        if (base.bodyless || effects.has(bkey)) continue;
-        const bf = this.checkFunction(base);
-        if (!bf) continue;
-        effects.set(bkey, {
-          writes: this.currentWritesState,
-          reads: this.currentReadsState || (base.mutability === 'view' && !base.inferRead),
-          readsEnv: this.currentReadsEnv,
-          callees: this.currentCallees,
-          ptrCallTargets: this.resolveCurrentPtrVarCalls(),
-          ptrCallSigs: this.currentPtrCallSigs,
-          rf: base,
-        });
+      let ghbCounter = 0;
+      for (const { bases } of this.getterVarBaseMutPairs) {
+        for (const base of bases) {
+          // A BODYLESS base has no body to analyze (and is not pure - handled by declared mutability in the
+          // check below); skip it. A base that is ALSO a deployed winner (its own entry already carries its
+          // transitive effects) reuses that entry - record its real key and skip the double body-check.
+          if (base.bodyless) continue;
+          const rk = this.fkey(base);
+          const existing = effects.get(rk);
+          if (existing && existing.rf === base) {
+            baseEffKey.set(base, rk);
+            continue;
+          }
+          // A distinct per-head key so two same-signature heads do NOT overwrite each other under the fkey.
+          const ekey = ` getterbase ${ghbCounter++}`;
+          const bf = this.checkFunction(base);
+          if (!bf) continue;
+          effects.set(ekey, {
+            writes: this.currentWritesState,
+            reads: this.currentReadsState || (base.mutability === 'view' && !base.inferRead),
+            readsEnv: this.currentReadsEnv,
+            callees: this.currentCallees,
+            ptrCallTargets: this.resolveCurrentPtrVarCalls(),
+            ptrCallSigs: this.currentPtrCallSigs,
+            rf: base,
+          });
+          baseEffKey.set(base, ekey);
+        }
       }
       // Restore: drop every emission-affecting registration the base bodies made, so the compiled output is
       // byte-identical to the current path (which drops the base unchecked). The effects entries stay.
@@ -3897,6 +3922,12 @@ export class Analyzer {
       this.specializedNames = snapSpecNames;
       this.funcsByName = snapFuncsByName;
       this.referencedExternalLibraries = snapExtLibs;
+      // DIAGS-RESTORE: a dropped base is NOT deployed - solc only reads its mutability property here, not its
+      // body's deployability - so any diagnostic checkFunction raised for the base body (e.g. a JETH-
+      // unsupported construct like an unresolvable storage-funcref call) must NOT surface, or the deriving
+      // contract is spuriously rejected for a body that is never emitted. Truncate the diagnostics bag back
+      // to the pre-pass mark; the legitimate pure->view reject (JETH433) is emitted later, post-fixpoint.
+      this.diags.items.length = diagMark;
     }
 
     // F6: drain the specialization worklist. Checking a body may have queued generic
@@ -4154,33 +4185,41 @@ export class Analyzer {
             `implementation of '${ifaceName}.${methodName}' cannot loosen mutability (@${ifaceMut} -> @${w.mutability}); it may only keep or tighten it, and payable crosses are forbidden`,
           );
       }
-      // GETTER-VAR-BASE-MUT: a public getter VAR overriding a native CONTRACT base function. The getter is
-      // VIEW (state/immutable) or PURE (constant); solc rejects loosening the base's mutability. The base's
-      // pureness is only known now (the base-effects pass above seeded its direct effects; the fixpoint made
-      // them transitive), so an inferred-PURE base (no writes, no reads, no env reads - transitively, e.g. a
-      // body that only calls pure helpers) under a NON-pure getter is a pure->view loosening solc rejects.
-      // A DECLARED-payable base (Payable<T> marker) rejects for any getter, pure or not. A base that reads
-      // storage/env (inferred view) is view->view, legal - it must keep accepting. `base.mutability` is not
-      // read for pureness (the dropped base was never re-inferred, so it holds the provisional nonpayable);
-      // pureness comes from the effects entry, payable from the declared marker.
-      for (const { base, node, name, getterIsPure, getterMutLabel } of this.getterVarBaseMutPairs) {
-        const be = effects.get(this.fkey(base));
-        // A base counts as PURE only when its pureness is CERTAIN: either DECLARED pure (e.g. a `static`
-        // base), or its BODY's transitive effects are genuinely empty (no writes/reads/readsEnv). A BODYLESS
-        // base is an abstract obligation with NO body to infer from - it is NOT pure (solc treats it by its
-        // declared mutability, view in the mirror; JETH leaves it nonpayable). Excluding bodyless is what
-        // keeps a bodyless `@virtual get g(): External<T>;` head accepting under a view getter (view/
-        // nonpayable -> view is not a loosening). The effects entry is trusted only when it is THIS base's
-        // (guards the vanishingly rare fkey collision where a same-name overload winner occupies the bare
-        // key); otherwise fall back to not-pure, which can never over-reject.
-        const bodyInferredPure = be !== undefined && be.rf === base && !be.writes && !be.reads && !be.readsEnv;
-        const baseIsPure = base.mutability === 'pure' || (!base.bodyless && bodyInferredPure);
-        const basePayable = base.mutability === 'payable';
-        if ((baseIsPure && !getterIsPure) || basePayable)
+      // GETTER-VAR-BASE-MUT: a public getter VAR overriding one or more native CONTRACT base heads. The
+      // getter is VIEW (state/immutable) or PURE (constant); solc rejects loosening a head's mutability. Each
+      // head's pureness is only known now (the base-effects pass above seeded every head's direct effects
+      // under its OWN key; the fixpoint made them transitive), so an inferred-PURE head (no writes, no reads,
+      // no env reads - transitively, e.g. a body that only calls pure helpers) under a NON-pure getter is a
+      // pure->view loosening solc rejects. A DECLARED-payable head rejects for any getter, pure or not. A head
+      // that reads storage/env (inferred view) is view->view, legal. For a MULTI-HEAD override (`@override(A2,
+      // B2) g`), solc rejects if ANY head is pure-and-the-getter-is-not (or payable): a single pure head among
+      // otherwise-view heads is still the pure->view loosening. So scan EVERY head and reject once per getter.
+      // `base.mutability` is not read for pureness (the dropped base was never re-inferred, so it holds the
+      // provisional nonpayable); pureness comes from the effects entry, payable from the declared marker.
+      for (const { bases, node, name, getterIsPure, getterMutLabel } of this.getterVarBaseMutPairs) {
+        let anyPure = false;
+        let anyPayable = false;
+        for (const base of bases) {
+          const be = effects.get(baseEffKey.get(base) ?? this.fkey(base));
+          // A head counts as PURE only when its pureness is CERTAIN: either DECLARED pure (e.g. a `static`
+          // base), or its BODY's transitive effects are genuinely empty (no writes/reads/readsEnv). A BODYLESS
+          // head is an abstract obligation with NO body to infer from - it is NOT pure (solc treats it by its
+          // declared mutability, view in the mirror; JETH leaves it nonpayable). Excluding bodyless is what
+          // keeps a bodyless `@virtual get g(): External<T>;` head accepting under a view getter (view/
+          // nonpayable -> view is not a loosening). The effects entry is trusted only when it is THIS head's
+          // (each head is stored under its own key in baseEffKey; the fkey fallback + the rf identity guard
+          // keep a stray same-key entry from masquerading as this head), else fall back to not-pure, which can
+          // never over-reject.
+          const bodyInferredPure = be !== undefined && be.rf === base && !be.writes && !be.reads && !be.readsEnv;
+          const baseIsPure = base.mutability === 'pure' || (!base.bodyless && bodyInferredPure);
+          if (baseIsPure && !getterIsPure) anyPure = true;
+          if (base.mutability === 'payable') anyPayable = true;
+        }
+        if (anyPure || anyPayable)
           this.diags.error(
             node,
             'JETH433',
-            `getter '${name}' (${getterMutLabel}) cannot override a @${basePayable ? 'payable' : 'pure'} base function (a getter changes state mutability)`,
+            `getter '${name}' (${getterMutLabel}) cannot override a @${anyPayable ? 'payable' : 'pure'} base function (a getter changes state mutability)`,
           );
       }
     }
@@ -5953,11 +5992,13 @@ export class Analyzer {
       }
       if (!bad) {
         this.validGetterOverrides.add(name);
-        // Commit the deferred base-mutability pairs ONLY for a getter that is otherwise valid: exactly
+        // Commit the deferred base-mutability heads ONLY for a getter that is otherwise valid: exactly
         // those bases are DROPPED from dispatch (a valid getter override is terminal), so exactly those
         // need their effects computed on the side and their pure->view loosening checked post-fixpoint.
-        for (const base of deferredBaseMut)
-          this.getterVarBaseMutPairs.push({ base, node: info.node, name, getterIsPure, getterMutLabel });
+        // ALL heads of one getter go in a SINGLE entry so the post-fixpoint check sees the whole set and
+        // rejects if ANY head is pure (a multi-head @override(A2, B2) with one pure head is a loosening).
+        if (deferredBaseMut.length > 0)
+          this.getterVarBaseMutPairs.push({ bases: deferredBaseMut, node: info.node, name, getterIsPure, getterMutLabel });
       }
     }
   }

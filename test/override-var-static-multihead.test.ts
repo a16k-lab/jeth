@@ -345,3 +345,144 @@ describe('LIFT 2 residuals: getter var / static unifying a get declared by two b
     expect(codesOf(`abstract class A2 { @virtual get g(): External<u256> { return 1n; } } abstract class B2 { @virtual get g(): External<u128> { return 2n; } } class C extends A2, B2 { @override(A2, B2) get g(): External<u256> { return 9n; } }`)).toContain('JETH377');
   });
 });
+
+// MULTI-HEAD-ONE-PURE-HEAD OA (closed here): a getter VAR jointly overriding two-or-more same-signature base
+// heads where AT LEAST ONE head infers PURE. An immutable/state getter is VIEW, so a pure head is the pure->
+// view loosening solc rejects ("Overriding public state variable changes state mutability from \"pure\" to
+// \"view\""). The single-head closure (LIFT 1 above) DEFERRED the base pure/payable check to a post-fixpoint
+// pass, but keyed each dropped base's effects by the bare getter fkey - so two same-signature heads COLLIDED
+// on one key and only the first-processed head's pureness survived, making the reject ORDER-DEPENDENT: a pure
+// head that landed second (or was overwritten) slipped through as an OVER-ACCEPTANCE. Now each head's effects
+// are computed under its OWN key and the check scans EVERY head, rejecting if ANY is pure. b0f61af (pre-defer)
+// AND c3db959 (single-head defer, this hole's shipping state) BOTH over-accepted the pure-head-not-last cells.
+describe('MULTI-HEAD getter var over one-pure-head: pure->view loosening rejects (JETH433), every head order', () => {
+  // The FAITHFUL solc mirror of a pure-inferring head is `external pure` (a literal body); a view head is
+  // `external view` (reads block.number). solc rejects the immutable/state override of a pure head.
+  const mirror = (mutsInDeclOrder: string[], overrideList: string) => {
+    const bases = mutsInDeclOrder
+      .map((m, i) => {
+        const nm = String.fromCharCode(65 + i) + '2'; // A2, B2, C2...
+        const body = m === 'pure' ? 'return 1;' : 'return block.number;';
+        return `abstract contract ${nm} { function g() external ${m} virtual returns(uint256) { ${body} } }`;
+      })
+      .join(' ');
+    const inherit = mutsInDeclOrder.map((_, i) => String.fromCharCode(65 + i) + '2').join(', ');
+    return `${bases} contract C is ${inherit} { uint256 public override(${overrideList}) g; function set(uint256 v) external { g = v; } }`;
+  };
+
+  it('pure head FIRST (A2 pure, B2 view) rejects JETH433 - the surviving OA', () => {
+    const J = `abstract class A2 { @virtual get g(): External<u256> { return 1n; } }
+      abstract class B2 { @virtual get g(): External<u256> { return block.number; } }
+      class C extends A2, B2 { @override(A2, B2) g: Visible<u256>; set(v: u256): External<void> { this.g = v; } }`;
+    expect(codesOf(J)).toContain('JETH433');
+    expect(solcRejects(mirror(['pure', 'view'], 'A2, B2'))).toBe(true); // solc-witnessed reject (parity)
+  });
+
+  it('pure head LAST (A2 view, B2 pure) rejects JETH433', () => {
+    const J = `abstract class A2 { @virtual get g(): External<u256> { return block.number; } }
+      abstract class B2 { @virtual get g(): External<u256> { return 1n; } }
+      class C extends A2, B2 { @override(A2, B2) g: Visible<u256>; set(v: u256): External<void> { this.g = v; } }`;
+    expect(codesOf(J)).toContain('JETH433');
+    expect(solcRejects(mirror(['view', 'pure'], 'A2, B2'))).toBe(true);
+  });
+
+  it('pure head first, EXTENDS/OVERRIDE order swapped (extends B2, A2) still rejects JETH433', () => {
+    // the processing order follows the head-collection order; swap it to prove the reject is order-invariant.
+    const J = `abstract class A2 { @virtual get g(): External<u256> { return 1n; } }
+      abstract class B2 { @virtual get g(): External<u256> { return block.number; } }
+      class C extends B2, A2 { @override(B2, A2) g: Visible<u256>; set(v: u256): External<void> { this.g = v; } }`;
+    expect(codesOf(J)).toContain('JETH433');
+    expect(solcRejects(`abstract contract A2 { function g() external pure virtual returns(uint256) { return 1; } }
+      abstract contract B2 { function g() external view virtual returns(uint256) { return block.number; } }
+      contract C is B2, A2 { uint256 public override(B2, A2) g; function set(uint256 v) external { g = v; } }`)).toBe(true);
+  });
+
+  it('pure-ARITH head (return 3n * 4n) first and last both reject JETH433', () => {
+    const first = `abstract class A2 { @virtual get g(): External<u256> { return 3n * 4n; } }
+      abstract class B2 { @virtual get g(): External<u256> { return block.number; } }
+      class C extends A2, B2 { @override(A2, B2) g: Visible<u256>; set(v: u256): External<void> { this.g = v; } }`;
+    const last = `abstract class A2 { @virtual get g(): External<u256> { return block.number; } }
+      abstract class B2 { @virtual get g(): External<u256> { return 3n * 4n; } }
+      class C extends A2, B2 { @override(A2, B2) g: Visible<u256>; set(v: u256): External<void> { this.g = v; } }`;
+    expect(codesOf(first)).toContain('JETH433');
+    expect(codesOf(last)).toContain('JETH433');
+    expect(solcRejects(mirror(['pure', 'view'], 'A2, B2'))).toBe(true);
+    expect(solcRejects(mirror(['view', 'pure'], 'A2, B2'))).toBe(true);
+  });
+
+  it('THREE heads, exactly one pure (pure first / pure middle / pure last) all reject JETH433', () => {
+    const mk = (a: string, b: string, d: string) =>
+      `abstract class A2 { @virtual get g(): External<u256> { ${a} } }
+       abstract class B2 { @virtual get g(): External<u256> { ${b} } }
+       abstract class D2 { @virtual get g(): External<u256> { ${d} } }
+       class C extends A2, B2, D2 { @override(A2, B2, D2) g: Visible<u256>; set(v: u256): External<void> { this.g = v; } }`;
+    const P = 'return 1n;';
+    const V = 'return block.number;';
+    expect(codesOf(mk(P, V, V))).toContain('JETH433'); // pure first
+    expect(codesOf(mk(V, P, V))).toContain('JETH433'); // pure middle
+    expect(codesOf(mk(V, V, P))).toContain('JETH433'); // pure last
+    expect(solcRejects(mirror(['pure', 'view', 'view'], 'A2, B2, D2'))).toBe(true);
+    expect(solcRejects(mirror(['view', 'pure', 'view'], 'A2, B2, D2'))).toBe(true);
+    expect(solcRejects(mirror(['view', 'view', 'pure'], 'A2, B2, D2'))).toBe(true);
+  });
+
+  it('both heads pure, STATE getter (view) - pure->view rejects JETH433', () => {
+    const J = `abstract class A2 { @virtual get g(): External<u256> { return 1n; } }
+      abstract class B2 { @virtual get g(): External<u256> { return 2n; } }
+      class C extends A2, B2 { @override(A2, B2) g: Visible<u256>; set(v: u256): External<void> { this.g = v; } }`;
+    expect(codesOf(J)).toContain('JETH433');
+    expect(solcRejects(`abstract contract A2 { function g() external pure virtual returns(uint256) { return 1; } }
+      abstract contract B2 { function g() external pure virtual returns(uint256) { return 2; } }
+      contract C is A2, B2 { uint256 public override(A2, B2) g; function set(uint256 v) external { g = v; } }`)).toBe(true);
+  });
+
+  it('IMMUTABLE getter (view) over a one-pure-head set rejects JETH433', () => {
+    const J = `abstract class A2 { @virtual get g(): External<u256> { return 1n; } }
+      abstract class B2 { @virtual get g(): External<u256> { return block.number; } }
+      class C extends A2, B2 { @override(A2, B2) static g: Visible<u256>; constructor() { this.g = 5n; } }`;
+    expect(codesOf(J)).toContain('JETH433');
+    expect(solcRejects(`abstract contract A2 { function g() external pure virtual returns(uint256) { return 1; } }
+      abstract contract B2 { function g() external view virtual returns(uint256) { return block.number; } }
+      contract C is A2, B2 { uint256 public immutable override(A2, B2) g; constructor() { g = 5; } }`)).toBe(true);
+  });
+
+  it('CONTROL - both heads VIEW: the immutable/state getter is view->view, ACCEPTED byte-identically', async () => {
+    // must NOT over-reject: the closure fires ONLY on a pure head, never on every multi-head getter override.
+    await eqCalls(
+      `abstract class A2 { @virtual get g(): External<u256> { return block.number; } }
+       abstract class B2 { @virtual get g(): External<u256> { return block.number; } }
+       class C extends A2, B2 { @override(A2, B2) g: Visible<u256>; set(v: u256): External<void> { this.g = v; } }`,
+      `abstract contract A2 { function g() external view virtual returns(uint256) { return 1; } }
+       abstract contract B2 { function g() external view virtual returns(uint256) { return block.number; } }
+       contract C is A2, B2 { uint256 public override(A2, B2) g; function set(uint256 v) external { g = v; } }`,
+      [['g()', ''], ['set(uint256)', W(0x9001)], ['g()', '']],
+    );
+  });
+
+  it('CONTROL - constant getter (pure) over pure heads is pure->pure: ACCEPTED (not a loosening)', () => {
+    const J = `abstract class A2 { @virtual get g(): External<u256> { return 1n; } }
+      abstract class B2 { @virtual get g(): External<u256> { return 2n; } }
+      class C extends A2, B2 { @override(A2, B2) static g: Visible<u256> = 7n; }`;
+    expect(accepts(J)).toBe(true);
+    expect(solcRejects(`abstract contract A2 { function g() external pure virtual returns(uint256) { return 1; } }
+      abstract contract B2 { function g() external pure virtual returns(uint256) { return 2; } }
+      contract C is A2, B2 { uint256 public constant override(A2, B2) g = 7; }`)).toBe(false);
+  });
+
+  it('DIAGS-RESTORE control: a dropped base with a body JETH cannot lower still lets C compile if solc does', () => {
+    // The base-effects pass checkFunction()s the DROPPED base to read its mutability. Its body diagnostics must
+    // NOT surface (the base is never deployed; solc only reads its mutability here). Witness: the base body has
+    // a recursive-struct MEMORY local (JETH495, unlowerable) but reads block.number FIRST so it robustly infers
+    // VIEW (no pure->view reject). c3db959 leaked JETH495+JETH074; the diags-restore drops them and C compiles,
+    // matching solc. (An INHERITED unlowerable STORAGE field would reject on C itself - here the construct is
+    // strictly body-local to the dropped base.)
+    const J = `type P = { x: u256; kids: P[] };
+      abstract class A2 { p: P; @virtual get g(): External<u256> { let e: u256 = block.number; let m: P = this.p; return e + m.x; } }
+      class C extends A2 { @override g: Visible<u256>; set(v: u256): External<void> { this.g = v; } }`;
+    const S = `abstract contract A2 { struct P { uint256 x; P[] kids; } P p;
+      function g() external view virtual returns (uint256) { uint256 e = block.number; P memory m = p; return e + m.x; } }
+      contract C is A2 { uint256 public override g; function set(uint256 v) external { g = v; } }`;
+    expect(accepts(J)).toBe(true); // diags-restore removed the spurious base-body reject
+    expect(solcRejects(S)).toBe(false); // solc accepts the deriving contract
+  });
+});
