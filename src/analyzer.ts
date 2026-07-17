@@ -23300,6 +23300,18 @@ export class Analyzer {
       t.kind === 'array' &&
       (isStaticStructFixedLeafArray(t) ||
         isStaticStructLeafArray(t) ||
+        // TERN-STRUCT-ARR mixed-chain residual: a DYNAMIC-outer array over EXACTLY ONE FIXED static-struct
+        // level (Arr<In,N>[]). The dynamic-outer sibling of isStaticStructFixedLeafArray (Arr<In,N>) and
+        // isStaticStructLeafArray (In[]/In[][]). A PER-SHAPE predicate on purpose: isStaticStructFixedElemDynArray
+        // admits EXACTLY this chain and nothing deeper. A DEEPER fixed level (Arr<Arr<In,N>,M>[]) stays REJECTED
+        // - its element read path and ABI encoder disagree about the memory image (the B-21 member-layout family,
+        // USER RULING: KEEP THE REJECT). Do NOT substitute isStaticStructAnyLeafArray here: it descends through
+        // any mix of levels and would re-admit the deeper miscompiling chain (the 628a5bc regression). The
+        // dynamic-outer image is [len][one absolute-pointer word per element], each -> an N-pointer Arr<In,N>
+        // block whose slots -> per-element In blocks = solc's In[N][]; the ternary lowers per-arm through the
+        // DYNAMIC-value-array case in yul (aggArgToMemPtr: a memory arm ALIASES its pointer, a storage arm
+        // DEEP-COPIES via abiDecFromStorageToImage), byte-identical to solc's asymmetric memory-reference rule.
+        isStaticStructFixedElemDynArray(t) ||
         (t.length !== undefined && isNestedValueArray(t) && isDynamicType(t)));
     if (!ptrHeadedFamily) return undefined;
     // only the ALIASABLE branch kinds (a memory-local Arr<In,N> = memAggregate, a storage source, or an
@@ -24194,27 +24206,32 @@ export class Analyzer {
         // (In[]: `return c ? m : this.st`). lowerExpr's dyn-array ternary case materializes the TAKEN
         // branch only, per-branch via aggArgToMemPtr INSIDE its own switch-case block: a memArray branch
         // returns its pointer VERBATIM (solc's aliased memory arm, witness W2b) and a storage branch
-        // deep-copies to a fresh [len][inline elems] image (solc's copied storage arm, witnesses W1/W2) -
-        // the same asymmetry the accepted let-bind `let p: In[] = c ? m : this.st` already lowers. Unlike
-        // the FIXED-outer Arr<In,N> twin below, an ALL-DYNAMIC chain has NO flat-vs-pointer-headed ambiguity
-        // (its image IS the [len][inline elems] block every ABI consumer of In[] reads), so the bare-value
-        // consumers are safe here - which leaves the fixed-outer RC-2 / MC-2..MC-6 pointer-word-leak reject
-        // exactly as it was.
+        // deep-copies to a fresh pointer-headed image (solc's copied storage arm, witnesses W1/W2) - the
+        // same asymmetry the accepted let-bind `let p = c ? m : this.st` already lowers.
         //
-        // The predicate is isStaticStructLeafArray (ALL levels dynamic down to the static-struct leaf), NOT
-        // `isStaticStructAnyLeafArray && length === undefined`. The latter reads like a dynamic-outer
-        // restriction but only ever constrained the OUTERMOST level: isStaticStructAnyLeafArray descends
-        // through ANY mix, so a FIXED level just moved INSIDE and `Arr<In,2>[]` / `Arr<Arr<In,2>,2>[]` were
-        // admitted here too - and the latter's read path and ABI encoder disagree about the memory image
-        // (B-21, KEEP THE REJECT). isStaticStructLeafArray cannot hide a fixed level at any depth.
-        (e.type.kind === 'array' &&
-          isStaticStructLeafArray(e.type) &&
+        // TWO admitted static-struct chains, both DYNAMIC-outer, spelled with PER-SHAPE predicates:
+        //  - isStaticStructLeafArray: ALL levels dynamic down to the static-struct leaf (In[], In[][]). Its
+        //    image IS the [len][inline elems] block every ABI consumer of In[] reads (no pointer-headed leaf).
+        //  - isStaticStructFixedElemDynArray: EXACTLY ONE FIXED static-struct level under the dynamic outer
+        //    (Arr<In,N>[], the TERN-STRUCT-ARR mixed-chain residual). Its image is [len][one absolute-pointer
+        //    word per element], each -> an N-pointer Arr<In,N> block = solc's In[N][]. The whole-array return
+        //    / abi.encode reads that pointer-headed image byte-identically (verified deploy+run+decode, both
+        //    arms + storage|storage). The memory arm ALIASES its pointer; the storage arm deep-copies via
+        //    abiDecFromStorageToImage - the same per-arm lowering the accepted let-bind uses.
+        // A DEEPER fixed level (Arr<Arr<In,N>,M>[]) is EXCLUDED by BOTH predicates and MUST stay rejected:
+        // its element read path and ABI encoder disagree about the memory image (B-21 pointer-word leak; solc
+        // returns 1/100 where a widened JETH would leak a raw pointer - KEEP THE REJECT). Do NOT substitute
+        // isStaticStructAnyLeafArray here: it descends through ANY mix of levels, so the fixed level would
+        // move INSIDE and the deeper chain would be re-admitted (the 628a5bc miscompile). The fixed-OUTER
+        // Arr<In,N> twin (isStaticStructFixedLeafArray) rides the SEPARATE flat-image path below.
+        ((e.type.kind === 'array' &&
+          (isStaticStructLeafArray(e.type) || isStaticStructFixedElemDynArray(e.type)) &&
           (e.kind === 'ternary' ||
             (e.kind === 'arrayValue' &&
               (e.arr.base.kind === 'fixedArray' ||
                 e.arr.base.kind === 'stateArray' ||
                 e.arr.base.kind === 'mapArray' ||
-                e.arr.base.kind === 'placeArray'))));
+                e.arr.base.kind === 'placeArray')))));
       if (!lowerable(unified[0]) || !lowerable(unified[1])) {
         this.diags.error(
           node,
