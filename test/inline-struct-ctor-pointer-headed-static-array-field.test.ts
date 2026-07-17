@@ -1,12 +1,15 @@
-// SHAPE A regression: an INLINE struct-constructor value S(tag, a) whose field `a` is a POINTER-HEADED
+// SHAPE A: an INLINE struct-constructor value S(tag, a) whose field `a` is a POINTER-HEADED
 // static-struct fixed array (Arr<In,N>, In a static struct - N absolute-pointer words in memory, NO
-// [len] header, but INLINE in the ABI/return tuple head) used DIRECTLY as a return / abi.encode operand
-// used to MISCOMPILE: the flat mcopy at the aggregate-build site copied the element POINTERS (plus
-// trailing garbage) instead of the inline element data, dropping the payload
-// (solc: [0x20][0xa0][tag][x0][y0][x1][y1]; JETH emitted [tag][ptr][ptr][x0][y0]...). The fix routes the
-// inline-constructor form to the SAME clean reject (JETH465) the var-bound form (let s: S = S(9n,a);
-// return s) already emits - a clean reject beats wrong bytes. VALUE-array fields (Arr<u256,N> - flat,
-// byte-invariant), scalar-only structs, and a standalone Arr<In,N> return are UNAFFECTED (stay MATCH).
+// [len] header, but INLINE in the ABI/return tuple head). A NON-INLINE aliasable source flat-copied into
+// that field used to MISCOMPILE (the flat mcopy emitted the element POINTERS instead of the inline
+// element data, dropping the payload); it was routed to a clean JETH465 reject.
+//
+// L7(a) LIFT: when the captured local is DEAD after the constructor (referenced exactly once - the
+// capture - never mutated, never read, never passed onward), Solidity's live reference is UNOBSERVABLE,
+// so a copy is byte-identical. The compiler now folds `let a = [In(..), ..]; S(tag, a)` into its
+// already-accepted INLINE form `S(tag, [In(..), ..])` verbatim (same IR -> byte-identical bytecode),
+// which is itself byte-identical to solc. A LIVE-reference capture (the local mutated / read after the
+// ctor, or used more than once) is NOT dead - it keeps the JETH465 reject (a copy would diverge).
 import { describe, it, expect } from 'vitest';
 import { compile } from '../src/compile.js';
 import { Harness, pad32 } from '../src/evm.js';
@@ -23,6 +26,9 @@ const codes = (src: string): string[] => {
     return e?.diagnostics ? e.diagnostics.map((d: any) => d.code) : ['THROW'];
   }
 };
+function jethBytes(src: string): string {
+  return compile(src, { fileName: 'C.jeth' }).creationBytecode;
+}
 async function diff(J: string, S: string, sigs: string[]) {
   const h = await Harness.create();
   const aj = await h.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
@@ -35,58 +41,135 @@ async function diff(J: string, S: string, sigs: string[]) {
   }
 }
 
-describe('inline struct-ctor with a pointer-headed static-struct fixed-array field - clean reject, never garbage', () => {
-  // ---- the two fixed miscompiles: now a CLEAN REJECT (JETH465), consistent with the var-bound form ----
-  it('return S(tag, Arr<In,2>) rejects (was a payload-dropping miscompile)', () => {
-    const J = `type In = { x: u256; y: u256 };
+describe('L7(a): DEAD-after pointer-headed static-struct fixed-array capture folds to the inline form (byte-identical to solc)', () => {
+  // ---- the DEAD-after captures now LIFT: byte-identical to solc AND to the inline-literal form ----
+  it('return S(tag, a) folds to return S(tag, [..]) - byte-identical to solc', async () => {
+    const bound = `type In = { x: u256; y: u256 };
     type S = { tag: u256; arr: Arr<In,2> };
     class C {
       get f(): External<S> { let a: Arr<In,2> = [In(111n,222n), In(333n,444n)]; return S(9n, a); } }`;
-    expect(codes(J)).toContain('JETH465');
+    const inline = `type In = { x: u256; y: u256 };
+    type S = { tag: u256; arr: Arr<In,2> };
+    class C {
+      get f(): External<S> { return S(9n, [In(111n,222n), In(333n,444n)]); } }`;
+    const S = `struct In { uint256 x; uint256 y; }
+    struct S { uint256 tag; In[2] arr; }
+    contract C { function f() external pure returns(S memory){ return S(9, [In(111,222),In(333,444)]); } }`;
+    expect(codes(bound)).toEqual([]);
+    expect(jethBytes(bound)).toBe(jethBytes(inline)); // == the already-accepted inline-literal form
+    await diff(bound, S, ['f()']);
   });
 
-  it('abi.encode(S(tag, Arr<In,2>)) rejects (was a payload-dropping miscompile)', () => {
-    const J = `type In = { x: u256; y: u256 };
+  it('abi.encode(S(tag, a)) folds - byte-identical to solc', async () => {
+    const bound = `type In = { x: u256; y: u256 };
     type S = { tag: u256; arr: Arr<In,2> };
     class C {
       get f(): External<bytes> { let a: Arr<In,2> = [In(111n,222n), In(333n,444n)]; return abi.encode(S(9n, a)); } }`;
-    expect(codes(J)).toContain('JETH465');
+    const inline = `type In = { x: u256; y: u256 };
+    type S = { tag: u256; arr: Arr<In,2> };
+    class C {
+      get f(): External<bytes> { return abi.encode(S(9n, [In(111n,222n), In(333n,444n)])); } }`;
+    const S = `struct In { uint256 x; uint256 y; }
+    struct S { uint256 tag; In[2] arr; }
+    contract C { function f() external pure returns(bytes memory){ return abi.encode(S(9, [In(111,222),In(333,444)])); } }`;
+    expect(codes(bound)).toEqual([]);
+    expect(jethBytes(bound)).toBe(jethBytes(inline));
+    await diff(bound, S, ['f()']);
   });
 
-  // ---- the var-bound sibling: unchanged, still the same over-reject (proves consistency) ----
-  it('the var-bound form let s: S = S(9n,a); return s stays a JETH465 reject (unchanged)', () => {
-    const J = `type In = { x: u256; y: u256 };
+  it('let s: S = S(9n, a); return s (whole struct) folds - byte-identical to solc', async () => {
+    const bound = `type In = { x: u256; y: u256 };
     type S = { tag: u256; arr: Arr<In,2> };
     class C {
       get f(): External<S> { let a: Arr<In,2> = [In(111n,222n), In(333n,444n)]; let s: S = S(9n, a); return s; } }`;
-    expect(codes(J)).toContain('JETH465');
+    const inline = `type In = { x: u256; y: u256 };
+    type S = { tag: u256; arr: Arr<In,2> };
+    class C {
+      get f(): External<S> { let s: S = S(9n, [In(111n,222n), In(333n,444n)]); return s; } }`;
+    const S = `struct In { uint256 x; uint256 y; }
+    struct S { uint256 tag; In[2] arr; }
+    contract C { function f() external pure returns(S memory){ S memory s = S(9, [In(111,222),In(333,444)]); return s; } }`;
+    expect(codes(bound)).toEqual([]);
+    expect(jethBytes(bound)).toBe(jethBytes(inline));
+    await diff(bound, S, ['f()']);
   });
 
-  // ---- extended shapes: Arr<In,3>, a 3-field element struct, and a nested Arr<Arr<In,N>,M> - all reject ----
-  it('Arr<In,3> field return + encode reject (no garbage)', () => {
-    const J = `type In = { x: u256; y: u256 };
+  it('extended shapes fold: Arr<In,3>, a 3-field element struct, and a nested Arr<Arr<In,2>,2>', async () => {
+    const arr3b = `type In = { x: u256; y: u256 };
     type S = { tag: u256; arr: Arr<In,3> };
     class C {
       get ret(): External<S> { let a: Arr<In,3> = [In(1n,2n), In(3n,4n), In(5n,6n)]; return S(9n, a); }
       get enc(): External<bytes> { let a: Arr<In,3> = [In(1n,2n), In(3n,4n), In(5n,6n)]; return abi.encode(S(9n, a)); } }`;
-    expect(codes(J)).toContain('JETH465');
-  });
+    const arr3i = `type In = { x: u256; y: u256 };
+    type S = { tag: u256; arr: Arr<In,3> };
+    class C {
+      get ret(): External<S> { return S(9n, [In(1n,2n), In(3n,4n), In(5n,6n)]); }
+      get enc(): External<bytes> { return abi.encode(S(9n, [In(1n,2n), In(3n,4n), In(5n,6n)])); } }`;
+    const arr3s = `struct In { uint256 x; uint256 y; }
+    struct S { uint256 tag; In[3] arr; }
+    contract C {
+      function ret() external pure returns(S memory){ return S(9, [In(1,2),In(3,4),In(5,6)]); }
+      function enc() external pure returns(bytes memory){ return abi.encode(S(9, [In(1,2),In(3,4),In(5,6)])); } }`;
+    expect(codes(arr3b)).toEqual([]);
+    expect(jethBytes(arr3b)).toBe(jethBytes(arr3i));
+    await diff(arr3b, arr3s, ['ret()', 'enc()']);
 
-  it('Arr<In3,2> (a 3-field element struct) field return rejects (no garbage)', () => {
-    const J = `type In3 = { x: u256; y: u256; z: u256 };
+    const in3b = `type In3 = { x: u256; y: u256; z: u256 };
     type S = { tag: u256; arr: Arr<In3,2> };
     class C {
       get f(): External<S> { let a: Arr<In3,2> = [In3(1n,2n,3n), In3(4n,5n,6n)]; return S(9n, a); } }`;
-    expect(codes(J)).toContain('JETH465');
-  });
+    const in3i = `type In3 = { x: u256; y: u256; z: u256 };
+    type S = { tag: u256; arr: Arr<In3,2> };
+    class C {
+      get f(): External<S> { return S(9n, [In3(1n,2n,3n), In3(4n,5n,6n)]); } }`;
+    const in3s = `struct In3 { uint256 x; uint256 y; uint256 z; }
+    struct S { uint256 tag; In3[2] arr; }
+    contract C { function f() external pure returns(S memory){ return S(9, [In3(1,2,3),In3(4,5,6)]); } }`;
+    expect(codes(in3b)).toEqual([]);
+    expect(jethBytes(in3b)).toBe(jethBytes(in3i));
+    await diff(in3b, in3s, ['f()']);
 
-  it('nested Arr<Arr<In,2>,2> field return rejects (no garbage)', () => {
-    const J = `type In = { x: u256; y: u256 };
+    const nestb = `type In = { x: u256; y: u256 };
     type S = { tag: u256; arr: Arr<Arr<In,2>,2> };
     class C {
       get f(): External<S> {
         let a: Arr<Arr<In,2>,2> = [[In(1n,2n),In(3n,4n)], [In(5n,6n),In(7n,8n)]];
         return S(9n, a); } }`;
+    const nesti = `type In = { x: u256; y: u256 };
+    type S = { tag: u256; arr: Arr<Arr<In,2>,2> };
+    class C {
+      get f(): External<S> { return S(9n, [[In(1n,2n),In(3n,4n)], [In(5n,6n),In(7n,8n)]]); } }`;
+    const nests = `struct In { uint256 x; uint256 y; }
+    struct S { uint256 tag; In[2][2] arr; }
+    contract C { function f() external pure returns(S memory){ return S(9, [[In(1,2),In(3,4)],[In(5,6),In(7,8)]]); } }`;
+    expect(codes(nestb)).toEqual([]);
+    expect(jethBytes(nestb)).toBe(jethBytes(nesti));
+    await diff(nestb, nests, ['f()']);
+  });
+
+  // ---- LIVE reference (escape): the local is NOT dead - the JETH465 reject is KEPT (a copy would diverge) ----
+  it('a MUTATED after the ctor keeps the JETH465 reject (solc aliases the write; a copy would not)', () => {
+    // solc: after a[0]=In(99,99), s.arr[0].x reads 99 through the live reference; a flat copy would read 111.
+    const J = `type In = { x: u256; y: u256 };
+    type S = { tag: u256; arr: Arr<In,2> };
+    class C {
+      get f(): External<u256> { let a: Arr<In,2> = [In(111n,222n), In(333n,444n)]; let s: S = S(9n, a); a[0n] = In(99n,99n); return s.arr[0n].x; } }`;
+    expect(codes(J)).toContain('JETH465');
+  });
+
+  it('a READ after the ctor keeps the JETH465 reject (live use)', () => {
+    const J = `type In = { x: u256; y: u256 };
+    type S = { tag: u256; arr: Arr<In,2> };
+    class C {
+      get f(): External<u256> { let a: Arr<In,2> = [In(111n,222n), In(333n,444n)]; let s: S = S(9n, a); return s.arr[0n].x + a[1n].y; } }`;
+    expect(codes(J)).toContain('JETH465');
+  });
+
+  it('captured into TWO ctors keeps the JETH465 reject (used more than once)', () => {
+    const J = `type In = { x: u256; y: u256 };
+    type S = { tag: u256; arr: Arr<In,2> };
+    class C {
+      get f(): External<u256> { let a: Arr<In,2> = [In(111n,222n), In(333n,444n)]; let s: S = S(9n, a); let t: S = S(8n, a); return s.tag + t.tag; } }`;
     expect(codes(J)).toContain('JETH465');
   });
 

@@ -308,14 +308,36 @@ describe('Stage-0 flat Arr<In,N> matrix - byte-identical to solc 0.8.35 (pointer
     );
   });
 
-  // ---------- CONTROLS: must stay REJECT (a later stage may lift JETH465) ----------
+  // ---------- CONTROLS ----------
 
-  it('CONTROL: JETH465 inline-struct-ctor return of Arr<In,N> field STILL rejects', () => {
+  it('L7(a): DEAD-after inline-struct-ctor return of an Arr<In,N> field now folds byte-identical to solc', async () => {
+    // Formerly a JETH465 CONTROL ("a later stage may lift"): the DEAD-after capture `let m = [..]; S(5n, m)`
+    // is now folded to its already-accepted inline form `S(5n, [..])` - byte-identical bytecode and MATCH solc.
+    const bound = `${IN}
+        type S = { tag: u256; m: Arr<In,2>; };
+        class C {
+          get f(): External<S> { let m: Arr<In,2> = [In(11n,12n), In(13n,14n)]; return S(5n, m); } }`;
+    const inline = `${IN}
+        type S = { tag: u256; m: Arr<In,2>; };
+        class C {
+          get f(): External<S> { return S(5n, [In(11n,12n), In(13n,14n)]); } }`;
+    const S = `${SIN}
+        struct S { uint256 tag; In[2] m; }
+        contract C { function f() external pure returns(S memory){ return S(5, [In(11,12),In(13,14)]); } }`;
+    expect(codes(bound)).toEqual([]);
+    expect(compile(bound, { fileName: 'C.jeth' }).creationBytecode).toBe(
+      compile(inline, { fileName: 'C.jeth' }).creationBytecode,
+    );
+    await diff(bound, S, [['f()', '']]);
+  });
+
+  it('CONTROL: a LIVE-reference capture (m mutated after) STILL rejects JETH465', () => {
+    // solc aliases the write into S.m; a copy would diverge, so the escape stays a clean reject.
     expect(
       codes(`${IN}
         type S = { tag: u256; m: Arr<In,2>; };
         class C {
-          get f(): External<S> { let m: Arr<In,2> = [In(11n,12n), In(13n,14n)]; return S(5n, m); } }`),
+          get f(): External<u256> { let m: Arr<In,2> = [In(11n,12n), In(13n,14n)]; let s: S = S(5n, m); m[0n] = In(99n,99n); return s.m[0n].a; } }`),
     ).toContain('JETH465');
   });
 

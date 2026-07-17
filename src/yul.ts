@@ -260,6 +260,7 @@ export class YulEmitter {
 
   emit(contract: ContractIR): string {
     this.contract = contract;
+    this.liftDeadAggCaptureBodies(contract);
     for (const f of contract.functions) this.funcs.set(f.key, f); // by unique key (overload-safe)
     const runtime = this.emitRuntime(contract);
     const creation = this.emitCreation(contract);
@@ -290,6 +291,7 @@ ${indent(runtime, 6)}
     this.funcs = new Map<string, FunctionIR>();
     this.helpers = new Map<string, string>();
     const fns = [...lib.external, ...lib.internal];
+    for (const f of fns) this.liftDeadAggCaptureFn(f);
     for (const f of fns) this.funcs.set(f.key, f);
     const synthetic: ContractIR = {
       name: lib.name,
@@ -685,6 +687,181 @@ ${indent(runtime, 6)}
     };
     walk(root);
     return keys;
+  }
+
+  // ===========================================================================================
+  // L7(a) lift: fold a DEAD-after aggregate-capture local into its already-accepted inline form.
+  //
+  // Shape (the OR): `let a: Arr<In,N> = [In(..), ..]; let s: S1 = S1(a, K); ...` where the field the
+  // local is captured into is a POINTER-HEADED static-struct fixed array (isStaticStructFixedLeafArray -
+  // the FIRST branch of assertInlineAggCaptureSound, JETH465). Solidity stores a LIVE REFERENCE to `a`
+  // there; JETH's flat inline image cannot, so the bound form is rejected. But if `a` is DEAD after the
+  // constructor - referenced EXACTLY ONCE in the remainder of the body, and that single reference IS the
+  // capture (never mutated after, never read after, never passed onward) - then NEITHER the alias-write
+  // (`a[i]=..` then read `s.pre`) NOR the reverse (`s.pre[i]=..` then read `a`) is reachable, so solc's
+  // reference is UNOBSERVABLE and a COPY is byte-identical. Substituting the (compile-time-constant)
+  // literal for the capture and dropping the decl reproduces the ALREADY-ACCEPTED inline constructor form
+  // `let s: S1 = S1([In(..), ..], K)` VERBATIM at the IR level, so the emitted bytecode is sha256-identical
+  // to that inline form (which is itself byte-identical to solc). No new lowering path is introduced.
+  //
+  // Conservative by construction (the bar forbids over-acceptance): the lift fires ONLY when every one of
+  //  - the local's type is isStaticStructFixedLeafArray (the exact JETH465 family), and
+  //  - its initializer is a PURE aggregate literal (only literalInt/literalBool leaves, nested through
+  //    arrayLit/structNew) - a compile-time constant, so moving its evaluation to the capture site cannot
+  //    reorder any side effect nor re-observe any mutated read, and
+  //  - it is referenced EXACTLY ONCE across the whole remainder of the body (an over-count-safe generic
+  //    walk: any node whose `.local`/`.varName` equals the name, or a `localRead` of it), and
+  //  - that single reference is a WHOLE-value `memAggregate` (no wordOffset) sitting directly as a
+  //    `structNew` argument at a field position whose type is isStaticStructFixedLeafArray
+  // holds. Any escape (a second use, an `a[i]=..` write-after, an `a[0].a` read-after, `return a`, passing
+  // `a` to a call, an impure/order-dependent leaf) fails a clause and leaves the JETH465 reject UNCHANGED.
+  // Because the matched shape is one the JETH465 gate rejects TODAY, the lift only ever moves programs from
+  // reject to the inline form's bytes - it cannot change bytes of any program that compiles today.
+
+  private liftDeadAggCaptureBodies(contract: ContractIR): void {
+    for (const f of contract.functions) this.liftDeadAggCaptureFn(f);
+    if (contract.ctor) contract.ctor.body = this.inlineDeadAggCaptures(contract.ctor.body);
+    if (contract.receive) contract.receive.body = this.inlineDeadAggCaptures(contract.receive.body);
+    if (contract.fallback) contract.fallback.body = this.inlineDeadAggCaptures(contract.fallback.body);
+  }
+
+  private liftDeadAggCaptureFn(f: FunctionIR): void {
+    f.body = this.inlineDeadAggCaptures(f.body);
+    if (f.modifierWrap) f.modifierWrap = this.inlineDeadAggCaptures(f.modifierWrap);
+  }
+
+  /** Recurse into nested statement lists first (so a match inside a block/if/loop/try is folded at its own
+   *  level), then apply the sibling-level dead-capture fold to THIS statement list. Non-matching statements
+   *  pass through by identity so their lowering (and bytes) are unchanged. */
+  private inlineDeadAggCaptures(stmts: Stmt[]): Stmt[] {
+    const recursed = stmts.map((s) => this.recurseNestedStmtLists(s));
+    return this.foldDeadAggCaptureLevel(recursed);
+  }
+
+  private recurseNestedStmtLists(s: Stmt): Stmt {
+    switch (s.kind) {
+      case 'block':
+        return { ...s, body: this.inlineDeadAggCaptures(s.body) };
+      case 'if':
+        return {
+          ...s,
+          then: this.inlineDeadAggCaptures(s.then),
+          else: s.else ? this.inlineDeadAggCaptures(s.else) : s.else,
+        };
+      case 'while':
+      case 'doWhile':
+        return { ...s, body: this.inlineDeadAggCaptures(s.body) };
+      case 'for':
+        return { ...s, body: this.inlineDeadAggCaptures(s.body) };
+      case 'tryCatch':
+        return {
+          ...s,
+          tryBody: this.inlineDeadAggCaptures(s.tryBody),
+          catchBody: this.inlineDeadAggCaptures(s.catchBody),
+        };
+      case 'ctorOutlineBind':
+        return { ...s, body: this.inlineDeadAggCaptures(s.body) };
+      default:
+        return s;
+    }
+  }
+
+  private foldDeadAggCaptureLevel(stmts: Stmt[]): Stmt[] {
+    let out = stmts;
+    for (let i = 0; i < out.length; i++) {
+      const d = out[i]!;
+      if (d.kind !== 'localDecl' || !d.init) continue;
+      if (!(d.type.kind === 'array' && isStaticStructFixedLeafArray(d.type))) continue;
+      if (!this.isPureAggLiteral(d.init)) continue;
+      const rest = out.slice(i + 1);
+      if (this.countLocalRefs(rest, d.name) !== 1) continue; // >1 (or 0) -> escapes / unused: leave rejected
+      const cap = this.findDeadAggCapture(rest, d.name);
+      if (!cap) continue; // the lone reference is not a pointer-headed structNew capture: leave unchanged
+      cap.structNew.args[cap.argIndex] = d.init; // -> the inline-constructor form, verbatim
+      out = out.slice(0, i).concat(out.slice(i + 1)); // drop the now-dead decl
+      i--; // rescan from the substituted statement (handles a second bound var into the same ctor)
+    }
+    return out;
+  }
+
+  /** A COMPILE-TIME-CONSTANT aggregate literal: only literalInt/literalBool leaves, nested through
+   *  arrayLit / structNew. Any read (state/local/immutable/mapping), call, cast, binary, or ternary makes
+   *  the initializer order-dependent (moving its evaluation to the capture site could re-observe a mutated
+   *  value or reorder a side effect), so it disqualifies the fold. */
+  private isPureAggLiteral(e: Expr): boolean {
+    switch (e.kind) {
+      case 'literalInt':
+      case 'literalBool':
+        return true;
+      case 'arrayLit':
+        return e.elements.every((x) => this.isPureAggLiteral(x));
+      case 'structNew':
+        return e.args.every((x) => this.isPureAggLiteral(x));
+      default:
+        return false;
+    }
+  }
+
+  /** Over-count-safe count of references to a MEMORY LOCAL named `name` in an IR subtree. A generic walk
+   *  (robust to the full Stmt/Expr union) counts any node that names the local: `.local` (memAggregate /
+   *  memField / memElem / memDynStructValue / memDynField / memDynNestedField[Store]), `.varName` (a
+   *  `local` LValue whole-reassign, a `memArray` array-base; STATE-var `.varName` nodes over-count, which
+   *  only makes the guard MORE conservative), or a `localRead` of it. Under-counting is the only unsafe
+   *  direction (it could hide a live use); this never under-counts. */
+  private countLocalRefs(root: unknown, name: string): number {
+    let n = 0;
+    const walk = (x: unknown): void => {
+      if (x === null || typeof x !== 'object') return;
+      if (Array.isArray(x)) {
+        for (const c of x) walk(c);
+        return;
+      }
+      const o = x as Record<string, unknown>;
+      if (o.local === name || o.varName === name || (o.kind === 'localRead' && o.name === name)) n++;
+      for (const v of Object.values(o)) walk(v);
+    };
+    walk(root);
+    return n;
+  }
+
+  /** Find THE unique `structNew` capture of a whole-value memory local `name` into a pointer-headed
+   *  static-struct fixed-array field (the JETH465 family). Only a bare `memAggregate` (no wordOffset -
+   *  the WHOLE aggregate) counts; a nested field read, an array-base use, a non-pointer-headed field, or a
+   *  non-structNew position returns null so the fold does not fire. Called only when the local has exactly
+   *  one reference in `stmts`, so a returned capture IS that lone reference. */
+  private findDeadAggCapture(
+    stmts: Stmt[],
+    name: string,
+  ): { structNew: Expr & { kind: 'structNew' }; argIndex: number } | null {
+    let found: { structNew: Expr & { kind: 'structNew' }; argIndex: number } | null = null;
+    const walk = (x: unknown): void => {
+      if (x === null || typeof x !== 'object') return;
+      if (Array.isArray(x)) {
+        for (const c of x) walk(c);
+        return;
+      }
+      const o = x as Record<string, unknown>;
+      if (o.kind === 'structNew' && Array.isArray((o as { args?: unknown }).args)) {
+        const sn = o as unknown as Expr & { kind: 'structNew' };
+        sn.args.forEach((arg, k) => {
+          const field = sn.fields[k];
+          if (
+            arg &&
+            (arg as { kind?: string }).kind === 'memAggregate' &&
+            (arg as { local?: string }).local === name &&
+            (arg as { wordOffset?: number }).wordOffset === undefined &&
+            field !== undefined &&
+            field.type.kind === 'array' &&
+            isStaticStructFixedLeafArray(field.type)
+          ) {
+            found = { structNew: sn, argIndex: k };
+          }
+        });
+      }
+      for (const v of Object.values(o)) walk(v);
+    };
+    walk(stmts);
+    return found;
   }
 
   /** Phase 2d (BEACON contract): the fully-synthesized creation code for a `@beacon class`, byte-identical
