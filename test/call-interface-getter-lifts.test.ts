@@ -331,7 +331,9 @@ describe('P1-4: getter var overriding/implementing a base virtual / interface fu
       [['set(uint256)', W(7)], ['x()', '']],
     );
     await eqCalls(
-      `abstract class A { @virtual x(): External<u256> { return 111n; } }
+      // a concrete-body base: it must INFER view (reads env) to match its `external view` mirror - a
+      // literal-returning body infers pure, and a view getter over a pure base loosens mutability (reject).
+      `abstract class A { @virtual x(): External<u256> { return block.number; } }
        class C extends A { @override x: Visible<u256>; set(v: u256): External<void> { this.x = v; } }`,
       `abstract contract A { function x() external view virtual returns (uint256) { return 111; } }
        contract C is A { uint256 public override x; function set(uint256 v) external { x = v; } }`,
@@ -436,7 +438,7 @@ describe('P1-4: getter var overriding/implementing a base virtual / interface fu
     );
     // mixed base virtual + interface, complete @override(B, I1)
     await eqCalls(
-      `abstract class B { @virtual x(): External<u256> { return 1n; } } interface I1 { x(): u256; }
+      `abstract class B { @virtual x(): External<u256> { return block.number; } } interface I1 { x(): u256; }
        class C extends B, I1 { @override(B, I1) x: Visible<u256>; set(v: u256): External<void> { this.x = v; } }`,
       `abstract contract B { function x() external view virtual returns (uint256) { return 1; } } interface I1 { function x() external view returns (uint256); }
        contract C is B, I1 { uint256 public override(B, I1) x; function set(uint256 v) external { x = v; } }`,

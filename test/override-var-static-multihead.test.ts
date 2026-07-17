@@ -156,17 +156,25 @@ describe('LIFT 1 residuals: Visible constant / immutable as the @override getter
     // immutable getter is VIEW: a pure iface head stays rejected ("pure to view"). The head DECLARES its
     // mutability, so it is final when the getter-var override is validated - this cell is the live one.
     expect(codesOf(`interface A { x(): Pure<u256>; } class C extends A { @override static x: Visible<u256>; constructor() { this.x = 7n; } }`)).toContain('JETH433');
-    // The CONTRACT-base twin of the cell above used to be spelled `@virtual get g(): Pure<u256> { ... }`,
-    // whose DECLARED marker made the check fire. View<T>/Pure<T> are now interface-only (JETH498), so a
-    // pure contract head can only come from an INFERRED body - and that lands in a PRE-EXISTING hole:
-    // resolveGetterOverrides runs at collection time (base.mutability still the provisional nonpayable),
-    // and a base whose only override is a getter VAR contributes no deployed function, so it is never
-    // inferred. JETH therefore ACCEPTS what solc rejects ("Overriding public state variable changes state
-    // mutability from \"pure\" to \"view\""). NOT introduced by the ban - the External<T> spelling below is
-    // accepted identically on the pre-ban compiler; the ban only removed the alternative spelling that
-    // happened to reject. Tracked separately; asserted here as the CURRENT behaviour so the hole is
-    // visible and this file stays honest rather than green-by-omission.
-    expect(codesOf(`abstract class A2 { @virtual get g(): External<u256> { return 1n; } } class C extends A2 { @override static g: Visible<u256>; constructor() { this.g = 5n; } }`)).toEqual([]);
+    // The CONTRACT-base twin of the cell above: the pure head now comes from an INFERRED body (View<T>/
+    // Pure<T> are interface-only, JETH498). This was a hole - resolveGetterOverrides runs at collection time
+    // (base.mutability still the provisional nonpayable), and a base whose only override is a getter VAR is
+    // dropped from dispatch so it was never inferred. CLOSED: the base's transitive effects are now computed
+    // on the side (the base-effects pass in analyzeContract, byte-neutral) and the pure->view loosening is
+    // rejected POST-fixpoint (getterVarBaseMutPairs). solc: "Overriding public state variable changes state
+    // mutability from \"pure\" to \"view\"". An INFERRED-VIEW base (a body that reads storage/env) stays
+    // accepted (view->view) - proven by the view-* cells elsewhere and the byte-identity sweep.
+    expect(codesOf(`abstract class A2 { @virtual get g(): External<u256> { return 1n; } } class C extends A2 { @override static g: Visible<u256>; constructor() { this.g = 5n; } }`)).toContain('JETH433');
+    // an INFERRED-VIEW base (reads storage) is view->view: ACCEPTED (must not over-reject; the closure above
+    // must fire ONLY on a pure base, not on every getter-var-over-contract-base override).
+    expect(accepts(`abstract class A2 { n: u256; @virtual get g(): External<u256> { return this.n; } } class C extends A2 { @override static g: Visible<u256>; constructor() { this.g = 5n; } }`)).toBe(true);
+    // TRANSITIVITY: a pure-looking base body that CALLS a storage-reading helper is VIEW, not pure -> ACCEPT;
+    // one that only calls a pure helper is PURE -> REJECT. The check must see the base's transitive effects.
+    expect(accepts(`abstract class A2 { m: u256; h(): u256 { return this.m; } @virtual get g(): External<u256> { return this.h(); } } class C extends A2 { @override static g: Visible<u256>; constructor() { this.g = 5n; } }`)).toBe(true);
+    expect(codesOf(`abstract class A2 { h(): u256 { return 2n; } @virtual get g(): External<u256> { return this.h(); } } class C extends A2 { @override static g: Visible<u256>; constructor() { this.g = 5n; } }`)).toContain('JETH433');
+    // a CONSTANT getter counts as PURE, so pure-base -> pure-getter is NOT a loosening: ACCEPT (only a
+    // payable base rejects for a constant).
+    expect(accepts(`abstract class A2 { @virtual get g(): External<u256> { return 1n; } } class C extends A2 { @override static g: Visible<u256> = 7n; }`)).toBe(true);
     // a payable head rejects even for a constant ("payable to pure")
     expect(codesOf(`interface A { x(): Payable<u256>; } class C extends A { @override static x: Visible<u256> = 7n; }`)).toContain('JETH433');
     // const return-type mismatch vs the iface head
@@ -208,11 +216,18 @@ describe('LIFT 1 residuals: Visible constant / immutable as the @override getter
   });
 });
 
+// NOTE on base bodies: a base get that reads the environment (`return block.number`) INFERS view, matching
+// the `external view virtual` mirror. These bases are DROPPED (a public var override is terminal), so the
+// body never runs and its value is irrelevant - what matters is the inferred mutability. A body that returns
+// only a literal INFERS pure (JETH picks the tightest mutability), and an IMMUTABLE/state getter (view) over
+// a pure base is a pure->view loosening solc rejects (getterVarBaseMutPairs). A view base keeps view->view
+// legal. The CONSTANT-getter cell below deliberately keeps a pure-literal base: a constant getter counts as
+// pure, so pure->pure is legal and must accept.
 describe('LIFT 2 residuals: getter var / static unifying a get declared by two base contracts', () => {
   it('var + @override(A2, B2) over two IMPLEMENTED base gets (pre-fix: JETH430+JETH044)', async () => {
     await eqCalls(
-      `abstract class A2 { @virtual get g(): External<u256> { return 1n; } }
-       abstract class B2 { @virtual get g(): External<u256> { return 2n; } }
+      `abstract class A2 { @virtual get g(): External<u256> { return block.number; } }
+       abstract class B2 { @virtual get g(): External<u256> { return block.number; } }
        class C extends A2, B2 { @override(A2, B2) g: Visible<u256>; set(v: u256): External<void> { this.g = v; } }`,
       `abstract contract A2 { function g() external view virtual returns(uint256) { return 1; } }
        abstract contract B2 { function g() external view virtual returns(uint256) { return 2; } }
@@ -244,8 +259,8 @@ describe('LIFT 2 residuals: getter var / static unifying a get declared by two b
       [['g()', '']],
     );
     await eqCalls(
-      `abstract class A2 { @virtual get g(): External<u256> { return 1n; } }
-       abstract class B2 { @virtual get g(): External<u256> { return 2n; } }
+      `abstract class A2 { @virtual get g(): External<u256> { return block.number; } }
+       abstract class B2 { @virtual get g(): External<u256> { return block.number; } }
        class C extends A2, B2 { @override(A2, B2) static g: Visible<u256>; constructor() { this.g = 8104n; } }`,
       `abstract contract A2 { function g() external view virtual returns(uint256) { return 1; } }
        abstract contract B2 { function g() external view virtual returns(uint256) { return 2; } }
@@ -256,9 +271,9 @@ describe('LIFT 2 residuals: getter var / static unifying a get declared by two b
 
   it('deep diamond: var @override(M1, M2) over middles that override a common grandbase (pre-fix: JETH433 head-maximality)', async () => {
     await eqCalls(
-      `abstract class A { @virtual get g(): External<u256> { return 1n; } }
-       abstract class M1 extends A { @virtual @override get g(): External<u256> { return 2n; } }
-       abstract class M2 extends A { @virtual @override get g(): External<u256> { return 3n; } }
+      `abstract class A { @virtual get g(): External<u256> { return block.number; } }
+       abstract class M1 extends A { @virtual @override get g(): External<u256> { return block.number; } }
+       abstract class M2 extends A { @virtual @override get g(): External<u256> { return block.number; } }
        class C extends M1, M2 { @override(M1, M2) g: Visible<u256>; set(v: u256): External<void> { this.g = v; } }`,
       `abstract contract A { function g() external view virtual returns(uint256) { return 1; } }
        abstract contract M1 is A { function g() external view virtual override returns(uint256) { return 2; } }
@@ -268,8 +283,8 @@ describe('LIFT 2 residuals: getter var / static unifying a get declared by two b
     );
     // un-overridden sibling path: heads are {B, A} (A stays a head via K) - list must name BOTH
     await eqCalls(
-      `abstract class A { @virtual get g(): External<u256> { return 1n; } }
-       abstract class B extends A { @virtual @override get g(): External<u256> { return 2n; } }
+      `abstract class A { @virtual get g(): External<u256> { return block.number; } }
+       abstract class B extends A { @virtual @override get g(): External<u256> { return block.number; } }
        abstract class K extends A { }
        class C extends B, K { @override(B, A) g: Visible<u256>; set(v: u256): External<void> { this.g = v; } }`,
       `abstract contract A { function g() external view virtual returns(uint256) { return 1; } }
@@ -282,8 +297,8 @@ describe('LIFT 2 residuals: getter var / static unifying a get declared by two b
 
   it('var at a MIDDLE + deployed leaf; middle super-caller body dropped cleanly', async () => {
     await eqCalls(
-      `abstract class A2 { @virtual get g(): External<u256> { return 1n; } }
-       abstract class B2 { @virtual get g(): External<u256> { return 2n; } }
+      `abstract class A2 { @virtual get g(): External<u256> { return block.number; } }
+       abstract class B2 { @virtual get g(): External<u256> { return block.number; } }
        abstract class M extends A2, B2 { @override(A2, B2) g: Visible<u256>; }
        class C extends M { set(v: u256): External<void> { this.g = v; } }`,
       `abstract contract A2 { function g() external view virtual returns(uint256) { return 1; } }
@@ -293,8 +308,8 @@ describe('LIFT 2 residuals: getter var / static unifying a get declared by two b
       [['g()', ''], ['set(uint256)', W(0x8107)], ['g()', '']],
     );
     await eqCalls(
-      `abstract class A2 { @virtual x(): External<u256> { return 1n; } }
-       abstract class M extends A2 { @virtual @override x(): External<u256> { return 2n; } }
+      `abstract class A2 { @virtual x(): External<u256> { return block.number; } }
+       abstract class M extends A2 { @virtual @override x(): External<u256> { return block.number; } }
        class C extends M { @override x: Visible<u256>; set(v: u256): External<void> { this.x = v; } }`,
       `abstract contract A2 { function x() external view virtual returns(uint256) { return 1; } }
        abstract contract M is A2 { function x() external view virtual override returns(uint256) { return 2; } }
@@ -305,8 +320,8 @@ describe('LIFT 2 residuals: getter var / static unifying a get declared by two b
 
   it('var override coexists with a same-name base OVERLOAD (dispatch stays correct)', async () => {
     await eqCalls(
-      `abstract class A2 { @virtual get x(): External<u256> { return 1n; } get x2(a: u256): External<u256> { return a * 3n; } }
-       abstract class B2 { @virtual get x(): External<u256> { return 2n; } }
+      `abstract class A2 { @virtual get x(): External<u256> { return block.number; } get x2(a: u256): External<u256> { return a * 3n; } }
+       abstract class B2 { @virtual get x(): External<u256> { return block.number; } }
        class C extends A2, B2 { @override(A2, B2) x: Visible<u256>; set(v: u256): External<void> { this.x = v; } }`,
       `abstract contract A2 { function x() external view virtual returns(uint256) { return 1; } function x2(uint256 a) external view returns(uint256) { return a * 3; } }
        abstract contract B2 { function x() external view virtual returns(uint256) { return 2; } }
