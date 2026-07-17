@@ -8,8 +8,12 @@
 // (write to storage or emit an event)" when the function writes nothing at all and merely calls through
 // a pointer that some unrelated writer shares a signature with.
 //
-// This file pins the message CONTENT, not the accept/reject sets: the reject, the diagnostic CODE and the
-// emitted bytecode are all unchanged by this work (the fixpoint now keeps provenance it used to discard).
+// This file pins the message CONTENT, not the accept/reject sets: for a GENUINELY-untrackable pointer
+// source the reject, the diagnostic CODE and the emitted bytecode are all unchanged (the fixpoint keeps
+// provenance it used to discard). The FUNCREF-PURE lift narrowed the untrackable SET - a non-escaping
+// struct LITERAL field is now tracked per-variable (`let d: Fd = { f: this.dbl }; d.f(..)` COMPILES) - so
+// every poisoned example below reaches its pointer through a source that stays untrackable: an ESCAPING
+// (aliased/passed/returned) struct, a param, a storage round-trip, or a call result.
 //
 // Of the gates that validate a DECLARED mutability (JETH054/055/056/164), JETH054 and JETH056 are
 // unreachable in native mode - nothing declares `view` (the decorators are JETH481, View<T>/Pure<T> in a
@@ -37,11 +41,16 @@ const mut = (src: string): Record<string, string> => {
 // the WRITER, which is what poisons the whole (u256)->u256 pointer group.
 const WRITER_AND_PURE = `linc(x: u256): u256 { this.n = x; return x; }
   dbl(x: u256): u256 { return x*2n; }`;
+// FUNCREF-PURE lift: a NON-escaping struct LITERAL local now has its funcref field TRACKED per-variable
+// (a `let d: Fd = { f: this.dbl }; d.f(..)` proves d.f == dbl and COMPILES - see the lift test at the
+// bottom). To exercise the SIGNATURE-UNION message, `b`'s struct must therefore reach its pointer through
+// a genuinely-untrackable source: here the struct is ALIASED (`let e: Fd = d`), which escapes it, so the
+// per-field tracking drops back to the signature union - and that union contains the address-taken writer.
 const POISONED = `type Fd = { f: (x: u256) => u256 };
 class C { n: u256;
   ${WRITER_AND_PURE}
   ord(): External<void> { let d: Fd = { f: this.linc }; d.f(1n); }
-  get b(): External<u256> { let d: Fd = { f: this.dbl }; return d.f(2n); } }`;
+  get b(): External<u256> { let d: Fd = { f: this.dbl }; let e: Fd = d; return e.f(2n); } }`;
 
 describe('the funcref signature-union reject explains itself truthfully', () => {
   it('a POISONED accessor is not told it modifies state - it is told WHY, and by whom', () => {
@@ -76,7 +85,7 @@ describe('the funcref signature-union reject explains itself truthfully', () => 
       class C { n: u256;
       ${WRITER_AND_PURE}
       ord(): External<void> { let d: Fd = { f: this.linc }; d.f(1n); }`;
-    // a struct field
+    // an ESCAPING (aliased) struct field - a non-escaping struct literal is now tracked, so POISONED aliases it
     expect(msg(POISONED)).toContain('cannot be PROVEN read-only');
     // a storage round-trip
     expect(
@@ -134,5 +143,20 @@ describe('the funcref signature-union reject explains itself truthfully', () => 
         class C { dbl(x: u256): u256 { return x*2n; }
         get b(): External<u256> { let d: Fd = { f: this.dbl }; return d.f(2n); } }`).b,
     ).toBe('pure');
+  });
+
+  // ---- FUNCREF-PURE lift: a NON-ESCAPING struct-literal funcref field is tracked per-variable ----------
+  it('a NON-escaping struct-literal funcref field is now TRACKED even WITH the writer address-taken', () => {
+    // Same shape as POISONED but WITHOUT the alias: `b` reaches only the pure `dbl` through a non-escaping
+    // struct literal, so the per-field tracking proves the exact target and `b` is pure - the writer `linc`
+    // (address-taken in `ord`) can never reach `b`. This is the lift: at base this rejected on the union.
+    expect(mut(`type Fd = { f: (x: u256) => u256 };
+      class C { n: u256;
+      ${WRITER_AND_PURE}
+      ord(): External<void> { let d: Fd = { f: this.linc }; d.f(1n); }
+      get b(): External<u256> { let d: Fd = { f: this.dbl }; return d.f(2n); } }`).b).toBe('pure');
+    // The ESCAPING twin (POISONED) still rejects on the union - so the accept is driven by NON-escape, not
+    // by ignoring the writer.
+    expect(msg(POISONED)).toContain('cannot be PROVEN read-only');
   });
 });

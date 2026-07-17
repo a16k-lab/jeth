@@ -189,6 +189,12 @@ function funcrefPoisonWhy(via: { via: 'sig'; target: string; sig?: string; throu
   );
 }
 
+/** W5D-2 / FUNCREF-PURE: the possible funcref TARGETS of a checked funcref-typed value, as a union of
+ *  direct target function KEYS (`targets`), referenced funcref-`let` VARIABLE names resolved at body end
+ *  (`vars`), and non-escaping struct-literal funcref FIELD references keyed by local name + word offset
+ *  (`structFields`). An empty union is the exact-empty set (an uninitialized pointer). */
+type PtrValueSources = { targets: Set<string>; vars: Set<string>; structFields: Set<string> };
+
 /** Multi-file: per-file name visibility + the bundle segment map (see src/imports.ts BundleResult). */
 export interface ImportScope {
   segments: { file: string; startLine: number; lineCount: number }[];
@@ -550,9 +556,24 @@ export class Analyzer {
   // name-keyed and shadowing MERGES, an over-approximation that is only sound if every binding of the
   // name is a tracked `let`). This only narrows the MUTABILITY validation - dispatch codegen and
   // emission reachability stay signature-based, so bytecode behavior is unchanged.
-  private currentPtrVarSources = new Map<string, { unknown: boolean; targets: Set<string>; vars: Set<string> }>();
+  private currentPtrVarSources = new Map<string, { unknown: boolean; targets: Set<string>; vars: Set<string>; structFields: Set<string> }>();
   private currentPtrVarPoisoned = new Set<string>();
-  private currentPtrVarCalls: { sigKey: string; src: { targets: Set<string>; vars: Set<string> } }[] = [];
+  private currentPtrVarCalls: { sigKey: string; src: PtrValueSources }[] = [];
+  // FUNCREF-PURE (extends W5D-2 per-variable tracking to a funcref FIELD of a NON-ESCAPING local STRUCT
+  // LITERAL). A `let z: Fd = { f: this.d }` struct local is a candidate iff its initializer is a struct
+  // LITERAL (structNew) and every funcref field has a TRACKABLE source; currentStructVarFields then records,
+  // per funcref field WORD OFFSET, that field's funcrefValueSources. A call z.f(v) defers a per-(struct,
+  // offset) reference resolved at body end (funcrefValueSources -> resolveCurrentPtrVarCalls), narrowing the
+  // funcref dispatcher set to the field's EXACT provable targets - the same discrimination a tracked funcref
+  // `let` already gets, so a declared-pure (`static`) caller stops over-rejecting on the per-signature union.
+  // SOUNDNESS: the target set must be COMPLETE, so the name is POISONED (dropping every field read back to the
+  // per-SIGNATURE union) on ANY escape that could re-point a funcref field to a state-writer: the struct read
+  // as a whole value (aliased/passed/returned/stored - poisoned at the value-use site above), or ANY write
+  // rooted at the struct (z = ..., z.f = ..., z.a[i] = ... - poisoned at checkLValue). A non-literal source
+  // (param / storage / call result / alias of another struct) is never a candidate at all. This only NARROWS
+  // the mutability validation; dispatch codegen + emission reachability stay signature-based (unchanged).
+  private currentStructVarFields = new Map<string, Map<number, PtrValueSources>>();
+  private currentStructVarPoisoned = new Set<string>();
   // One-shot flag: set by checkLocalDecl's generic value path IMMEDIATELY before declareLocal for a
   // funcref-typed `let`, telling declareLocal NOT to poison that binding (it is the tracked path).
   private ptrTrackNextDecl = false;
@@ -6457,6 +6478,8 @@ export class Analyzer {
     this.currentPtrVarSources = new Map();
     this.currentPtrVarPoisoned = new Set();
     this.currentPtrVarCalls = [];
+    this.currentStructVarFields = new Map();
+    this.currentStructVarPoisoned = new Set();
     this.memArrayLocals.clear();
     this.memAggregateLocals.clear();
     this.memDynLocals.clear();
@@ -6788,6 +6811,8 @@ export class Analyzer {
     this.currentPtrVarSources = new Map();
     this.currentPtrVarPoisoned = new Set();
     this.currentPtrVarCalls = [];
+    this.currentStructVarFields = new Map();
+    this.currentStructVarPoisoned = new Set();
     this.memArrayLocals.clear();
     this.memAggregateLocals.clear();
     this.memDynLocals.clear();
@@ -7291,6 +7316,8 @@ export class Analyzer {
     this.currentPtrVarSources = new Map();
     this.currentPtrVarPoisoned = new Set();
     this.currentPtrVarCalls = [];
+    this.currentStructVarFields = new Map();
+    this.currentStructVarPoisoned = new Set();
     this.currentInConstructor = true;
     // P0-23: base-ARG expressions (heritage / super) evaluate in the DEPLOYED contract's scope (a
     // heritage clause names a base, but the arguments live in the derived contract's specifier scope and
@@ -9427,6 +9454,8 @@ export class Analyzer {
     this.currentPtrVarSources = new Map();
     this.currentPtrVarPoisoned = new Set();
     this.currentPtrVarCalls = [];
+    this.currentStructVarFields = new Map();
+    this.currentStructVarPoisoned = new Set();
     this.memArrayLocals.clear();
     this.memAggregateLocals.clear();
     this.memDynLocals.clear();
@@ -14959,6 +14988,7 @@ export class Analyzer {
       }
       this.declareLocal(decl.name.text, declared);
       this.memAggregateLocals.set(decl.name.text, declared);
+      this.recordStructVarFuncrefFields(decl.name.text, declared, e);
       out.push({ kind: 'localDecl', name: decl.name.text, type: declared, init: e });
       return;
     }
@@ -15431,7 +15461,7 @@ export class Analyzer {
     if (declared.kind === 'funcref') {
       this.ptrTrackNextDecl = true;
       this.declareLocal(decl.name.text, declared);
-      this.mergePtrVarSources(decl.name.text, init ? this.funcrefValueSources(init) : { targets: new Set(), vars: new Set() });
+      this.mergePtrVarSources(decl.name.text, init ? this.funcrefValueSources(init) : { targets: new Set(), vars: new Set(), structFields: new Set() });
     } else {
       this.declareLocal(decl.name.text, declared);
     }
@@ -16440,15 +16470,25 @@ export class Analyzer {
   }
 
   /** W5D-2: the possible pointer TARGETS of a checked funcref-typed Expr, as {direct target keys,
-   *  referenced pointer-variable names}, or null when any part is untrackable (the caller then uses
-   *  the per-signature union). Trackable: a direct mint (`this.f` -> funcRef), a plain read of a
-   *  pointer VARIABLE (localRead; whether that variable is itself exact is decided at resolution
-   *  time), and a ternary whose both arms are trackable. Analyzed on the CHECKED IR, so any surface
-   *  syntax that lowers to another kind (storage read, call result, array element, tuple component,
-   *  abi.decode, ...) is automatically null - conservative by construction. */
-  private funcrefValueSources(e: Expr): { targets: Set<string>; vars: Set<string> } | null {
-    if (e.kind === 'funcRef') return { targets: new Set([e.fn]), vars: new Set() };
-    if (e.kind === 'localRead' && e.type.kind === 'funcref') return { targets: new Set(), vars: new Set([e.name]) };
+   *  referenced pointer-variable names, non-escaping struct-literal funcref FIELD references}, or null
+   *  when any part is untrackable (the caller then uses the per-signature union). Trackable: a direct
+   *  mint (`this.f` -> funcRef), a plain read of a pointer VARIABLE (localRead; whether that variable is
+   *  itself exact is decided at resolution time), a funcref FIELD read of a TRACKED non-escaping struct
+   *  local (memField over a candidate; whether that struct escaped is decided at resolution time), and a
+   *  ternary whose both arms are trackable. Analyzed on the CHECKED IR, so any surface syntax that lowers
+   *  to another kind (storage read, call result, non-candidate struct field, tuple component, abi.decode,
+   *  ...) is automatically null - conservative by construction. */
+  private funcrefValueSources(e: Expr): PtrValueSources | null {
+    if (e.kind === 'funcRef') return { targets: new Set([e.fn]), vars: new Set(), structFields: new Set() };
+    if (e.kind === 'localRead' && e.type.kind === 'funcref')
+      return { targets: new Set(), vars: new Set([e.name]), structFields: new Set() };
+    // FUNCREF-PURE: a funcref FIELD read of a memory-struct local (`z.f`). If `z` is a tracked
+    // non-escaping struct-literal candidate, defer a per-(struct, offset) reference - resolved at body
+    // end, falling back to the per-signature union if the struct was poisoned (escaped) by then. A
+    // non-candidate struct (a param/storage/call/alias source, or a dynamic-field struct) is not in the
+    // map, so this returns null and the caller keeps the conservative per-signature union.
+    if (e.kind === 'memField' && e.type.kind === 'funcref' && this.currentStructVarFields.has(e.local))
+      return { targets: new Set(), vars: new Set(), structFields: new Set([this.structFieldKey(e.local, e.wordOffset)]) };
     if (e.kind === 'ternary') {
       const a = this.funcrefValueSources(e.then);
       const b = this.funcrefValueSources(e.else);
@@ -16456,18 +16496,70 @@ export class Analyzer {
       return {
         targets: new Set([...a.targets, ...b.targets]),
         vars: new Set([...a.vars, ...b.vars]),
+        structFields: new Set([...a.structFields, ...b.structFields]),
       };
     }
     return null;
   }
 
+  /** FUNCREF-PURE: the composite key for a struct-local funcref FIELD reference (a `` separator
+   *  cannot appear in an identifier, so `local` and the numeric word `offset` never collide). */
+  private structFieldKey(local: string, offset: number): string {
+    return `${local}${offset}`;
+  }
+
+  /** FUNCREF-PURE: register a NON-ESCAPING local struct as a candidate for per-field funcref-target
+   *  tracking. ONLY a struct-LITERAL initializer (`structNew`) qualifies; a struct built from any other
+   *  source (an ALIAS of another struct local -> `memAggregate`, a storage/calldata struct, a call
+   *  result, a ternary) is never registered, so its funcref-field reads keep the conservative
+   *  per-signature union (the untrackable-source keep-reject). If ANY funcref field's source is itself
+   *  untrackable, the name is POISONED so a same-named OUTER candidate reached through shadowing also
+   *  falls back. Shadowing MERGES field sources per word offset (a monotone over-approximation: it only
+   *  ADDS possible targets, so it can never hide a state-writer). Codegen is untouched (this only feeds
+   *  the mutability validation). */
+  private recordStructVarFuncrefFields(name: string, st: JethType & { kind: 'struct' }, init: Expr): void {
+    if (!st.fields.some((f) => f.type.kind === 'funcref')) return; // no funcref field: nothing to track
+    if (init.kind !== 'structNew') {
+      // a non-literal source: never a candidate. Poison in case an outer same-named candidate exists.
+      this.currentStructVarPoisoned.add(name);
+      return;
+    }
+    const pending = new Map<number, PtrValueSources>();
+    for (let i = 0; i < init.fields.length; i++) {
+      const f = init.fields[i]!;
+      if (f.type.kind !== 'funcref') continue;
+      const src = this.funcrefValueSources(init.args[i]!);
+      const off = this.memFieldOffset(st, f.name)?.wordOffset;
+      if (!src || off === undefined) {
+        this.currentStructVarPoisoned.add(name); // an untrackable field source: drop to the signature union
+        return;
+      }
+      pending.set(off, src);
+    }
+    let fields = this.currentStructVarFields.get(name);
+    if (!fields) {
+      fields = new Map();
+      this.currentStructVarFields.set(name, fields);
+    }
+    for (const [off, src] of pending) {
+      const existing = fields.get(off);
+      if (!existing) {
+        fields.set(off, { targets: new Set(src.targets), vars: new Set(src.vars), structFields: new Set(src.structFields) });
+      } else {
+        for (const t of src.targets) existing.targets.add(t);
+        for (const v of src.vars) existing.vars.add(v);
+        for (const s of src.structFields) existing.structFields.add(s);
+      }
+    }
+  }
+
   /** W5D-2: merge a source record into a pointer variable's flow-insensitive union (creating the entry
    *  on first sight). `src = null` marks the variable UNKNOWN - every call through it (and through any
    *  variable that copies it) falls back to the per-signature effect union. */
-  private mergePtrVarSources(name: string, src: { targets: Set<string>; vars: Set<string> } | null): void {
+  private mergePtrVarSources(name: string, src: PtrValueSources | null): void {
     let e = this.currentPtrVarSources.get(name);
     if (!e) {
-      e = { unknown: false, targets: new Set(), vars: new Set() };
+      e = { unknown: false, targets: new Set(), vars: new Set(), structFields: new Set() };
       this.currentPtrVarSources.set(name, e);
     }
     if (!src) {
@@ -16476,30 +16568,49 @@ export class Analyzer {
     }
     for (const t of src.targets) e.targets.add(t);
     for (const v of src.vars) e.vars.add(v);
+    for (const sf of src.structFields) e.structFields.add(sf);
   }
 
-  /** W5D-2: resolve the deferred per-variable pointer-call records of the just-checked body. Each
-   *  record whose transitive source closure is fully known contributes its exact target KEYS (returned
-   *  for the purity fixpoint); any record reaching an unknown/poisoned/undeclared variable falls back
-   *  to the per-signature union (added to currentPtrCallSigs). Cycles among copied variables resolve
-   *  to the union over the cycle (a visited set; a cycle member contributes its accumulated targets). */
+  /** W5D-2 / FUNCREF-PURE: resolve the deferred per-variable pointer-call records of the just-checked
+   *  body. Each record whose transitive source closure is fully known contributes its exact target KEYS
+   *  (returned for the purity fixpoint); any record reaching an unknown/poisoned/undeclared variable, or
+   *  a POISONED (escaped) / unregistered struct-field reference, falls back to the per-signature union
+   *  (added to currentPtrCallSigs). Cycles among copied variables and struct-field references resolve to
+   *  the union over the cycle (visited sets; a cycle member contributes its accumulated targets). */
   private resolveCurrentPtrVarCalls(): Set<string> {
     const exact = new Set<string>();
-    const resolveVars = (vars: Set<string>, acc: Set<string>, visited: Set<string>): boolean => {
-      for (const v of vars) {
-        if (visited.has(v)) continue;
-        visited.add(v);
+    const resolveSrc = (
+      src: PtrValueSources,
+      acc: Set<string>,
+      visitedVars: Set<string>,
+      visitedFields: Set<string>,
+    ): boolean => {
+      for (const t of src.targets) acc.add(t);
+      for (const v of src.vars) {
+        if (visitedVars.has(v)) continue;
+        visitedVars.add(v);
         if (this.currentPtrVarPoisoned.has(v)) return false;
         const entry = this.currentPtrVarSources.get(v);
         if (!entry || entry.unknown) return false;
-        for (const t of entry.targets) acc.add(t);
-        if (!resolveVars(entry.vars, acc, visited)) return false;
+        if (!resolveSrc(entry, acc, visitedVars, visitedFields)) return false;
+      }
+      for (const sf of src.structFields) {
+        if (visitedFields.has(sf)) continue;
+        visitedFields.add(sf);
+        // The struct escaped (aliased/passed/returned/stored) or was written after declaration: its
+        // funcref field could now point at any same-signature target, so use the conservative union.
+        const sepAt = sf.indexOf('');
+        const local = sf.slice(0, sepAt);
+        if (this.currentStructVarPoisoned.has(local)) return false;
+        const fsrc = this.currentStructVarFields.get(local)?.get(Number(sf.slice(sepAt + 1)));
+        if (!fsrc) return false;
+        if (!resolveSrc(fsrc, acc, visitedVars, visitedFields)) return false;
       }
       return true;
     };
     for (const call of this.currentPtrVarCalls) {
-      const acc = new Set<string>(call.src.targets);
-      if (resolveVars(call.src.vars, acc, new Set())) {
+      const acc = new Set<string>();
+      if (resolveSrc(call.src, acc, new Set(), new Set())) {
         for (const t of acc) exact.add(t);
       } else {
         this.currentPtrCallSigs.add(call.sigKey);
@@ -16708,11 +16819,15 @@ export class Analyzer {
     const savedPtrVarSources = this.currentPtrVarSources;
     const savedPtrVarPoisoned = this.currentPtrVarPoisoned;
     const savedPtrVarCalls = this.currentPtrVarCalls;
+    const savedStructVarFields = this.currentStructVarFields;
+    const savedStructVarPoisoned = this.currentStructVarPoisoned;
     this.currentCallees = new Set();
     this.currentPtrCallSigs = new Set();
     this.currentPtrVarSources = new Map();
     this.currentPtrVarPoisoned = new Set();
     this.currentPtrVarCalls = [];
+    this.currentStructVarFields = new Map();
+    this.currentStructVarPoisoned = new Set();
     let ok = true;
     const argNodes = this.resolveCallArgs(node, c, c.name);
     if (!argNodes) ok = false;
@@ -16735,6 +16850,8 @@ export class Analyzer {
     this.currentPtrVarSources = savedPtrVarSources;
     this.currentPtrVarPoisoned = savedPtrVarPoisoned;
     this.currentPtrVarCalls = savedPtrVarCalls;
+    this.currentStructVarFields = savedStructVarFields;
+    this.currentStructVarPoisoned = savedStructVarPoisoned;
     return ok;
   }
 
@@ -16754,11 +16871,15 @@ export class Analyzer {
     const savedPtrVarSources = this.currentPtrVarSources;
     const savedPtrVarPoisoned = this.currentPtrVarPoisoned;
     const savedPtrVarCalls = this.currentPtrVarCalls;
+    const savedStructVarFields = this.currentStructVarFields;
+    const savedStructVarPoisoned = this.currentStructVarPoisoned;
     this.currentCallees = new Set();
     this.currentPtrCallSigs = new Set();
     this.currentPtrVarSources = new Map();
     this.currentPtrVarPoisoned = new Set();
     this.currentPtrVarCalls = [];
+    this.currentStructVarFields = new Map();
+    this.currentStructVarPoisoned = new Set();
     let ok = true;
     for (let i = 0; i < c.params.length; i++) {
       const pt = c.params[i]!.type;
@@ -16786,6 +16907,8 @@ export class Analyzer {
     this.currentPtrVarSources = savedPtrVarSources;
     this.currentPtrVarPoisoned = savedPtrVarPoisoned;
     this.currentPtrVarCalls = savedPtrVarCalls;
+    this.currentStructVarFields = savedStructVarFields;
+    this.currentStructVarPoisoned = savedStructVarPoisoned;
     return ok;
   }
 
@@ -17067,11 +17190,15 @@ export class Analyzer {
     const savedPtrVarSources = this.currentPtrVarSources;
     const savedPtrVarPoisoned = this.currentPtrVarPoisoned;
     const savedPtrVarCalls = this.currentPtrVarCalls;
+    const savedStructVarFields = this.currentStructVarFields;
+    const savedStructVarPoisoned = this.currentStructVarPoisoned;
     this.currentCallees = new Set();
     this.currentPtrCallSigs = new Set();
     this.currentPtrVarSources = new Map();
     this.currentPtrVarPoisoned = new Set();
     this.currentPtrVarCalls = [];
+    this.currentStructVarFields = new Map();
+    this.currentStructVarPoisoned = new Set();
     const r = this.checkExpr(expr);
     this.diags.items.length = diagLen;
     this.currentReadsState = rs;
@@ -17082,6 +17209,8 @@ export class Analyzer {
     this.currentPtrVarSources = savedPtrVarSources;
     this.currentPtrVarPoisoned = savedPtrVarPoisoned;
     this.currentPtrVarCalls = savedPtrVarCalls;
+    this.currentStructVarFields = savedStructVarFields;
+    this.currentStructVarPoisoned = savedStructVarPoisoned;
     return r?.type;
   }
 
@@ -17408,11 +17537,15 @@ export class Analyzer {
     const savedPtrVarSources = this.currentPtrVarSources;
     const savedPtrVarPoisoned = this.currentPtrVarPoisoned;
     const savedPtrVarCalls = this.currentPtrVarCalls;
+    const savedStructVarFields = this.currentStructVarFields;
+    const savedStructVarPoisoned = this.currentStructVarPoisoned;
     this.currentCallees = new Set();
     this.currentPtrCallSigs = new Set();
     this.currentPtrVarSources = new Map();
     this.currentPtrVarPoisoned = new Set();
     this.currentPtrVarCalls = [];
+    this.currentStructVarFields = new Map();
+    this.currentStructVarPoisoned = new Set();
     let ok = true;
     for (let i = 0; i < c.params.length; i++) {
       const node = i < argExprs.length ? argExprs[i]! : (c.defaults![i] as ts.Expression);
@@ -17433,6 +17566,8 @@ export class Analyzer {
     this.currentPtrVarSources = savedPtrVarSources;
     this.currentPtrVarPoisoned = savedPtrVarPoisoned;
     this.currentPtrVarCalls = savedPtrVarCalls;
+    this.currentStructVarFields = savedStructVarFields;
+    this.currentStructVarPoisoned = savedStructVarPoisoned;
     return ok;
   }
 
@@ -18984,7 +19119,30 @@ export class Analyzer {
 
   // ---- lvalues -------------------------------------------------------------
 
+  /** FUNCREF-PURE: the ROOT memory-struct local of an lvalue chain (`z`, `z.f`, `z.a[i]`, `z.a.b`), or
+   *  undefined when the lvalue is not rooted at a struct local (a state var, a value local, a ternary-
+   *  chain target, ...). Used to poison a struct whose memory is written by any of these forms. */
+  private lvalueRootIdent(node: ts.Expression): string | undefined {
+    let cur: ts.Expression = node;
+    while (true) {
+      if (ts.isParenthesizedExpression(cur)) cur = cur.expression;
+      else if (ts.isPropertyAccessExpression(cur)) cur = cur.expression;
+      else if (ts.isElementAccessExpression(cur)) cur = cur.expression;
+      else break;
+    }
+    if (ts.isIdentifier(cur) && (this.memAggregateLocals.has(cur.text) || this.memDynStructLocals.has(cur.text)))
+      return cur.text;
+    return undefined;
+  }
+
   private checkLValue(node: ts.Expression): LValue | undefined {
+    // FUNCREF-PURE: any WRITE rooted at a tracked struct local (`z = ...`, `z.f = ...`, `z.a[i] = ...`)
+    // could re-point a funcref field to a state-writer, so POISON the name - its funcref-field reads drop
+    // back to the conservative per-signature union. checkLValue is the single chokepoint for every write
+    // target (assignment, compound op, ++/--); a spurious poison from a rolled-back lvalue PROBE can only
+    // over-reject (never over-accept), so it is sound to poison here unconditionally.
+    const writeRoot = this.lvalueRootIdent(node);
+    if (writeRoot !== undefined) this.currentStructVarPoisoned.add(writeRoot);
     // `d.x = v` on a DYNAMIC-field struct memory local: a VALUE field is a plain memory store
     // at the head word. A bytes/string field write would re-point the head at a new blob (size
     // may change); that is gated for now (construction + reads + return are supported).
@@ -27011,11 +27169,17 @@ export class Analyzer {
       // a whole MEMORY-aggregate (struct) local (return p / let q = p / arg p): the register
       // holds a pointer to the ABI-unpacked image. G9.
       if (this.memAggregateLocals.has(node.text)) {
+        // FUNCREF-PURE: a WHOLE-struct value use of a memory-aggregate local (return z / let y = z /
+        // helper(z) / this.st = z / abi.encode(z)) can ALIAS or escape the struct, after which its
+        // funcref field could be re-pointed at a state-writer through the alias. POISON the name so a
+        // call z.f(v) drops back to the conservative per-signature effect union (the sound default).
+        this.currentStructVarPoisoned.add(node.text);
         return { kind: 'memAggregate', type: t, local: node.text };
       }
       // a whole DYNAMIC-field struct memory local (return d): re-encode head/tail from the
       // pointer-headed image via the dynamic-struct tuple encoder (memory TupleSrc).
       if (this.memDynStructLocals.has(node.text)) {
+        this.currentStructVarPoisoned.add(node.text);
         return { kind: 'memDynStructValue', type: t, local: node.text };
       }
       // a MEMORY array local (return xs): the register holds a pointer to [len][elems];
