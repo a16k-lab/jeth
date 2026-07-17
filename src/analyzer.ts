@@ -157,6 +157,38 @@ function stripParens(node: ts.Expression): ts.Expression {
   return node;
 }
 
+/** Render a funcref type as a JETH annotation a reader can PASTE (`(p1: u256) => u256`). Built from the
+ *  JethType via displayName, NOT from the funcrefSigKey effect-group key: that key uses the ABI canonical
+ *  names (`uint256`), which are not JETH type names - a workaround quoting `uint256` would not compile.
+ *  Parameter names are required too (`(u256) => u256` parses `u256` as a parameter NAME, not a type). */
+function funcrefAnnotation(t: JethType & { kind: 'funcref' }): string {
+  const params = t.params.map((p, i) => `p${i + 1}: ${displayName(p)}`).join(', ');
+  const ret = t.rets ? `[${t.rets.map(displayName).join(', ')}]` : t.ret ? displayName(t.ret) : 'void';
+  return `(${params}) => ${ret}`;
+}
+
+/** FUNCREF-PROVENANCE: explain a state effect that this function did NOT cause, without claiming it did.
+ *  A JETH funcref type (`(x: u256) => u256`) carries NO mutability - Solidity's does
+ *  (`function(uint256) internal returns (uint256)` and `function(uint256) internal pure returns (uint256)`
+ *  are DIFFERENT types), so where solc can keep a writer and a pure function in two distinct pointer
+ *  types, JETH has one. When a pointer call cannot be resolved to a single target, every same-signature
+ *  address-taken function is a possible callee, so the analysis must assume the worst - a SOUND
+ *  approximation, and the reject stays. Only the WORDING was wrong: the old text asserted the function
+ *  "modifies state", which for this shape is simply false. */
+function funcrefPoisonWhy(via: { via: 'sig'; target: string; sig?: string; through?: string }): string {
+  const ann = via.sig ?? '(...) => T';
+  const site = via.through ? `it calls '${via.through}', which calls` : 'it calls';
+  return (
+    `it cannot be PROVEN read-only: ${site} through a function pointer of type \`${ann}\`, and the ` +
+    `state-modifying function '${via.target}' (it writes storage or emits an event) is address-taken ` +
+    `with that same signature - a JETH funcref type carries no mutability, so a pointer call whose exact ` +
+    `target is unknown must assume any same-signature target. Bind the pointer to a tracked \`let\` local ` +
+    `(\`let g: ${ann} = this.<fn>; g(...)\`) in ${via.through ? `'${via.through}'` : 'that body'} instead ` +
+    `of an untrackable source (a struct field, a parameter, a storage round-trip or a call result), so ` +
+    `the exact target is known`
+  );
+}
+
 /** Multi-file: per-file name visibility + the bundle segment map (see src/imports.ts BundleResult). */
 export interface ImportScope {
   segments: { file: string; startLine: number; lineCount: number }[];
@@ -3734,6 +3766,15 @@ export class Analyzer {
         // W5D-2: EXACT pointer-call target keys (per-variable tracking resolved); treated like extra
         // callees by the fixpoint, narrower than the per-signature union in ptrCallSigs.
         ptrCallTargets: Set<string>;
+        // FUNCREF-PROVENANCE: WHY `writes` became true, when it was not this body's OWN doing. The
+        // fixpoint unions effects from three sources and used to discard which one fired, so a function
+        // poisoned by the SIGNATURE-UNION fallback (below) was reported with a message claiming it
+        // "modifies state" - flatly false: it writes nothing, it merely calls THROUGH a funcref whose
+        // signature some state-writing function is also address-taken with. Undefined => the write is
+        // REAL somewhere on this function's direct call graph, i.e. the message may speak plainly.
+        // `through` names the function whose body actually holds the pointer call, when the poisoning
+        // was inherited through a chain of ordinary calls rather than made by this body.
+        writesVia?: { via: 'sig'; target: string; sig?: string; through?: string };
         rf: RawFunction;
       }
     >();
@@ -3819,10 +3860,16 @@ export class Analyzer {
     // so the fixpoint below can union the reachable targets' effects into every pointer-call site -
     // WITHOUT blaming a @view function for a same-signature mutating function it can never reach.
     const addressTakenBySig = new Map<string, string[]>();
+    // FUNCREF-PROVENANCE: the PASTEABLE JETH annotation per signature key, captured here because this is
+    // where the funcref JethType is in hand (the key itself is ABI-canonical and cannot be turned back
+    // into JETH type names). Used only to build an accurate diagnostic.
+    const sigAnnotation = new Map<string, string>();
     for (const key of this.addressTaken) {
       const ce = effects.get(key);
       if (!ce || ce.rf.returnTypes) continue;
-      const sk = this.funcrefSigKey(this.funcRefTypeOf(ce.rf) as JethType & { kind: 'funcref' });
+      const ft = this.funcRefTypeOf(ce.rf) as JethType & { kind: 'funcref' };
+      const sk = this.funcrefSigKey(ft);
+      if (!sigAnnotation.has(sk)) sigAnnotation.set(sk, funcrefAnnotation(ft));
       (addressTakenBySig.get(sk) ?? addressTakenBySig.set(sk, []).get(sk)!).push(key);
     }
     // Transitive purity: a function inherits the state/env effects of everything it calls - both direct
@@ -3834,13 +3881,35 @@ export class Analyzer {
     while (changed) {
       changed = false;
       for (const e of effects.values()) {
-        const reachable: string[] = [...e.callees, ...e.ptrCallTargets];
-        for (const sk of e.ptrCallSigs) for (const t of addressTakenBySig.get(sk) ?? []) reachable.push(t);
-        for (const callee of reachable) {
+        // FUNCREF-PROVENANCE: keep WHICH source reached each callee. Order matters and is the message
+        // priority: a DIRECT callee (a real call this body makes) is described plainly, and only a write
+        // that arrives ONLY through the per-signature union is described as the approximation it is.
+        const reachable: { key: string; via?: 'ptr' | 'sig'; sig?: string }[] = [
+          ...[...e.callees].map((key) => ({ key })),
+          ...[...e.ptrCallTargets].map((key) => ({ key, via: 'ptr' as const })),
+        ];
+        for (const sk of e.ptrCallSigs)
+          for (const t of addressTakenBySig.get(sk) ?? [])
+            reachable.push({ key: t, via: 'sig', sig: sigAnnotation.get(sk) });
+        for (const { key: callee, via, sig } of reachable) {
           const ce = effects.get(callee);
           if (!ce) continue;
           if (ce.writes && !e.writes) {
             e.writes = true;
+            // The cause travels with the effect. A pointer/signature-union arrival names itself; an
+            // ORDINARY call inherits whatever the callee's write really was - so a plain write stays
+            // plain (this function does transitively modify state: say so), while an inherited POISONING
+            // stays a poisoning however many ordinary calls it crossed, remembering the body that
+            // actually holds the pointer call.
+            // ONLY the signature-union fallback ('sig') is an approximation. A RESOLVED pointer target
+            // ('ptr', per-variable tracking) is exact - the callee really is that function, so its write
+            // is this function's real write and must be reported plainly, exactly like a direct call.
+            e.writesVia =
+              via === 'sig'
+                ? { via, target: ce.rf.name, sig }
+                : ce.writesVia
+                  ? { ...ce.writesVia, through: ce.writesVia.through ?? ce.rf.name }
+                  : undefined;
             changed = true;
           }
           if (ce.reads && !e.reads) {
@@ -3854,15 +3923,25 @@ export class Analyzer {
         }
       }
     }
+    // DECLARED-MUTABILITY GATES. These four validate a mutability the author DECLARED against the
+    // transitive effects. In native mode every spelling that could declare one is now itself rejected
+    // first - the @read/@view/@pure decorators by JETH481 (decorators are banned) and View<T>/Pure<T> in
+    // a class by JETH498 (they are interface-only; a class HAS a body, so its mutability is INFERRED) -
+    // and an interface method is bodyless, so it has no effects to contradict. They are therefore
+    // UNREACHABLE as written and kept only as the validation half of the fixpoint. The wording below no
+    // longer names a banned decorator as though it were something a reader could have typed: if a future
+    // spelling ever re-declares mutability, the message is already true. (The reachable member of this
+    // family is the INFERRED read-only gate JETH043 below.)
     for (const e of effects.values()) {
       if (e.rf.inferRead) {
-        // @read is read-only: a transitive state modification (storage write or emit) is an error;
-        // @pure/@view is assigned below.
+        // a read-only function: a transitive state modification (storage write or emit) is an error.
         if (e.writes)
           this.diags.error(
             e.rf.node,
             'JETH056',
-            `@read function '${e.rf.name}' must not modify state (write to storage or emit an event) - it is read-only`,
+            e.writesVia
+              ? `read-only function '${e.rf.name}': ${funcrefPoisonWhy(e.writesVia)}`
+              : `read-only function '${e.rf.name}' must not modify state (write to storage or emit an event)`,
           );
         continue;
       }
@@ -3870,19 +3949,23 @@ export class Analyzer {
         this.diags.error(
           e.rf.node,
           'JETH054',
-          `@view function '${e.rf.name}' modifies state (writes to storage or emits an event)`,
+          e.writesVia
+            ? `function '${e.rf.name}' is declared view, and ${funcrefPoisonWhy(e.writesVia)}`
+            : `function '${e.rf.name}' is declared view but modifies state (writes to storage or emits an event)`,
         );
       if (e.rf.mutability === 'pure' && (e.writes || e.reads))
         this.diags.error(
           e.rf.node,
           'JETH055',
-          `@pure function '${e.rf.name}' accesses state (storage or emits an event)`,
+          e.writesVia
+            ? `function '${e.rf.name}' is declared pure, and ${funcrefPoisonWhy(e.writesVia)}`
+            : `function '${e.rf.name}' is declared pure but accesses state (reads storage, writes storage, or emits an event)`,
         );
       if (e.rf.mutability === 'pure' && e.readsEnv)
         this.diags.error(
           e.rf.node,
           'JETH164',
-          `@pure function '${e.rf.name}' reads the execution environment (msg.*/block.*/tx.*/address(this))`,
+          `function '${e.rf.name}' is declared pure but reads the execution environment (msg.*/block.*/tx.*/address(this), or an immutable)`,
         );
     }
     // RESOLVE inference (mutability + visibility) from the transitive effects + call graph, then
@@ -3914,8 +3997,17 @@ export class Analyzer {
         f.mutability = m;
         e.rf.mutability = m;
         // Item #8: a `get` accessor promises read-only; a getter that (transitively) writes is a hard error.
+        // FUNCREF-PROVENANCE: when the write arrived ONLY through the funcref signature-union fallback the
+        // accessor writes NOTHING - say what is actually wrong (and how to fix it) instead of asserting a
+        // state modification that never happens. The reject is unchanged either way.
         if (e.rf.isGetter && e.writes)
-          this.diags.error(e.rf.node, 'JETH043', `a 'get' accessor '${e.rf.name}' may not modify state (write to storage or emit an event); a getter is read-only`);
+          this.diags.error(
+            e.rf.node,
+            'JETH043',
+            e.writesVia
+              ? `a 'get' accessor '${e.rf.name}' must be read-only, and ${funcrefPoisonWhy(e.writesVia)}`
+              : `a 'get' accessor '${e.rf.name}' may not modify state (write to storage or emit an event); a getter is read-only`,
+          );
         // JETH260 family, native path: @nonReentrant on a `get` accessor. A `get` promises READ-ONLY
         // (its ABI mutability is view/pure), but the guard performs a TSTORE, so every staticcall
         // (eth_call) of the accessor would REVERT on the mutex write while the ABI claims view -
