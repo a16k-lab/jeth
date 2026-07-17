@@ -40,8 +40,11 @@ describe('internal-call gates (G8)', () => {
     ).toBe(true);
   });
   it('a @pure-declared reader-of-state has no native form: the removed @pure decorator is banned (JETH481); solc rejects the explicit-pure program', () => {
-    // Native infers mutability (there is no @pure to violate), so the JETH054/055 purity-declaration gates
-    // are legacy-decorator-specific: the source that once tripped JETH055 now trips the decorator ban.
+    // There is no @pure DECORATOR to violate natively, so the source that once tripped JETH055 now trips
+    // the decorator ban. NOTE JETH055 is not legacy-decorator-specific any more, as this comment once
+    // claimed: the STATIC-IS-PURE ruling made `static` a DECLARED-pure anchor, so a static that touches
+    // state (emitting through a callee, say) trips JETH055 natively. See
+    // test/class-mutability-marker-ban.test.ts; this probe keeps its decorator-ban framing.
     const codes = jethCodes(
       `@contract class C { @state x: u256; @view r(): u256 { return this.x; } @pure f(): u256 { return this.r(); } }`,
     );
@@ -53,8 +56,9 @@ describe('internal-call gates (G8)', () => {
     ).toBe(true);
   });
   it('a @pure-declared reader-of-env has no native form: the removed @pure decorator is banned (JETH481); solc rejects the explicit-pure program', () => {
-    // As above: native has no @pure to violate (a reader of msg.* is inferred view), so the former JETH164
-    // program now trips the decorator ban.
+    // As above: native has no @pure DECORATOR to violate (a non-static reader of msg.* is inferred view),
+    // so the former JETH164 program now trips the decorator ban. JETH164 itself is reachable natively via
+    // the STATIC-IS-PURE ruling - a `static` reader of msg.* is rejected, not inferred view.
     const codes = jethCodes(
       `@contract class C { @view r(): address { return msg.sender; } @pure f(): address { return this.r(); } }`,
     );

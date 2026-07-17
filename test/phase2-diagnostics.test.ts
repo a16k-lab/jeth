@@ -3,8 +3,11 @@
 // scoping / require / revert / error / event rule below still fires natively (JETH113/110/111/072/068/
 // 120-130/143-148). Two legacy-only shapes retarget: an `@error` declaration with a BODY (JETH125) is
 // not expressible natively (errors are `X: error<{..}>` fields), and "emit from a @view/@pure function"
-// (JETH149) has no declared-mutability form - the native read-only context is a `get` accessor, whose
-// emit is JETH043.
+// (JETH149) has no DECORATOR form - the read-only context this file probes is a `get` accessor, whose
+// emit is JETH043. NOTE JETH149 no longer lacks a declared-mutability form outright: the STATIC-IS-PURE
+// ruling made `static` a DECLARED-pure anchor, so a static that emits DIRECTLY trips JETH149 natively
+// (one that emits through a callee trips JETH055). That surface is owned by
+// test/class-mutability-marker-ban.test.ts.
 import { describe, it, expect } from 'vitest';
 import { compile } from '../src/compile.js';
 import { CompileError } from '../src/diagnostics.js';
@@ -121,9 +124,10 @@ describe('Phase 2 diagnostics', () => {
   });
 
   it('rejects emitting an event from a read-only (get) accessor', () => {
-    // Native analog of the legacy "emit from a @view/@pure function" rule (JETH149). Native mode infers
-    // mutability, so the only DECLARED read-only context is a `get` accessor; emitting inside one is
-    // JETH043 ("a getter is read-only"). The legacy @view and @pure spellings both collapse to this.
+    // Native analog of the legacy "emit from a @view/@pure function" rule (JETH149) for an INFERRED
+    // read-only member: a `get` accessor's emit is JETH043 ("a getter is read-only"). The legacy @view
+    // and @pure spellings both collapse to this. (The DECLARED read-only context - a `static`, pure by
+    // the STATIC-IS-PURE ruling - keeps the real JETH149; see class-mutability-marker-ban.test.ts.)
     expect(codesFor(getFn('emit(Ev(1n, 2n)); return 0n;'))).toContain('JETH043');
   });
 });

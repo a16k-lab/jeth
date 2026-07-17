@@ -11,10 +11,11 @@
 // This file pins the message CONTENT, not the accept/reject sets: the reject, the diagnostic CODE and the
 // emitted bytecode are all unchanged by this work (the fixpoint now keeps provenance it used to discard).
 //
-// The gates that validate a DECLARED mutability (JETH054/055/056/164) are unreachable in native mode -
-// there is no way to declare one (the decorators are JETH481, View<T>/Pure<T> in a class are JETH498, and
-// an interface method is bodyless). The reachable member of the family is the INFERRED read-only gate,
-// JETH043, which is what this file exercises.
+// Of the gates that validate a DECLARED mutability (JETH054/055/056/164), JETH054 and JETH056 are
+// unreachable in native mode - nothing declares `view` (the decorators are JETH481, View<T>/Pure<T> in a
+// class are JETH498, and an interface method is bodyless). JETH055/JETH164 ARE reachable: the
+// STATIC-IS-PURE ruling made `static` a DECLARED-pure anchor (see class-mutability-marker-ban.test.ts).
+// Neither is what this file exercises - it pins the message of the INFERRED read-only gate, JETH043.
 import { describe, it, expect } from 'vitest';
 import { compile } from '../src/compile.js';
 

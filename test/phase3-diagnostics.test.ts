@@ -2,9 +2,12 @@
 // Native mode: mutability is INFERRED from the body, so there is no @view/@pure/@external/@payable
 // decorator to spell. A value-returning read-only method is a `get f(): External<T>` accessor, a
 // void writer is `f(): External<void>`, and a payable writer is `f(): Payable<void>`. Every semantic
-// analyzer rule below (JETH152/153/160/162/170/171/082) still fires natively; only the explicit-@pure
-// "reads the environment" rule (JETH164) is unreachable natively - there is no way to DECLARE pure -
-// so it retargets to the decorator ban (JETH481) plus a positive native pin (see below).
+// analyzer rule below (JETH152/153/160/162/170/171/082) still fires natively. The explicit-@pure "reads
+// the environment" rule (JETH164) has no DECORATOR form natively, so it retargets to the decorator ban
+// (JETH481) plus a positive native pin (see below). NOTE it is no longer UNREACHABLE natively, as this
+// header once claimed: the STATIC-IS-PURE ruling made `static` a DECLARED-pure anchor, so a `static` /
+// `static get` member reading the environment trips JETH164 for real. That native surface is owned by
+// test/class-mutability-marker-ban.test.ts; this file keeps its decorator-ban framing.
 import { describe, it, expect } from 'vitest';
 import { compile } from '../src/compile.js';
 import { CompileError } from '../src/diagnostics.js';
@@ -61,9 +64,10 @@ describe('Phase 3 diagnostics', () => {
   });
 
   it('legacy @pure is banned; env globals are allowed in a normal (inferred) method', () => {
-    // Native mode infers mutability, so the legacy "a @pure function may not read the environment"
-    // rule (JETH164) is unreachable - there is no way to DECLARE pure. The decorator that carried it is
-    // banned (JETH481), and the same env reads compile cleanly in an ordinary inferred-view method.
+    // The legacy "a @pure function may not read the environment" rule (JETH164) has no DECORATOR form:
+    // the decorator that carried it is banned (JETH481), and the same env reads compile cleanly in an
+    // ordinary inferred-view method. (JETH164 itself is NOT unreachable, as this comment once said - a
+    // `static` DECLARES pure under the STATIC-IS-PURE ruling and an env-reading static trips it.)
     expect(codesFor(`class T { f(): u256 { return 0n; } @pure g(): address { return msg.sender; } }`)).toContain(
       'JETH481',
     );

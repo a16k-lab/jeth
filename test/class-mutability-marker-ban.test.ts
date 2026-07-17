@@ -1,10 +1,22 @@
 // CLASS-MUT-BAN (JETH498): `View<T>` / `Pure<T>` are INTERFACE-ONLY markers. An interface method has no
 // body, so it MUST declare its mutability; a CLASS member (contract `class C`, `abstract class B`, library
-// `static class L`) HAS a body, so its mutability is INFERRED from that body - or forced pure by `static`.
-// The only accepted class forms are:
+// `static class L`) HAS a body, so its mutability is INFERRED from that body - unless it is `static`, which
+// DECLARES it pure. The only accepted class forms are:
 //   get a(): T          -> mutability INFERRED (view if it reads state/env, pure if it reads nothing)
-//   static a(): T       -> PURE
-//   static get a(): T   -> PURE
+//   static a(): T       -> PURE (declared)
+//   static get a(): T   -> PURE (declared)
+//
+// STATIC-IS-PURE (author ruling): `static` DECLARES the member pure - it is the ONLY declared-mutability
+// anchor left in the language, every other spelling having been removed by JETH481 (decorators) and JETH498
+// (View<T>/Pure<T> in a class). A pure member may not read storage, write storage, emit, or read the
+// execution environment (msg.*/block.*/tx.*/address(this)). An impure static is therefore REJECTED - by
+// JETH164 for an env read, JETH055 for a state touch, JETH149 for a direct emit - and those codes, dead
+// since JETH481/JETH498 left nothing able to declare a mutability, are live again because of this ruling.
+// This is a deliberate OVER-REJECTION: `static a(): u256 { return msg.value; }` used to accept and infer
+// view, matching solc's `function a() internal view` twin byte for byte. An over-rejection never emits
+// wrong bytes, so the cost is accepted; a genuinely-pure static stays legal and byte-identical, and JETH's
+// pure-legal set is exactly solc's (constant / msg.sig / msg.data / keccak256 / type(T).max are pure-legal;
+// an immutable / block.* / tx.* / address(this) are not).
 // The VISIBILITY markers are unaffected: External<T> / Payable<T> on a method, Visible<T> on a field.
 // Since View<T>/Pure<T> on a `get` ALSO meant EXTERNAL, the migration of an exposed accessor is
 // `get f(): View<T>` -> `get f(): External<T>` (dropping to a bare `T` would make it INTERNAL and
@@ -152,25 +164,67 @@ describe('the three legal class forms still work (mutability INFERRED / forced p
     expect(mut(`class C { get f(): External<u256> { return 41n + 1n; } }`)).toEqual({ f: 'pure' });
   });
 
-  it('`static get` is pure for a pure body; an ENV-reading static is VIEW (solc parity - see the note)', () => {
+  it('`static` DECLARES pure: a pure body is pure, an ENV-reading body is REJECTED (JETH164)', () => {
     expect(mut(`class C { static get f(): External<u256> { return 41n + 1n; } }`)).toEqual({ f: 'pure' });
     // an internal `static f(): T` has no ABI row of its own; witness its purity through a caller
     expect(mut(`class C { static f(): u256 { return 41n + 1n; } get g(): External<u256> { return C.f(); } }`)).toEqual({ g: 'pure' });
 
-    // THE DISCRIMINATING CASE (do not "fix" this without an author ruling): a `static` has no `this`, so
-    // STORAGE is unreachable by construction - but the ENVIRONMENT still is. Such a body infers VIEW, not
-    // pure, exactly like its non-static control below. Forcing pure here would emit an ABI solc REJECTS
-    // ("Function declared as pure, but this expression reads from the environment"), i.e. an
-    // OVER-ACCEPTANCE; solc compiles this shape only as `view`. So `static` = "no this" (hence pure in the
-    // overwhelmingly common case), NOT a forced-pure keyword.
-    expect(mut(`class C { static get f(): External<u256> { return u256(block.timestamp); } }`)).toEqual({ f: 'view' });
-    expect(mut(`class C { static get f(): External<address> { return msg.sender; } }`)).toEqual({ f: 'view' });
-    // CONTROL (non-vacuity): the non-static twin lands on the same view - proving the assertions above
-    // are reading a real inference, not a `static`-specific path.
+    // THE DISCRIMINATING CASE, REWRITTEN BY AUTHOR RULING (`static` DECLARES the member pure - the ONLY
+    // declared-mutability anchor left in the language). This block previously asserted the OPPOSITE: that
+    // an ENV-reading static INFERS view, on the reasoning that forcing pure would be an over-acceptance.
+    // That reasoning was wrong in one step - forcing pure does not emit a pure ABI for an env-reading body,
+    // it REJECTS the program (JETH164). A reject is an OVER-REJECTION, which is always safe; it can never
+    // emit an ABI solc disagrees with. The file header said "static a(): T -> PURE" from the start; the
+    // header was right and this block was the inconsistency. The ruling resolves it in the header's favour.
+    expect(codes(`class C { static get f(): External<u256> { return u256(block.timestamp); } }`)).toContain('JETH164');
+    expect(codes(`class C { static get f(): External<address> { return msg.sender; } }`)).toContain('JETH164');
+    // ...and the `static` (non-get) twin of each: the ruling covers BOTH forms. This half only works
+    // because the get-accessor synthesis forwards the `static` modifier; drop that and these two accept.
+    expect(codes(`class C { static f(): u256 { return u256(block.timestamp); } get g(): External<u256> { return C.f(); } }`)).toContain('JETH164');
+    expect(codes(`class C { static f(): address { return msg.sender; } get g(): External<address> { return C.f(); } }`)).toContain('JETH164');
+
+    // CONTROL (non-vacuity): the NON-static twin still INFERS view and still compiles - proving the four
+    // rejects above are the `static` anchor firing, not a blanket ban on reading the environment.
     expect(mut(`class C { get f(): External<u256> { return u256(block.timestamp); } }`)).toEqual({ f: 'view' });
-    // and the solc witness for the rule above: pure+env REJECTS, view+env ACCEPTS
-    expect(() => compileSolidity(SPDX + `contract C { function f() external pure returns (uint256) { return block.timestamp; } }`, 'C')).toThrow();
+    expect(mut(`class C { get f(): External<address> { return msg.sender; } }`)).toEqual({ f: 'view' });
+
+    // THE ACCEPTED COST, witnessed against solc: the shape JETH now rejects is one solc COMPILES as view.
+    // That is a deliberate over-rejection, not a parity bug - so pin BOTH halves of the witness:
+    //   - solc's `view` twin ACCEPTS  -> our reject is strictly stricter than solc (the cost we accept)
+    //   - solc's `pure` twin REJECTS  -> the ruling's pure DECLARATION genuinely contradicts an env read,
+    //                                    so JETH164 is the honest code for it
     expect(() => compileSolidity(SPDX + `contract C { function f() external view returns (uint256) { return block.timestamp; } }`, 'C')).not.toThrow();
+    expect(() => compileSolidity(SPDX + `contract C { function f() external pure returns (uint256) { return block.timestamp; } }`, 'C')).toThrow();
+  });
+
+  it('`static` matches solc\'s pure-LEGAL set exactly: msg.sig/msg.data/keccak256/type().max/constant', () => {
+    // The ruling forbids reading the ENVIRONMENT, and JETH's notion of that is solc's: calldata
+    // (msg.sig / msg.data) and compile-time values are pure-LEGAL and must still compile. A blanket
+    // "static touches nothing" rule would over-reject these; each is pinned with its solc pure witness.
+    expect(codes(`class C { static get f(): External<bytes4> { return msg.sig; } }`)).toEqual([]);
+    expect(codes(`class C { static get f(): External<u256> { return msg.data.length; } }`)).toEqual([]);
+    expect(codes(`class C { static get f(): External<bytes32> { return keccak256(abi.encode(1n)); } }`)).toEqual([]);
+    expect(codes(`class C { static get f(): External<u256> { return type(u256).max; } }`)).toEqual([]);
+    expect(codes(`class C { static K: u256 = 7n; static get f(): External<u256> { return C.K; } }`)).toEqual([]);
+    // each stays `pure` in the ABI (not silently downgraded to view)
+    expect(mut(`class C { static get f(): External<bytes4> { return msg.sig; } }`)).toEqual({ f: 'pure' });
+    // solc agrees these are pure-legal (the witness that our accept-set is not accidentally too wide)
+    expect(() => compileSolidity(SPDX + `contract C { function f() external pure returns (bytes4) { return msg.sig; } }`, 'C')).not.toThrow();
+    expect(() => compileSolidity(SPDX + `contract C { function f() external pure returns (uint256) { return msg.data.length; } }`, 'C')).not.toThrow();
+  });
+
+  it('`static` rejects a STATE touch: emit direct (JETH149) and emit through a callee (JETH055)', () => {
+    // storage via `this` is unreachable from a static by construction (the JETH354 `this`-ban pre-pass
+    // fires first), so a state touch reaches the declared-pure gates only through emit or a callee.
+    expect(codes(`class C { E: event<{ v: u256 }>; static f(): u256 { emit(E(1n)); return 1n; } probe(): External<u256> { return C.f(); } }`)).toContain('JETH149');
+    // TRANSITIVE: a static calling a library function that emits - caught by the post-fixpoint JETH055.
+    expect(codes(`static class L { E: event<{ v: u256 }>; g(): u256 { emit(E(1n)); return 1n; } }
+      class C { static f(): u256 { return L.g(); } probe(): External<u256> { return C.f(); } }`)).toContain('JETH055');
+    // CONTROL (non-vacuity): the NON-static twin of each still compiles, so the rejects above are the
+    // `static` anchor, not a broken emit path.
+    expect(codes(`class C { E: event<{ v: u256 }>; f(): u256 { emit(E(1n)); return 1n; } probe(): External<u256> { return this.f(); } }`)).toEqual([]);
+    expect(codes(`static class L { E: event<{ v: u256 }>; g(): u256 { emit(E(1n)); return 1n; } }
+      class C { f(): u256 { return L.g(); } probe(): External<u256> { return this.f(); } }`)).toEqual([]);
   });
 
   it('a `get` is READ-ONLY: a writing body still rejects JETH043', () => {

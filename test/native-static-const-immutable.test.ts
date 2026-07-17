@@ -109,12 +109,20 @@ describe('static methods (class-level functions)', () => {
     expect(abi.filter((f) => f.type === 'function').map((f) => f.name + ':' + f.stateMutability)).toEqual(['two:pure']);
   });
 
-  it('no `this` in a static body (JETH354); statics chain via ClassName.x; env reads infer view', () => {
+  it('no `this` in a static body (JETH354); statics chain via ClassName.x; an env read is REJECTED', () => {
     expect(codes(`class C { x: u256; static bad(): u256 { return this.x; } get d(): External<u256> { return C.bad(); } }`)).toContain('JETH354');
     // a static may call another static and read a static const via ClassName.x
     expect(codes(`class C { static K: u256 = 10n; static f(a: u256): u256 { return C.g(a) + C.K; } static g(a: u256): u256 { return a * 2n; } get d(): External<u256> { return C.f(5n); } }`)).toEqual([]);
-    // static = no-instance, NOT blanket-pure: an env read makes it view.
-    const abi = compile(`class C { static who(): address { return msg.sender; } get w(): External<address> { return C.who(); } }`, { fileName: 'C.jeth' }).abi as any[];
+    // REWRITTEN BY AUTHOR RULING (`static` DECLARES the member pure). This assertion used to read
+    // "static = no-instance, NOT blanket-pure: an env read makes it view" and pinned the resulting ABI
+    // row as `view`. Under the ruling `static` is a DECLARED-pure anchor, so an env-reading static is
+    // not inferred at all - it is rejected (JETH164). solc still compiles the `view` twin, so this is a
+    // deliberate over-rejection (safe: it emits no bytes); see test/class-mutability-marker-ban.test.ts
+    // for the full ruling + its solc witnesses.
+    expect(codes(`class C { static who(): address { return msg.sender; } get w(): External<address> { return C.who(); } }`)).toContain('JETH164');
+    // CONTROL (non-vacuity): the same body without `static` still INFERS view and still compiles, so the
+    // reject above is the `static` anchor rather than a broken msg.sender path.
+    const abi = compile(`class C { who(): address { return msg.sender; } get w(): External<address> { return this.who(); } }`, { fileName: 'C.jeth' }).abi as any[];
     expect(abi.filter((f) => f.type === 'function').map((f) => f.stateMutability)).toEqual(['view']);
     // the immutable ctor-staging `this.M = ...` is a CONSTRUCTOR (not static) - unaffected.
     expect(codes(`class C { static M: u256; constructor(){ this.M = 7n; } get m(): External<u256> { return C.M; } }`)).toEqual([]);

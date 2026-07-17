@@ -205,6 +205,10 @@ interface RawFunction {
   returnType: JethType;
   returnTypes?: JethType[]; // multi-value return `[T1, T2, ...]`
   inferRead?: boolean; // @read -> resolve to @pure (touches no state/env) or @view (reads, never writes)
+  staticPure?: boolean; // STATIC-IS-PURE: `static` DECLARED this member pure (the only declared-mutability
+  // anchor left; see collectFunction). Distinct from an INFERRED pure: the mutability slot is already final,
+  // so the post-fixpoint resolver must not re-infer it - but it must still run that branch's VALIDATION
+  // (JETH043/JETH473/JETH352), which is otherwise reachable only through the inference path.
   isGetter?: boolean; // item #8: a native `get foo(...)` accessor - an external read-only fn; must not write
   fromExternalMarker?: boolean; // item #10: visibility came from an External<T> return marker - WRITERS only
   // (a read-only external is spelled `get`); enforced post-inference (a @virtual base is exempt: it may
@@ -3474,10 +3478,16 @@ export class Analyzer {
             // carry the accessor's OWN decorators (@virtual / @override on a `get` participate in the
             // normal override machinery) AND its `abstract` modifier (ABSTRACT-METHOD-DECL: the native
             // spelling of a bodyless @virtual - `abstract get g(): T;` - must reach collectFunction's
-            // isVirtual mapping; the other modifiers stay dropped as before, gated elsewhere).
+            // isVirtual mapping) AND its `static` modifier (STATIC-IS-PURE: `static` DECLARES the member
+            // pure, and collectFunction reads that modifier off the member it is handed - which for an
+            // accessor is THIS synthesized method, not `g`. Dropping it here would silently exempt every
+            // `static get` from the ruling and leave its mutability inferred from the body, i.e. exactly
+            // half the surface unenforced). The other modifiers stay dropped as before, gated elsewhere.
             const gModifiers: ts.ModifierLike[] = [
               ...(ts.getDecorators(g) ?? []),
-              ...(ts.getModifiers(g) ?? []).filter((m) => m.kind === ts.SyntaxKind.AbstractKeyword),
+              ...(ts.getModifiers(g) ?? []).filter(
+                (m) => m.kind === ts.SyntaxKind.AbstractKeyword || m.kind === ts.SyntaxKind.StaticKeyword,
+              ),
             ];
             const synthMethod = this.synth(
               ts.factory.createMethodDeclaration(gModifiers.length > 0 ? gModifiers : undefined, undefined, g.name, undefined, undefined, g.parameters, g.type, g.body),
@@ -3924,14 +3934,21 @@ export class Analyzer {
       }
     }
     // DECLARED-MUTABILITY GATES. These four validate a mutability the author DECLARED against the
-    // transitive effects. In native mode every spelling that could declare one is now itself rejected
-    // first - the @read/@view/@pure decorators by JETH481 (decorators are banned) and View<T>/Pure<T> in
-    // a class by JETH498 (they are interface-only; a class HAS a body, so its mutability is INFERRED) -
-    // and an interface method is bodyless, so it has no effects to contradict. They are therefore
-    // UNREACHABLE as written and kept only as the validation half of the fixpoint. The wording below no
-    // longer names a banned decorator as though it were something a reader could have typed: if a future
-    // spelling ever re-declares mutability, the message is already true. (The reachable member of this
-    // family is the INFERRED read-only gate JETH043 below.)
+    // transitive effects.
+    //
+    // JETH055 / JETH164 are LIVE. `static` on a class member DECLARES it pure (STATIC-IS-PURE, an author
+    // ruling; see collectFunction) - the ONLY declared-mutability anchor left in the language - so a static
+    // whose transitive effects touch state lands on JETH055 and one that reads the execution environment on
+    // JETH164. Both codes were dead between the JETH481/JETH498 bans and that ruling.
+    //
+    // JETH054 / JETH056 remain unreachable: nothing declares `view` any more. The @read/@view/@pure
+    // decorators are rejected by JETH481 (decorators are banned) and View<T>/Pure<T> in a class by JETH498
+    // (they are interface-only; a class HAS a body, so its mutability is INFERRED), and an interface method
+    // is bodyless, so it has no effects to contradict. They are kept as the validation half of the fixpoint.
+    // (The reachable INFERRED read-only gate is JETH043 below.)
+    //
+    // The wording below names the declared PROPERTY, never a spelling: it must not cite a banned decorator
+    // as though a reader could have typed it, and it stays true if a future spelling re-declares mutability.
     for (const e of effects.values()) {
       if (e.rf.inferRead) {
         // a read-only function: a transitive state modification (storage write or emit) is an error.
@@ -3977,7 +3994,7 @@ export class Analyzer {
         const m: Mutability = e.reads || e.readsEnv ? 'view' : 'pure';
         f.mutability = m;
         e.rf.mutability = m;
-      } else if (e && f.mutability === 'nonpayable') {
+      } else if (e && (f.mutability === 'nonpayable' || e.rf.staticPure)) {
         // Item #8: in native mode a function with NO explicit mutability decorator has its mutability
         // INFERRED from its transitive effects - writes (SSTORE / emit / a state-changing call) ->
         // nonpayable, reads-only (storage or env / STATICCALL) -> view, neither -> pure. `nonpayable` is
@@ -3993,9 +4010,18 @@ export class Analyzer {
         // call kind (a staticcall reverts on the tstore in BOTH compilers). The explicit-decorator
         // spellings are already rejected at collection (JETH260); the `get` accessor - read-only BY
         // CONTRACT, so re-flooring would silently break its promise - rejects loudly below (JETH473).
-        const m: Mutability = e.writes || f.nonReentrant ? 'nonpayable' : e.reads || e.readsEnv ? 'view' : 'pure';
-        f.mutability = m;
-        e.rf.mutability = m;
+        // STATIC-IS-PURE: a `static` member's mutability is DECLARED, not inferred - leave the slot alone
+        // (re-inferring would silently downgrade a declared-pure static to view/nonpayable and defeat the
+        // ruling). It still enters this branch for the VALIDATION below, which lives here and nowhere else:
+        // skipping the whole branch dropped JETH043/JETH473/JETH352 for every static, and JETH352 has no
+        // other home. A static that would infer anything but pure has already been rejected upstream
+        // (JETH055/JETH164), and @nonReentrant + static is rejected at collection (JETH260), so the
+        // declared slot cannot silently contradict the effects that reach here.
+        if (!e.rf.staticPure) {
+          const m: Mutability = e.writes || f.nonReentrant ? 'nonpayable' : e.reads || e.readsEnv ? 'view' : 'pure';
+          f.mutability = m;
+          e.rf.mutability = m;
+        }
         // Item #8: a `get` accessor promises read-only; a getter that (transitively) writes is a hard error.
         // FUNCREF-PROVENANCE: when the write arrived ONLY through the funcref signature-union fallback the
         // accessor writes NOTHING - say what is actually wrong (and how to fix it) instead of asserting a
@@ -8704,8 +8730,35 @@ export class Analyzer {
       }
       mutability = 'payable';
     }
-    // CLASS-MUT-BAN: there is no DECLARED-mutability anchor on a class member any more (View<T>/Pure<T>
-    // are interface-only, JETH498), so the slot is always filled by the body inference below.
+    // STATIC-IS-PURE (author ruling): `static` on a class member DECLARES the member PURE. It is the ONLY
+    // DECLARED-mutability anchor left in the language - every other spelling that could declare one is now
+    // itself rejected (the @view/@pure/@read decorators by JETH481, View<T>/Pure<T> in a class by JETH498,
+    // which are interface-only). Setting the slot here does two things: it stops the body inference below
+    // from filling it (that branch only fires on the untouched `nonpayable` default), and it routes the
+    // member into the DECLARED-mutability gates after the effects fixpoint - so a static that touches state
+    // is rejected by JETH055 and one that reads the execution environment (msg.value/msg.sender/block.*/
+    // tx.*/address(this), or an immutable) by JETH164. Those two codes were dead after JETH481/JETH498; this
+    // ruling is what revives them.
+    //
+    // This DELIBERATELY over-rejects relative to solc: `static a(): u256 { return msg.value; }` used to
+    // accept and infer view, and its artifact matched solc's `function a() internal view` twin byte for
+    // byte. The ruling makes the declaration, not the body, decide - an over-rejection is safe (it never
+    // emits wrong bytes), and a genuinely-pure static stays legal and byte-identical.
+    //
+    // The pure-LEGAL set is solc's and is already encoded by currentReadsEnv (checkGlobal): a constant,
+    // msg.sig and msg.data (calldata, not environment), keccak256 and type(T).max are all pure-legal and
+    // still compile; msg.value / msg.sender / block.* / tx.* / address(this) / an immutable read are not.
+    // A storage read/write via `this` is caught EARLIER by the JETH354 `this`-ban pre-pass (a static has no
+    // instance), so those never reach JETH055 - only a transitive state touch through a callee does.
+    //
+    // Scope is every class member that reaches collectFunction, libraries included: a `static class L`'s
+    // `static f()` is a class member and the ruling reads on its face. The `static get` flavor arrives here
+    // only because the get-accessor synthesis forwards the modifier (see collectClass) - without that, the
+    // ruling would silently miss half its surface.
+    const staticPure = (ts.getModifiers(member) ?? []).some((m) => m.kind === ts.SyntaxKind.StaticKeyword);
+    if (staticPure) {
+      mutability = 'pure';
+    }
     // solc: internal/private functions can never be payable (no message context of their own).
     // @hidden is an explicitly-internal function, so it is rejected with @payable too.
     if (decs.includes('payable') && !decs.includes('external') && !markerExternal) {
@@ -8721,14 +8774,26 @@ export class Analyzer {
     // are incompatible, and reentrancy only meaningfully protects externally-reachable entries.
     const nonReentrant = decs.includes('nonReentrant');
     if (nonReentrant) {
-      // A read-only class member carries no DECLARED mutability any more (View<T>/Pure<T> are
-      // interface-only, JETH498), so an INFERRED read-only guard is caught by the post-inference
-      // JETH473 net; the explicit @read/@view/@pure spellings stay rejected here at collection.
+      // An INFERRED read-only member is caught by the post-inference JETH473 net; the explicit
+      // @read/@view/@pure spellings stay rejected here at collection.
       if (read || decs.includes('view') || decs.includes('pure')) {
         this.diags.error(
           member,
           'JETH260',
           '@nonReentrant cannot be combined with @read/@view/@pure (a reentrancy guard writes transient storage; the function must be state-mutating)',
+        );
+      }
+      // STATIC-IS-PURE: `static` DECLARES the member pure, which is the same contradiction as the explicit
+      // spellings above, so it is rejected at the same place. This must be caught HERE rather than left to
+      // the post-inference JETH473 net: that net lives on the INFERENCE branch, which a declared-pure static
+      // skips by construction. Without this gate `@nonReentrant static a(): External<void>` shipped an ABI
+      // claiming `pure` while the body TSTOREs the mutex - every staticcall/eth_call of it REVERTS against a
+      // pure promise. A wrong ABI, not merely a missing diagnostic.
+      if (staticPure) {
+        this.diags.error(
+          member,
+          'JETH260',
+          '@nonReentrant cannot be combined with `static` (`static` declares the member pure, but a reentrancy guard writes transient storage; the function must be state-mutating)',
         );
       }
       if (!decs.includes('external') && !markerExternal) {
@@ -8819,6 +8884,7 @@ export class Analyzer {
           visibility,
           mutability,
           inferRead,
+          staticPure,
           nonReentrant,
           modifiers: appliedModifiers.length ? appliedModifiers : undefined,
           ...inhMeta,
@@ -8834,6 +8900,7 @@ export class Analyzer {
         visibility,
         mutability,
         inferRead,
+        staticPure,
         nonReentrant,
         modifiers: appliedModifiers.length ? appliedModifiers : undefined,
         ...inhMeta,
@@ -8864,6 +8931,7 @@ export class Analyzer {
         visibility,
         mutability,
         inferRead,
+        staticPure,
         nonReentrant,
         modifiers: appliedModifiers.length ? appliedModifiers : undefined,
         ...inhMeta,
@@ -8879,6 +8947,7 @@ export class Analyzer {
       visibility,
       mutability,
       inferRead,
+      staticPure,
       nonReentrant,
       modifiers: appliedModifiers.length ? appliedModifiers : undefined,
       ...inhMeta,
@@ -14435,10 +14504,16 @@ export class Analyzer {
     // it through helpers: a @view/@pure/@read function that TRANSITIVELY emits is rejected too.
     this.currentWritesState = true;
     if (this.currentMutability === 'view' || this.currentMutability === 'pure') {
+      // STATIC-IS-PURE: this gate was dead once JETH481/JETH498 removed every mutability DECLARATION
+      // (nothing could set currentMutability to view/pure any more). The `static`-declares-pure ruling
+      // revives it: a static that emits DIRECTLY lands here, one that emits through a callee lands on the
+      // post-fixpoint JETH055 instead. Wording follows the same rule as that family - name the declared
+      // PROPERTY, never a spelling, so the message neither cites a banned decorator (@pure) nor goes stale
+      // if a future spelling re-declares mutability.
       this.diags.error(
         call,
         'JETH149',
-        `cannot emit an event in a @${this.currentMutability} function (a log is a state change)`,
+        `cannot emit an event in a function declared ${this.currentMutability} (a log is a state change)`,
       );
     }
     // Resolve the overload: by argument count, then (for same-arity overloads) by a trial type-match.
