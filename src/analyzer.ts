@@ -5076,6 +5076,123 @@ export class Analyzer {
       }
     }
 
+    // P0-17 / OA5: the "Derived contract must override" diamond check (solc: "Derived contract must
+    // override function \"f\". Two or more base classes define function with same name and parameter
+    // types."). Factored into a closure so it runs for BOTH a multi-contract-version group AND a
+    // SINGLE-contract-version group. The single-version case matters because the SECOND competing
+    // definition can come from an INTERFACE base: interface methods live in this.interfacesByName, NOT
+    // in `collected`, so a signature implemented by one contract yet ALSO declared by an interface has
+    // just one CONTRACT version - yet a derived class inheriting that signature from the contract source
+    // AND the interface source along DISTINCT direct-base paths still must override it (solc). Without
+    // running here the interface source was invisible and the override requirement was bypassed (OA5).
+    //
+    // When a contract in the linearization does NOT itself (re)declare this signature yet inherits 2+
+    // DISTINCT definitions delivered along different direct-base paths (a diamond that no single
+    // most-derived definition unifies), solc REQUIRES that contract to override the function. Fires at
+    // the FIRST such contract - ABSTRACT or concrete - regardless of a later re-override. Must NOT fire
+    // when all direct-base paths deliver the SAME definition (a chain, or one branch inheriting the
+    // other's), nor when the contract redefines the signature (then the override-list rules apply).
+    const checkOverrideDiamond = (sk: string, versions: RawFunction[]): void => {
+      const winner = versions[0]!;
+      const definerContracts = new Set(versions.map((v) => v.definingContract!));
+      // Whether a definer's version is BODYLESS (an abstract declaration, no implementation). solc treats
+      // an IMPLEMENTED base function that is ALSO a direct base (alongside its overrider) as a competing
+      // definition (must override), but an UNIMPLEMENTED (bodyless) declaration is a mere obligation the
+      // overrider satisfies. An INTERFACE definer's method is always a bodyless obligation.
+      const definerBodyless = new Map(versions.map((v) => [v.definingContract!, !!v.bodyless]));
+      const isBodylessDef = (name: string): boolean => {
+        const c = byName.get(name);
+        if (c && this.isInterfaceClass(c)) return true;
+        return definerBodyless.get(name) === true;
+      };
+      // The single definition DELIVERED to `cn` through one of its direct bases = the MOST-DERIVED
+      // declarer WITHIN that base's own hierarchy. A within-subtree override subsumes the base it
+      // overrides (same path -> one delivery); two SIBLING branches each carrying a distinct un-unified
+      // definition deliver two.
+      const deliveredVia = (cn: string): string | undefined => {
+        const cls = byName.get(cn);
+        if (!cls) return undefined;
+        // an interface base that ITSELF declares the exact signature is its own delivered definer (a
+        // bodyless obligation). Without this, an interface appearing DIRECTLY in a derived class's base
+        // list (deliveredVia called ON the interface) is missed - the two-source override requirement
+        // (solc's "must override") was bypassed exactly here.
+        if (this.isInterfaceClass(cls)) {
+          const own = this.interfacesByName.get(cn)?.methods.get(winner.name);
+          if (own?.some((im) => im.signature === sk)) return cn;
+        }
+        // this contract itself declares the signature (as a function) -> it IS the delivered definer.
+        if (definerContracts.has(cn)) return cn;
+        // a direct-base @interface of cn declaring the exact signature is its own delivered definer.
+        for (const hb of heritageBases(cls)) {
+          const ims = this.interfacesByName.get(hb.name)?.methods.get(winner.name);
+          if (ims?.some((im) => im.signature === sk)) return hb.name;
+        }
+        // otherwise recurse through cn's direct bases and keep only the MAXIMAL deliveries within this
+        // subtree (drop a definer that another delivery reachable in the same subtree derives from).
+        const sub = [
+          ...new Set(heritageBases(cls).map((h) => deliveredVia(h.name)).filter((x): x is string => x !== undefined)),
+        ];
+        const maximal = sub.filter((x) => !sub.some((y) => y !== x && basesOf.get(y)?.has(x)));
+        return maximal.length === 1 ? maximal[0] : maximal.length === 0 ? undefined : '<ambiguous>';
+      };
+      for (const cn of this.linOrder) {
+        if (definerContracts.has(cn)) continue; // this contract redefines f -> covered by override-list rules
+        const cls = byName.get(cn);
+        if (!cls || this.isInterfaceClass(cls)) continue; // interfaces impose no override obligation here
+        // Each direct base delivers one definition; pair it with the BASE it arrived through so cross-base
+        // subsumption is path-aware.
+        const perBase = heritageBases(cls)
+          .map((h) => ({ base: h.name, def: deliveredVia(h.name) }))
+          .filter((d): d is { base: string; def: string } => d.def !== undefined);
+        // Cross-base subsumption: a delivery X (via base bx, definer dx) is subsumed by delivery Y
+        // (definer dy) iff Y OVERRIDES X (dy derives from dx) and X's declaration is a mere BODYLESS
+        // obligation. The path condition depends on WHAT X is:
+        //  - X is an INTERFACE obligation: an interface is a SHARED root, so ANY implementation Y that
+        //    derives from it (overrides its method) satisfies the obligation regardless of which base
+        //    path delivered X (H: `class C extends B1, B2` where B1 is I + implements g and B2 is I -
+        //    B1.g overrides the I.g obligation delivered via B2; solc accepts). This is why the REPRO
+        //    still rejects: there the implementer B does NOT derive I, so no Y subsumes the I obligation.
+        //  - X is a CONTRACT (bodyless abstract base): Y must OVERRIDE X on a path THROUGH bx (a sibling
+        //    dy overriding dx on a DIFFERENT path does NOT subsume it - single-branch diamond); an
+        //    IMPLEMENTED X delivered directly stays live even when a derived base overrides it (two
+        //    implementations reach cn -> must override).
+        const isIfaceDef = (name: string): boolean => {
+          const c = byName.get(name);
+          return !!c && this.isInterfaceClass(c);
+        };
+        const live = perBase.filter(
+          (x) =>
+            x.def === '<ambiguous>' ||
+            !perBase.some(
+              (y) =>
+                y !== x &&
+                y.def !== '<ambiguous>' &&
+                basesOf.get(y.def)?.has(x.def) &&
+                isBodylessDef(x.def) &&
+                (isIfaceDef(x.def) || y.def === x.base || basesOf.get(y.def)?.has(x.base)),
+            ),
+        );
+        const liveDefs = [...new Set(live.map((d) => d.def))];
+        if (liveDefs.length >= 2) {
+          // OVERRIDE-VAR-MULTIHEAD: a VALIDATED getter-var override declared AT `cn` IS cn's override.
+          const gvv = this.getterOverrideVars.get(winner.name);
+          const varUnifies =
+            gvv !== undefined &&
+            gvv.definingContract === cn &&
+            this.validGetterOverrides.has(winner.name) &&
+            this.getterOverrideMatchesSig(winner);
+          if (!varUnifies) {
+            const named = liveDefs.filter((x) => x !== '<ambiguous>');
+            this.diags.error(
+              cls,
+              'JETH430',
+              `contract '${cn}' must override function '${winner.name}': two or more base classes (${named.join(', ')}) define it with the same name and parameter types`,
+            );
+          }
+        }
+      }
+    };
+
     for (const [sk, versions] of groups) {
       // If every version of this signature is declared in the SAME contract, this is NOT an override
       // relationship - it is either a single function or a same-contract duplicate (handled by the
@@ -5167,6 +5284,10 @@ export class Analyzer {
           if (this.validGetterOverrides.has(v.name) && this.getterOverrideMatchesSig(v)) continue;
           winners.push(v);
         }
+        // OA5: a derived contract may inherit this ONE contract definition alongside an INTERFACE
+        // declaration of the same signature (interface methods are not in `collected`, so the group is
+        // single-version) - solc still requires that derived contract to override. Runs here too.
+        checkOverrideDiamond(sk, versions);
         continue;
       }
       const winner = versions[0]!;
@@ -5332,100 +5453,10 @@ export class Analyzer {
       };
       for (let i = 0; i < versions.length; i++) validateOverrideList(versions[i]!, i);
 
-      // P0-17: MISSING "Derived contract must override" (solc: "Derived contract must override function
-      // \"f\". Two or more base classes define function with same name and parameter types."). When a
-      // contract in the linearization does NOT itself (re)declare this signature yet inherits 2+ DISTINCT
-      // definitions delivered along different direct-base paths (a diamond that no single most-derived
-      // definition unifies), solc REQUIRES that contract to override the function. This fires at the
-      // FIRST such contract - ABSTRACT or concrete - regardless of whether a more-derived contract later
-      // overrides it (solc reports the ambiguity at the un-unifying contract itself). It must NOT fire
-      // when all direct-base paths deliver the SAME definition (a chain, or one branch inheriting the
-      // other's), nor when the contract redefines the signature (then the override-list rules above apply).
-      // The delivered definer along a direct base `b` = the most-derived contract (or a direct-base
-      // @interface) within b's hierarchy that declares this signature; a diamond is un-unified iff those
-      // deliveries span 2+ distinct definers.
-      const definerContracts = new Set(versions.map((v) => v.definingContract!));
-      // Whether a definer's version is BODYLESS (an abstract declaration, no implementation). solc treats
-      // an IMPLEMENTED base function that is ALSO listed as a direct base (alongside its overrider) as a
-      // competing definition (must override), but an UNIMPLEMENTED (bodyless) base declaration is a mere
-      // obligation the overrider satisfies (no conflict).
-      const definerBodyless = new Map(versions.map((v) => [v.definingContract!, !!v.bodyless]));
-      // The single definition DELIVERED to `cn` through one of its direct bases `b` = the MOST-DERIVED
-      // declarer of this signature WITHIN b's own hierarchy (b and its transitive bases). A within-subtree
-      // override subsumes the base it overrides (they lie on the SAME path), so a linear chain delivers one
-      // definition; but two SIBLING branches that each carry a distinct un-unified definition deliver two.
-      const deliveredVia = (cn: string): string | undefined => {
-        const cls = byName.get(cn);
-        if (!cls) return undefined;
-        // this contract itself declares the signature (as a function) -> it IS the delivered definer
-        // (it is the most-derived declarer within its own subtree; any base version is subsumed).
-        if (definerContracts.has(cn)) return cn;
-        // a direct-base @interface of cn declaring the exact signature is its own delivered definer.
-        for (const hb of heritageBases(cls)) {
-          const ims = this.interfacesByName.get(hb.name)?.methods.get(winner.name);
-          if (ims?.some((im) => im.signature === sk)) return hb.name;
-        }
-        // otherwise recurse through cn's direct bases and keep only the MAXIMAL deliveries within this
-        // subtree (drop a definer that another delivery - reachable in the same subtree - derives from).
-        const sub = [
-          ...new Set(heritageBases(cls).map((h) => deliveredVia(h.name)).filter((x): x is string => x !== undefined)),
-        ];
-        const maximal = sub.filter((x) => !sub.some((y) => y !== x && basesOf.get(y)?.has(x)));
-        // 0 -> no delivery on this branch; 1 -> a single delivered definition; 2+ -> this subtree ITSELF
-        // is un-unified (reported when we reach that contract in the outer loop), but from the PARENT's
-        // view it still delivers an ambiguous result, so mark it so the parent counts it as un-unifiable.
-        return maximal.length === 1 ? maximal[0] : maximal.length === 0 ? undefined : '<ambiguous>';
-      };
-      for (const cn of this.linOrder) {
-        if (definerContracts.has(cn)) continue; // this contract redefines f -> covered by the override-list rules
-        const cls = byName.get(cn);
-        if (!cls || this.isInterfaceClass(cls)) continue; // interfaces impose no override obligation here
-        // Each direct base delivers one definition (its within-subtree most-derived declarer). Pair each
-        // delivery with the BASE it arrived through so cross-base subsumption is path-aware.
-        const perBase = heritageBases(cls)
-          .map((h) => ({ base: h.name, def: deliveredVia(h.name) }))
-          .filter((d): d is { base: string; def: string } => d.def !== undefined);
-        // Cross-base subsumption: a delivery X (via base bx, definer dx) is subsumed by another delivery Y
-        // (definer dy) iff Y OVERRIDES X (dy derives from dx), Y's own path passes THROUGH bx (bx is an
-        // ancestor-or-self of dy), AND X's declaration is BODYLESS. Only then does Y satisfy the mere
-        // obligation X represents. A SIBLING dy overriding dx on a DIFFERENT path (bx not on dy's path) does
-        // NOT subsume it (single-branch diamond); and an IMPLEMENTED X delivered directly stays live even
-        // when a derived base overrides it (solc: two implementations reach cn -> must override).
-        const live = perBase.filter(
-          (x) =>
-            x.def === '<ambiguous>' ||
-            !perBase.some(
-              (y) =>
-                y !== x &&
-                y.def !== '<ambiguous>' &&
-                basesOf.get(y.def)?.has(x.def) &&
-                (y.def === x.base || basesOf.get(y.def)?.has(x.base)) &&
-                definerBodyless.get(x.def) === true,
-            ),
-        );
-        const liveDefs = [...new Set(live.map((d) => d.def))];
-        if (liveDefs.length >= 2) {
-          // OVERRIDE-VAR-MULTIHEAD: a VALIDATED getter-var override (@override(A, B) x: Visible<T>,
-          // including a Visible constant/immutable) declared AT `cn` IS cn's override of this signature -
-          // solc accepts `uint256 public override(A2, B2) g;` unifying two base declarations (witnessed).
-          // A var declared at a MORE-DERIVED contract does NOT excuse cn (solc reports the un-unifying
-          // contract itself), so the skip is exact-contract only.
-          const gvv = this.getterOverrideVars.get(winner.name);
-          const varUnifies =
-            gvv !== undefined &&
-            gvv.definingContract === cn &&
-            this.validGetterOverrides.has(winner.name) &&
-            this.getterOverrideMatchesSig(winner);
-          if (!varUnifies) {
-            const named = liveDefs.filter((x) => x !== '<ambiguous>');
-            this.diags.error(
-              cls,
-              'JETH430',
-              `contract '${cn}' must override function '${winner.name}': two or more base classes (${named.join(', ')}) define it with the same name and parameter types`,
-            );
-          }
-        }
-      }
+      // P0-17 / OA5: "Derived contract must override" diamond check (contract + interface sources) -
+      // extracted into checkOverrideDiamond above so the identical rule also runs for single-version
+      // (interface-competing) groups. See its definition for the full semantics.
+      checkOverrideDiamond(sk, versions);
 
       // OVERRIDE-VAR-MULTIHEAD: a validated getter-var override matching this signature replaces the whole
       // function group - the auto-generated getter is the dispatched entry, every base version is dropped
