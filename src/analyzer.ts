@@ -669,6 +669,14 @@ export class Analyzer {
     // The driver hands each route its OWN freshly-parsed AST; N extra parses are negligible (solc's Yul
     // backend is ~92% of a compile).
     private readonly routeIndex: number = 0,
+    // UNEXTENDED-ABSTRACT BODY CHECK: when set, this run does NOT analyze a deployable route at all - it
+    // instead type-checks the BODIES of one stray abstract class (named by its final, post-module-rename
+    // spelling) that nothing in the unit extends, exactly as solc type-checks every declared contract. The
+    // driver re-parses the source and sets this per stray leaf reported on route 0's IR (abstractCheckLeaves),
+    // so each check-route gets a PRISTINE AST - analyzeContract's in-place marker strip cannot corrupt a base
+    // shared with the deployed route (see the routeIndex note above). The emitted IR is discarded; only the
+    // diagnostics matter.
+    private readonly abstractCheck?: string,
   ) {}
 
   /** True only while analyzing the route that IS the file's synthesized @diamond contract (set per route by
@@ -863,6 +871,11 @@ export class Analyzer {
     this.checkAbstractRequiredForBodylessMembers(); // a non-abstract class declaring a bodyless member (solc parity)
     this.checkAbstractMemberShapes(); // JETH486: `abstract` is only a bodyless method/get obligation; misuse rejects loudly
     this.collectLibraries(); // @library declarations: internal (inlined) functions, collected before contracts
+    // UNEXTENDED-ABSTRACT BODY CHECK: a driver-issued re-parse (see analyzeAbstractCheckRoute) that
+    // type-checks ONE stray abstract leaf's bodies instead of a deployable route. The file-wide collect /
+    // collision passes above still run (so the leaf's types resolve exactly as on the route), then this
+    // returns before any deployable-route selection.
+    if (this.abstractCheck !== undefined) return this.analyzeAbstractCheckRoute(this.abstractCheck);
     const classes = this.findContractClasses();
     if (classes.length === 0) {
       return this.analyzeNonDeployableUnit();
@@ -893,10 +906,132 @@ export class Analyzer {
     // UNEXTENDED-ABSTRACT: type-check the SIGNATURES of the stray classes too (solc type-checks every
     // contract in the file, extended or not; JETH only ever analyzed the route chain).
     this.checkStandaloneClassMemberTypes(analyzed);
+    // UNEXTENDED-ABSTRACT BODY CHECK (the OTHER half): the signature pass above resolves a stray abstract's
+    // param/field/return TYPES, but never its member BODIES (a broken body was silently accepted while solc
+    // rejects it). Body analysis needs the leaf as a full analyzeContract route, and analyzeContract strips
+    // markers off the shared AST in place - so re-analyzing a stray leaf that shares a base with this route on
+    // the SAME tree would corrupt it. Instead, report the stray unextended abstract LEAVES so the driver
+    // re-parses once per leaf and body-checks each on a pristine AST (see compileUnit + analyzeAbstractCheckRoute).
+    if (ir) {
+      const leaves = this.strayAbstractLeafNames(analyzed);
+      if (leaves.length > 0) ir.abstractCheckLeaves = leaves;
+    }
     // LAST: if the analyzer accepted the source but TS saw a (non-1011) syntax error, the AST was
     // silently error-recovered into something else (BYTE-SLICE-MC) - reject instead of miscompiling.
     this.rejectSilentlyAcceptedSyntaxErrors();
     return ir;
+  }
+
+  /** The (post-module-rename) names of every abstract class that is (a) a SIBLING of the deployed route
+   *  - not in its linearization - and (b) a LEAF: nothing in the unit extends it. An abstract that some
+   *  OTHER stray abstract extends is covered by that extender's own linearization (checked via the leaf),
+   *  exactly like analyzeNonDeployableUnit's `leaves` filter, so only leaves are reported (no double check).
+   *  A leaf that shares a base WITH the route is still a leaf here (the shared base is in `analyzed`, but the
+   *  leaf itself is not) - the driver's fresh re-parse is what makes body-checking it sound. */
+  private strayAbstractLeafNames(analyzed: Set<ts.ClassDeclaration>): string[] {
+    const extended = this.extendedClassNames();
+    const out: string[] = [];
+    const visit = (n: ts.Node): void => {
+      if (
+        ts.isClassDeclaration(n) &&
+        n.name &&
+        this.isAbstractClass(n) &&
+        this.isDupCheckableClass(n) &&
+        !analyzed.has(n) &&
+        !extended.has(n.name.text)
+      ) {
+        out.push(n.name.text);
+      }
+      ts.forEachChild(n, visit);
+    };
+    ts.forEachChild(this.sourceFile, visit);
+    return out;
+  }
+
+  /** UNEXTENDED-ABSTRACT BODY CHECK (solc parity): type-check the BODIES of ONE stray abstract leaf exactly
+   *  as solc type-checks every declared contract, whether or not it deploys. Runs as a driver-issued RE-PARSE
+   *  (one pristine AST per leaf) so analyzeContract's in-place marker strip cannot corrupt a base shared with
+   *  the deployed route. The leaf is analyzed AS an (abstract) deployed contract: analyzeContract keys its
+   *  "must implement every obligation" rejects off isAbstractClass(lin[0]) - the leaf IS abstract - so a
+   *  legitimately-unimplemented @virtual/interface method stays accepted, while a broken body (undeclared
+   *  identifier, bad assignment, return arity/overflow, illegal @override, view/pure mutation, unknown or
+   *  wrong-arity call) rejects. The emitted IR is discarded; only the diagnostics matter. This is the same
+   *  machinery analyzeNonDeployableUnit runs for the abstract-ONLY file, applied to a single named leaf when a
+   *  deployable sibling exists (so the abstract-only JETH041/JETH489 gates - which are about the missing
+   *  artifact - do not apply here). */
+  private analyzeAbstractCheckRoute(name: string): ContractIR | undefined {
+    const empty: ContractIR = {
+      name,
+      stateVars: [],
+      functions: [],
+      errors: [],
+      events: [],
+      slotCount: 0,
+      immutables: [],
+      nonDeployable: true,
+    };
+    let leaf: ts.ClassDeclaration | undefined;
+    const find = (n: ts.Node): void => {
+      if (ts.isClassDeclaration(n) && n.name && n.name.text === name && this.isAbstractClass(n) && this.isDupCheckableClass(n)) {
+        leaf = n;
+      }
+      ts.forEachChild(n, find);
+    };
+    ts.forEachChild(this.sourceFile, find);
+    if (!leaf) return empty; // defensive: the driver only names leaves the route pass reported
+    this.registerContractClasses(); // same registration order the deployed branch uses, so bases resolve
+    this.collectContractMethods();
+    this.buildFileLevelErrorEvents();
+    const lin = this.linearize(leaf);
+    if (!lin) return undefined; // JETH370/371/372 (unresolvable base / impossible C3 / cycle) already reported
+    // INTERFACE-ONLY MARKER LENIENCY (no NEW over-rejection): analyzeContract REJECTS a `View<T>`/`Pure<T>`
+    // return marker on a class member (JETH498) - a DELIBERATE JETH over-rejection (class mutability is
+    // inferred from the body, never declared). A stray abstract that never deploys legitimately carries these
+    // markers to describe its EXTERNAL call surface (used only as a nominal type - solc accepts the twin), and
+    // the signature-only pass this body-check supplements ALSO accepted them (by unwrapping the marker to its
+    // payload). Re-applying JETH498 here would newly reject a program solc (and JETH, before this) accepts, so
+    // unwrap View<T>/Pure<T> to their payload first (leaving External/Payable for analyzeContract's own strip).
+    // Interface nodes in the chain keep their markers (View/Pure are valid there and are never collected as
+    // class members). The unwrap runs on this leaf's OWN freshly-parsed tree only (its linearization), never
+    // the deployed route's - so the route's codegen is untouched.
+    for (const c of lin) {
+      if (this.isInterfaceClass(c)) continue;
+      for (const m of c.members) {
+        if (
+          (ts.isMethodDeclaration(m) || ts.isGetAccessorDeclaration(m)) &&
+          m.type &&
+          ts.isTypeReferenceNode(m.type) &&
+          ts.isIdentifier(m.type.typeName) &&
+          (m.type.typeName.text === 'View' || m.type.typeName.text === 'Pure') &&
+          m.type.typeArguments?.length === 1
+        ) {
+          (m as unknown as { type?: ts.TypeNode }).type = m.type.typeArguments[0];
+        }
+      }
+    }
+    // solc: "Functions without implementation must be marked virtual." A bodyless method/getter anywhere in
+    // the leaf's chain must be @virtual (or the `abstract` member keyword). The deployed path catches this
+    // transitively via the override rules; a stray abstract needs it explicit (mirrors analyzeNonDeployableUnit).
+    for (const c of lin) {
+      if (!this.isAbstractClass(c)) continue;
+      for (const m of c.members) {
+        if (!((ts.isMethodDeclaration(m) || ts.isGetAccessor(m)) && m.body === undefined)) continue;
+        const isVirtual =
+          decoratorNames(m).includes('virtual') ||
+          (ts.getModifiers(m) ?? []).some((mod) => mod.kind === ts.SyntaxKind.AbstractKeyword);
+        if (!isVirtual) {
+          this.diags.error(
+            m,
+            'JETH489',
+            `'${m.name !== undefined && ts.isIdentifier(m.name) ? m.name.text : '<anon>'}' has no implementation and must be marked @virtual (or use the \`abstract\` member keyword)`,
+          );
+        }
+      }
+    }
+    const ir = this.analyzeContract(leaf, lin);
+    this.rejectSilentlyAcceptedSyntaxErrors();
+    if (this.diags.hasErrors) return undefined;
+    return ir ? { ...ir, nonDeployable: true } : empty;
   }
 
   /** Collect `type X = Brand<BaseValueType>` branded-newtype aliases. A branded type is a
@@ -3897,19 +4032,28 @@ export class Analyzer {
     // The ONE base exclusion kept: a file-level type + a contract MODIFIER of the same name do not clash (a
     // modifier name is never used in a type position; solc and the base both accept it). Only the clean
     // 1-vs-1 cross-scope case is inspected here; a within-scope multi-kind clash already fired JETH133 above.
-    for (const [nm, mk] of memberKinds) {
-      const fk = fileKinds.get(nm);
-      if (!fk || mk.size !== 1 || fk.size !== 1) continue;
-      const bothError = mk.has('error') && fk.has('error');
-      const bothEvent = mk.has('event') && fk.has('event');
-      const modifierType = mk.has('modifier') && fk.has('type');
-      if (bothError || bothEvent || modifierType) continue;
-      this.diags.error(
-        cls,
-        'JETH133',
-        `identifier '${nm}' is already declared (a file-level ${[...fk].join('/')} and a contract-member ${[...mk].join('/')} share the name; solc's member shadow leaves the file-level unusable inside the contract - only a matching error/error or event/event pair may coexist)`,
-      );
-    }
+    // UNEXTENDED-ABSTRACT BODY CHECK: this cross-scope reject is keyed off solc's shadow rule (a member
+    // shadows a same-named file-level type/error/event, leaving the file-level unusable INSIDE that contract).
+    // A stray abstract that never deploys is dead code - nothing resolves its members, so the shadow has no
+    // observable effect and the single-file ruling ACCEPTS the pair (this pass replaces the signature-only
+    // path, which never ran this cross-scope loop over a stray). Skip it in the stray check-route so a valid
+    // stray abstract with a file-level-colliding member is not newly rejected (the deployed route still checks
+    // its own members; a genuine within-class dup - field+method - is JETH133 from the memberKinds loop above,
+    // which is unaffected).
+    if (this.abstractCheck === undefined)
+      for (const [nm, mk] of memberKinds) {
+        const fk = fileKinds.get(nm);
+        if (!fk || mk.size !== 1 || fk.size !== 1) continue;
+        const bothError = mk.has('error') && fk.has('error');
+        const bothEvent = mk.has('event') && fk.has('event');
+        const modifierType = mk.has('modifier') && fk.has('type');
+        if (bothError || bothEvent || modifierType) continue;
+        this.diags.error(
+          cls,
+          'JETH133',
+          `identifier '${nm}' is already declared (a file-level ${[...fk].join('/')} and a contract-member ${[...mk].join('/')} share the name; solc's member shadow leaves the file-level unusable inside the contract - only a matching error/error or event/event pair may coexist)`,
+        );
+      }
     // Assign each function a UNIQUE key: the bare name when that name is unique, else `name__ovN`
     // (decl order). This keys the effects map / Yul `userfn_` name / call-graph identity so two
     // overloads never collide. Solc allows overloading by arity or parameter types.
@@ -4302,8 +4446,14 @@ export class Analyzer {
         // unit path; on the normal concrete path a surviving bodyless winner already errored JETH380).
         // A VOID read-only external (assert-style: the body only checks/reverts) is exempt - a value-less
         // `get` is not a getter; solc likewise allows an external pure assert function.
+        // UNEXTENDED-ABSTRACT BODY CHECK: this is a DELIBERATE spelling over-rejection (solc accepts the
+        // plain read-only external method), applied so JETH code uses `get` for readers - a codegen/ABI
+        // convention. A stray abstract that never deploys has no bytecode or ABI, so the convention is
+        // irrelevant to it; the signature-only pass this body-check supplements ALSO accepted such methods.
+        // Re-applying it here would newly reject a program solc accepts, so skip it in the stray check-route
+        // (a genuine body type-error still rejects - this gate is only the read-only-writer-spelling rule).
         const returnsValue = e.rf.returnType.kind !== 'void' || (e.rf.returnTypes?.length ?? 0) > 0;
-        if (e.rf.fromExternalMarker && !e.rf.isGetter && !e.writes && returnsValue && !e.rf.bodyless)
+        if (e.rf.fromExternalMarker && !e.rf.isGetter && !e.writes && returnsValue && !e.rf.bodyless && this.abstractCheck === undefined)
           this.diags.error(
             e.rf.node,
             'JETH352',
@@ -29860,6 +30010,9 @@ export function analyze(
   // FRESHLY PARSED sourceFile for each route - analyzeContract strips return/field markers off the shared
   // AST in place (see Analyzer's routeIndex doc).
   routeIndex = 0,
+  // UNEXTENDED-ABSTRACT BODY CHECK: type-check the bodies of the named stray abstract leaf instead of a
+  // deployable route (the driver re-parses per leaf; see the Analyzer's abstractCheck doc).
+  abstractCheck?: string,
 ): ContractIR | undefined {
-  return new Analyzer(sourceFile, diags, diamond, importScope, routeIndex).analyze();
+  return new Analyzer(sourceFile, diags, diamond, importScope, routeIndex, abstractCheck).analyze();
 }

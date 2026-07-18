@@ -826,6 +826,16 @@ export interface ContractIR {
   // path; absent on the non-deployable (abstract/interface-only) path, which stays single-route (its own
   // multi-leaf JETH041 is retained).
   routeCount?: number;
+  // UNEXTENDED-ABSTRACT BODY CHECK (solc parity): the (final, post-module-rename) names of every abstract
+  // class that is a SIBLING of the deployed route and that NOTHING in the unit extends. solc type-checks
+  // EVERY contract a file declares - bodies included - whether or not it deploys; the deployed route never
+  // visits such a stray abstract, so its member BODIES reached no type checker (an over-acceptance: a broken
+  // body was silently accepted). analyzeContract strips return/field markers off the shared AST in place, so
+  // a stray abstract sharing a base with the route cannot be re-analyzed on the SAME tree without corrupting
+  // it (see compileUnit's re-parse note); instead the driver re-parses ONCE PER leaf and check-routes to it
+  // (routing analyze() through analyzeAbstractCheckRoute), running the full body/override/mutability analysis
+  // and discarding the emitted IR. Absent when the unit declares no such stray abstract leaf.
+  abstractCheckLeaves?: string[];
 }
 
 /** Phase B: an external (delegatecall) library compiled to its OWN deployable Yul object. `external`

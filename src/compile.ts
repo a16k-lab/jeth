@@ -1140,6 +1140,26 @@ function compileGuarded(source: string, opts: CompileOptions = {}): CompileResul
  *  fix; it is cheap (solc's Yul backend dominates a compile at ~92%). */
 function compileUnit(source: string, opts: CompileOptions): CompileResult {
   const first = compileRoute(source, opts, 0);
+  // UNEXTENDED-ABSTRACT BODY CHECK (solc parity): solc type-checks EVERY contract a file declares - member
+  // bodies included - whether or not it deploys. Route 0 analyzed only the deployed contract + its
+  // linearization, so an `abstract class` sibling that nothing extends had its member BODIES skipped: a broken
+  // body (undeclared identifier, bad assignment, return arity/overflow, illegal @override, view/pure mutation,
+  // bad call) was silently ACCEPTED. Re-parse ONCE PER such leaf (a pristine AST - analyzeContract strips
+  // markers off the tree in place, so a leaf sharing a base with the route cannot be checked on route 0's
+  // tree) and body-check it; surface every reject together so the whole file rejects exactly as solc does.
+  const abstractLeaves = first.ir.abstractCheckLeaves ?? [];
+  if (abstractLeaves.length > 0) {
+    const strayDiags: Diagnostic[] = [];
+    for (const leaf of abstractLeaves) {
+      try {
+        compileRoute(source, opts, 0, leaf); // non-deployable result discarded; only its diagnostics matter
+      } catch (e) {
+        if (e instanceof CompileError) strayDiags.push(...e.diagnostics);
+        else throw e;
+      }
+    }
+    if (strayDiags.length > 0) throw new CompileError(strayDiags);
+  }
   const routeCount = first.ir.routeCount ?? 1;
   if (routeCount <= 1) return first; // single-contract file: `contracts` stays undefined, result unchanged
   const contracts: CompileResult[] = [first];
@@ -1255,8 +1275,13 @@ function rejectNonAsciiSeparators(text: string, fileName: string): void {
 
 /** Compile ONE deployable contract (`routeIndex`, document order) out of `source`, front-to-back: parse,
  *  the full front-end, analysis of that route only, Yul emission and the backend. Every call re-parses, so
- *  no route can observe another route's in-place AST edits (see compileUnit). */
-function compileRoute(source: string, opts: CompileOptions, routeIndex: number): CompileResult {
+ *  no route can observe another route's in-place AST edits (see compileUnit).
+ *
+ *  `abstractCheck` switches the run into a body-check of a stray unextended abstract LEAF (named by its
+ *  final, post-module-rename spelling) instead of a deployable route: the front-end runs identically, the
+ *  analyzer type-checks that leaf's member bodies (returning a non-deployable IR), and the existing
+ *  non-deployable branch returns an empty artifact - the caller (compileUnit) only wants the diagnostics. */
+function compileRoute(source: string, opts: CompileOptions, routeIndex: number, abstractCheck?: string): CompileResult {
   const fileName = opts.fileName ?? 'contract.jeth';
 
   // Stage 2: the legacy `// use @decorators` mode was removed - JETH is native-syntax only. A source still
@@ -1424,6 +1449,7 @@ function compileRoute(source: string, opts: CompileOptions, routeIndex: number):
     dia.expanded && dia.name ? { name: dia.name, variant: dia.variant ?? 'array' } : undefined,
     bundleSegments && bundleVisibility ? { segments: bundleSegments, visibleByFile: bundleVisibility } : undefined,
     routeIndex,
+    abstractCheck,
   );
 
   // Surface all front-end diagnostics together.

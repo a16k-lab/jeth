@@ -141,18 +141,22 @@ describe('an unextended abstract class is type-checked (solc parity)', () => {
     expect(codes(`abstract class B { Bad: error<Nope[]>; }\n${DEPLOYABLE}`)).toContain('JETH013'); // bare array error
     expect(codes(`abstract class B { Bad: error<u256, Nope>; }\n${DEPLOYABLE}`)).toContain('JETH013'); // multi error
 
-    // THE CONTROLS: the identical bare shapes with a DEFINED type accept on BOTH JETH and solc (so the
-    // reject is driven by the undefined leaf, not by the bare form itself). A defined struct / contract type
-    // in the bare position resolves too.
-    expect(accepts(`abstract class B { E: event<u256>; }\n${DEPLOYABLE}`)).toBe(true);
-    expect(accepts(`abstract class B { Bad: error<u256>; }\n${DEPLOYABLE}`)).toBe(true);
-    expect(accepts(`abstract class B { E: event<u256[]>; }\n${DEPLOYABLE}`)).toBe(true);
-    expect(accepts(`abstract class B { E: event<indexed<u256>>; }\n${DEPLOYABLE}`)).toBe(true);
-    expect(accepts(`abstract class B { E: event<indexed<u256[]>>; }\n${DEPLOYABLE}`)).toBe(true);
-    expect(accepts(`abstract class B { E: event<u256, address>; }\n${DEPLOYABLE}`)).toBe(true);
-    expect(accepts(`abstract class B { Bad: error<u256, address>; }\n${DEPLOYABLE}`)).toBe(true);
-    expect(accepts(`type P = { x: u256 };\nabstract class B { E: event<P>; }\n${DEPLOYABLE}`)).toBe(true);
-    expect(accepts(`abstract class B { E: event<C>; }\n${DEPLOYABLE}`)).toBe(true); // contract-typed param brands to address
+    // THE CONTROLS. Once the unextended-abstract BODY-check routes a stray abstract through the full
+    // deployed-path analysis, a stray abstract behaves exactly like a deployed one: (1) the OA that matters -
+    // an UNDEFINED leaf - stays closed (JETH013) in the canonical OBJECT-LITERAL spelling too; (2) a valid-type
+    // BARE/positional event/error param now rejects JETH353 on a stray base, because JETH requires the
+    // object-literal `event<{ x: T }>` spelling on EVERY path (positional unnamed params are a pre-existing
+    // safe over-rejection - the deployed/extended paths reject them too - now applied uniformly to stray
+    // abstracts instead of the old stray-only leniency). The canonical object-literal forms accept.
+    expect(accepts(`abstract class B { E: event<{ x: u256 }>; }\n${DEPLOYABLE}`)).toBe(true);
+    expect(accepts(`abstract class B { E: event<{ x: indexed<u256> }>; }\n${DEPLOYABLE}`)).toBe(true);
+    expect(accepts(`abstract class B { Bad: error<{ n: u256 }>; }\n${DEPLOYABLE}`)).toBe(true);
+    expect(codes(`abstract class B { E: event<{ x: Nope }>; }\n${DEPLOYABLE}`)).toContain('JETH013'); // object-literal undefined leaf
+    expect(codes(`abstract class B { Bad: error<{ n: Nope }>; }\n${DEPLOYABLE}`)).toContain('JETH013');
+    // a valid-type BARE/positional form rejects JETH353 (unsupported spelling), consistently with the deployed path.
+    expect(codes(`abstract class B { E: event<u256>; }\n${DEPLOYABLE}`)).toContain('JETH353');
+    expect(codes(`abstract class B { Bad: error<u256>; }\n${DEPLOYABLE}`)).toContain('JETH353');
+    expect(codes(`abstract class B { E: event<u256, address>; }\n${DEPLOYABLE}`)).toContain('JETH353');
 
     // THE SOLC WITNESSES: each undefined bare form is an error; its defined twin accepts.
     expect(solcAccepts(`abstract contract B { event E(Nope); } ${SOL_DEPLOYABLE}`)).toBe(false);
@@ -174,26 +178,26 @@ describe('an unextended abstract class is type-checked (solc parity)', () => {
     // object-literal form had). A valid `indexed<T>` on an EVENT still accepts.
     expect(codes(`abstract class B { Bad: error<indexed<u256>>; }\n${DEPLOYABLE}`)).toContain('JETH129'); // bare
     expect(codes(`abstract class B { Bad: error<{ n: indexed<u256> }>; }\n${DEPLOYABLE}`)).toContain('JETH129'); // object-literal
-    expect(accepts(`abstract class B { E: event<indexed<u256>>; }\n${DEPLOYABLE}`)).toBe(true); // event control still accepts
+    expect(accepts(`abstract class B { E: event<{ x: indexed<u256> }>; }\n${DEPLOYABLE}`)).toBe(true); // valid indexed event (object-literal) still accepts
     // solc witnesses: indexed-on-error rejects, indexed-on-event accepts.
     expect(solcAccepts(`abstract contract B { error Bad(uint256 indexed); } ${SOL_DEPLOYABLE}`)).toBe(false);
     expect(solcAccepts(`abstract contract B { event E(uint256 indexed); } ${SOL_DEPLOYABLE}`)).toBe(true);
   });
 
-  it('BYTE-IDENTITY: a valid BARE event/error stray base does not change the deployable bytecode', () => {
-    // The pass is diagnostics-only, so the deployable's creation bytecode must be UNCHANGED by prepending
-    // any valid bare-form stray base (the same load-bearing guarantee the object-literal forms carry).
+  it('BYTE-IDENTITY: a valid stray abstract base does not change the deployable bytecode', () => {
+    // The check-route is diagnostics-only (its IR is discarded), so the deployable's creation bytecode must be
+    // UNCHANGED by prepending any valid stray abstract base - a canonical object-literal event/error field, or a
+    // well-typed method / constructor / modifier body.
     const baseline = creation(DEPLOYABLE);
-    const validBareBases = [
-      `abstract class B { E: event<u256>; }`,
-      `abstract class B { Bad: error<u256>; }`,
-      `abstract class B { E: event<u256[]>; }`,
-      `abstract class B { E: event<indexed<address>>; }`,
-      `abstract class B { E: event<indexed<u256[]>>; }`,
-      `abstract class B { E: event<u256, address>; }`,
-      `abstract class B { E: event<C>; }`,
+    const validBases = [
+      `abstract class B { E: event<{ x: u256 }>; }`,
+      `abstract class B { Bad: error<{ n: u256 }>; }`,
+      `abstract class B { E: event<{ x: indexed<u256> }>; }`,
+      `abstract class B { m(x: u256): u256 { return x + 1n; } }`,
+      `abstract class B { constructor(x: u256) {} }`,
+      `abstract class B { @modifier only(x: u256) { _; } }`,
     ];
-    for (const base of validBareBases) {
+    for (const base of validBases) {
       expect(accepts(`${base}\n${DEPLOYABLE}`)).toBe(true);
       expect(creation(`${base}\n${DEPLOYABLE}`)).toBe(baseline);
     }
@@ -253,5 +257,100 @@ describe('an unextended abstract class is type-checked (solc parity)', () => {
     expect(rejected).toEqual([]);
     expect(drifted).toEqual([]);
     expect(shapes.length).toBe(30);
+  });
+});
+
+// UNEXTENDED-ABSTRACT BODY CHECK (solc parity): the SIGNATURE pass above resolved a stray abstract's
+// param/field/return TYPES but never its member BODIES, so a broken body (undeclared identifier, bad
+// assignment, wrong return arity/overflow, illegal @override, view/pure mutation, unknown or wrong-arity
+// call) was silently ACCEPTED while solc rejects it. The driver now re-parses once per stray unextended
+// abstract LEAF (a pristine AST - analyzeContract strips markers in place, so a leaf sharing a base with the
+// route cannot be checked on the route's tree) and runs the full body analysis. These pins close that OA for
+// EVERY (check-kind x member-position) cell, and the control block below is the load-bearing half: a valid
+// stray abstract with any member body still compiles AND leaves the deployable byte-identical (the check is a
+// dead-code type pass, never codegen), including the double-strip-hazard shared-base case.
+describe('an unextended abstract class BODY is type-checked (solc parity)', () => {
+  // both must REJECT: the JETH reject is the newly-closed body check, and the solc mirror rejects too
+  // (non-vacuous - the SAME file with the body fixed compiles on both).
+  const bothReject = (j: string, s: string): boolean => !accepts(`${j}\n${DEPLOYABLE}`) && !solcAccepts(`${s}\n${SOL_DEPLOYABLE}`);
+
+  it('METHOD body: each broken-body kind rejects, like solc', () => {
+    expect(bothReject(`abstract class A { m(): u256 { return q; } }`, `abstract contract A { function m() internal pure returns (uint256) { return q; } }`)).toBe(true); // undeclared
+    expect(bothReject(`abstract class A { m(): u256 { let y: u256 = true; return y; } }`, `abstract contract A { function m() internal pure returns (uint256) { uint256 y = true; return y; } }`)).toBe(true); // bad assign
+    expect(bothReject(`abstract class A { m(): u256 { return; } }`, `abstract contract A { function m() internal pure returns (uint256) { return; } }`)).toBe(true); // return arity
+    expect(bothReject(`abstract class A { m(): u8 { return 300n; } }`, `abstract contract A { function m() internal pure returns (uint8) { return 300; } }`)).toBe(true); // overflow
+    expect(bothReject(`abstract class A { @override m(): u256 { return 1n; } }`, `abstract contract A { function m() internal pure override returns (uint256) { return 1; } }`)).toBe(true); // illegal override
+    expect(bothReject(`abstract class A { m(): u256 { return this.nope(); } }`, `abstract contract A { function m() internal returns (uint256) { return this.nope(); } }`)).toBe(true); // unknown call
+    expect(bothReject(`abstract class A { h(x: u256): u256 { return x; } m(): u256 { return this.h(); } }`, `abstract contract A { function h(uint256 x) internal pure returns (uint256){return x;} function m() internal returns (uint256) { return this.h(); } }`)).toBe(true); // wrong arg count
+  });
+
+  it('GETTER body: undeclared / view-mutation / bad-assign / overflow reject, like solc', () => {
+    expect(bothReject(`abstract class A { get g(): External<u256> { return q; } }`, `abstract contract A { function g() public view returns (uint256) { return q; } }`)).toBe(true);
+    expect(bothReject(`abstract class A { n: u256; get g(): External<u256> { this.n = 5n; return this.n; } }`, `abstract contract A { uint256 n; function g() public view returns (uint256) { n = 5; return n; } }`)).toBe(true); // a get is read-only
+    expect(bothReject(`abstract class A { get g(): External<u256> { let y: u256 = true; return y; } }`, `abstract contract A { function g() public view returns (uint256) { uint256 y = true; return y; } }`)).toBe(true);
+    expect(bothReject(`abstract class A { get g(): External<u8> { return 300n; } }`, `abstract contract A { function g() public view returns (uint8) { return 300; } }`)).toBe(true);
+  });
+
+  it('CONSTRUCTOR body: undeclared / bad-assign / unknown-call reject, like solc', () => {
+    expect(bothReject(`abstract class A { n: u256; constructor() { this.n = q; } }`, `abstract contract A { uint256 n; constructor() { n = q; } }`)).toBe(true);
+    expect(bothReject(`abstract class A { n: u256; constructor() { this.n = true; } }`, `abstract contract A { uint256 n; constructor() { n = true; } }`)).toBe(true);
+    expect(bothReject(`abstract class A { constructor() { this.nope(); } }`, `abstract contract A { constructor() { nope(); } }`)).toBe(true);
+  });
+
+  it('FIELD INITIALIZER: undeclared / bad-type / overflow reject, like solc', () => {
+    expect(bothReject(`abstract class A { x: u256 = q; }`, `abstract contract A { uint256 x = q; }`)).toBe(true);
+    expect(bothReject(`abstract class A { x: u256 = true; }`, `abstract contract A { uint256 x = true; }`)).toBe(true);
+    expect(bothReject(`abstract class A { x: u8 = 300n; }`, `abstract contract A { uint8 x = 300; }`)).toBe(true);
+  });
+
+  it('APPLIED @modifier body + @nonReentrant body: broken body rejects, like solc', () => {
+    expect(bothReject(`abstract class A { @modifier only() { require(q, "x"); _; } @only m(): External<void> {} }`, `abstract contract A { modifier only() { require(q, "x"); _; } function m() external only {} }`)).toBe(true);
+    expect(bothReject(`abstract class A { x: u256; @nonReentrant m(): External<void> { this.x = q; } }`, `abstract contract A { uint256 x; function m() external { x = q; } }`)).toBe(true);
+  });
+
+  it('a CHAIN of unextended abstracts (nothing concrete extends): a broken body in EITHER link rejects', () => {
+    // broken BASE body, checked via the extending leaf's linearization
+    expect(bothReject(`abstract class A0 { m(): u256 { return q; } }\nabstract class B extends A0 { }`, `abstract contract A0 { function m() internal pure returns (uint256) { return q; } }\nabstract contract B is A0 { }`)).toBe(true);
+    // broken LEAF body
+    expect(bothReject(`abstract class A0 { }\nabstract class B extends A0 { m(): u256 { return q; } }`, `abstract contract A0 { }\nabstract contract B is A0 { function m() internal pure returns (uint256) { return q; } }`)).toBe(true);
+  });
+
+  it('SHARED BASE with the deployed route (the marker-strip hazard): sound + byte-identical', () => {
+    // C and the stray abstract A both extend B. A broken body in A must reject; a valid A must accept AND
+    // leave C byte-identical to the C-extends-B baseline (the re-parse per leaf is what makes this sound - an
+    // in-place re-analysis would demote B's markers to internal, corrupting C's dispatcher).
+    const baseB = `abstract class B { bhelper(): u256 { return 1n; } }\nclass C extends B { get z(): External<u256> { return 7n; } }`;
+    const withValidStray = `${baseB}\nabstract class A extends B { m(): u256 { return this.bhelper(); } }`;
+    const withBrokenStray = `${baseB}\nabstract class A extends B { m(): u256 { return q; } }`;
+    expect(accepts(withValidStray)).toBe(true);
+    expect(creation(withValidStray)).toBe(creation(baseB)); // C's bytecode untouched by the valid stray
+    expect(codes(withBrokenStray)).toContain('JETH072'); // the broken stray still rejects
+  });
+
+  it('NO NEW OVER-REJECTION: valid bodies in every position still compile (solc accepts them too)', () => {
+    const valid: [string, string][] = [
+      [`abstract class A { m(): u256 { return 1n; } }`, `abstract contract A { function m() internal pure returns (uint256) { return 1; } }`],
+      [`abstract class A { n: u256; get g(): External<u256> { return this.n; } }`, `abstract contract A { uint256 n; function g() public view returns (uint256) { return n; } }`],
+      [`abstract class A { n: u256; @modifier only() { require(this.n > 0n, "x"); _; } @only m(): External<void> {} }`, `abstract contract A { uint256 n; modifier only() { require(n > 0, "x"); _; } function m() external only {} }`],
+      [`abstract class A { n: u256; constructor(x: u256) { this.n = x; } }`, `abstract contract A { uint256 n; constructor(uint256 x) { n = x; } }`],
+      [`abstract class A { x: u256 = 5n; }`, `abstract contract A { uint256 x = 5; }`],
+      [`abstract class A { x: u256; @nonReentrant m(): External<void> { this.x = 1n; } }`, `abstract contract A { uint256 x; function m() external { x = 1; } }`],
+      // the INTERFACE-SURFACE idiom: an abstract used only as a nominal TYPE, carrying View/Pure markers and a
+      // read-only External method (solc accepts both; the body check must NOT resurrect the deliberate JETH
+      // class-mutability over-rejections JETH498 / JETH352-read-only-external over this dead code).
+      [`abstract class T { @virtual v(): View<u256>; transfer(to: address, amt: u256): External<bool> { return true; } }`, `abstract contract T { function v() external view virtual returns (uint256); function transfer(address to, uint256 amt) external returns (bool) { return true; } }`],
+    ];
+    const rejected: string[] = [];
+    const drifted: string[] = [];
+    const baseline = creation(DEPLOYABLE);
+    for (const [aj, as] of valid) {
+      const src = `${aj}\n${DEPLOYABLE}`;
+      if (!accepts(src)) rejected.push(aj);
+      else if (creation(src) !== baseline) drifted.push(aj);
+      // sanity: solc accepts the twin (non-vacuous control)
+      expect(solcAccepts(`${as}\n${SOL_DEPLOYABLE}`)).toBe(true);
+    }
+    expect(rejected).toEqual([]);
+    expect(drifted).toEqual([]);
   });
 });
