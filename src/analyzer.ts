@@ -102,6 +102,19 @@ const BYTES: JethType = { kind: 'bytes' };
 // checks); tryCall/tryStaticcall return [bool, bytes] (raw escape hatch, only in a tuple destructure).
 const EXT_CALL_METHODS = new Set(['call', 'staticcall', 'tryCall', 'tryStaticcall']);
 
+// KEPT built-in decorator names that remain legal in native-only mode (see compile.ts STAGE 2 KEEP set).
+// A user `@modifier` may NOT be declared with one of these names: applying `@<name>` to a function
+// resolves to the BUILT-IN meaning (BUILTIN_FN_DECORATORS in the applied-modifier collector), silently
+// dropping the user modifier body - the @nonReentrant name-collision miscompile. collectModifier rejects
+// a declaration of any of these names (JETH499).
+const KEPT_BUILTIN_DECORATOR_NAMES = new Set(['nonReentrant', 'virtual', 'override', 'using']);
+
+// RESERVED SOLIDITY KEYWORDS that JETH's TS-based parser accepts as an ordinary identifier but solc
+// PARSE-REJECTS everywhere an identifier is declared (a var / field / parameter / function / modifier /
+// struct-or-event member name). Accepting them is an over-acceptance; checkReservedIdentifierNames rejects
+// exactly this minimal set (JETH500). `using` and `virtual` are also kept decorator names above.
+const RESERVED_SOLIDITY_IDENTIFIERS = new Set(['virtual', 'using', 'anonymous']);
+
 // CONTRACT-TYPE-PARAM: the brand prefix a contract/interface reference TYPE carries when modeled as a
 // branded address. `__ctref:<Name>` - the leading `__` and colon cannot appear in a source identifier,
 // so it can never collide with a user branded-newtype alias.
@@ -839,6 +852,7 @@ export class Analyzer {
     this.collectFileLevelErrorEventNames(); // `type X = error<{...}>` / `event<{...}>` names (member types resolved in buildFileLevelErrorEvents, after class/interface registration)
     this.collectNativeInterfaces(); // item #6b: native `interface I { m(): View<T> }`
     this.rejectImplementsClauses(); // a silently-ignored `implements` clause skipped interface obligations
+    this.checkReservedIdentifierNames(); // JETH500: virtual/using/anonymous cannot name a declaration (solc reserved words)
     this.checkClassNamespaceCollisions(); // duplicate contract/abstract/library names + builtin-global shadows
     this.checkClassTypeNameCollisions(); // ANY top-level class vs a same-named file-level type (solc parity)
     this.checkAbstractRequiredForBodylessMembers(); // a non-abstract class declaring a bodyless member (solc parity)
@@ -2229,6 +2243,48 @@ export class Analyzer {
   private static readonly CLASS_KIND_DECORATORS = [
     'contract', 'struct', 'interface', 'abstract', 'library', 'proxy', 'beacon', 'facet', 'diamond',
   ];
+
+  /** JETH500: `virtual` / `using` / `anonymous` are RESERVED KEYWORDS in Solidity's grammar - solc
+   *  PARSE-REJECTS any declaration named one of them ("Expected identifier but got 'virtual'", ...).
+   *  JETH's TypeScript-based parser accepts them as ordinary identifiers (they are contextual keywords /
+   *  legal identifiers in TS), so a var / field / parameter / function / modifier / struct-or-event member
+   *  named `virtual`/`using`/`anonymous` compiled where solc rejects: an over-acceptance. Walk the whole
+   *  source and reject exactly this minimal reserved set at each DECLARATION name (never a reference). The
+   *  broader marker-name reservation (External/Payable/...) lives in checkClassNamespaceCollisions. */
+  private checkReservedIdentifierNames(): void {
+    const flag = (nameNode: ts.Identifier): void => {
+      if (RESERVED_SOLIDITY_IDENTIFIERS.has(nameNode.text)) {
+        this.diags.error(
+          nameNode,
+          'JETH500',
+          `'${nameNode.text}' is a reserved Solidity keyword and cannot name a declaration (solc rejects it as a parse error); choose a different name`,
+        );
+      }
+    };
+    const visit = (n: ts.Node): void => {
+      // Declaration NAME positions only (identifier declarations solc reserves the keyword against):
+      // parameter, class field (PropertyDeclaration), method / get / set accessor (a @modifier is a
+      // MethodDeclaration too), local `let`/`const` (VariableDeclaration), and a struct/event/error member
+      // (PropertySignature inside a `type` literal). A property ACCESS / reference is never a declaration
+      // node here, so it is untouched.
+      if (
+        (ts.isParameter(n) ||
+          ts.isPropertyDeclaration(n) ||
+          ts.isMethodDeclaration(n) ||
+          ts.isGetAccessorDeclaration(n) ||
+          ts.isSetAccessorDeclaration(n) ||
+          ts.isVariableDeclaration(n) ||
+          ts.isPropertySignature(n) ||
+          ts.isMethodSignature(n)) &&
+        n.name &&
+        ts.isIdentifier(n.name)
+      ) {
+        flag(n.name);
+      }
+      ts.forEachChild(n, visit);
+    };
+    ts.forEachChild(this.sourceFile, visit);
+  }
 
   /** All top-level-namespace CLASS declarations - the deployed contract (bare / @contract-family),
    *  abstract bases (keyword or @abstract), and libraries (static class / @library) - share ONE identifier
@@ -10254,6 +10310,25 @@ export class Analyzer {
       return;
     }
     const name = member.name.text;
+    // A @modifier NAMED like a KEPT built-in function decorator is a hard error. Applying `@<name>` to
+    // a function does NOT resolve to this user modifier: the collector routes those names to their
+    // built-in meaning (`@nonReentrant` -> the transient-storage mutex, `@virtual`/`@override` -> the
+    // inheritance markers, `@using` -> the library-attach directive), silently dropping the user
+    // modifier body - a MISCOMPILE (a `@nonReentrant` guard body was replaced by the built-in mutex,
+    // e.g. a re-entrance the user's require() would revert instead succeeded). solc accepts such a
+    // modifier as a plain modifier, but a clean reject beats the silent-drop miscompile.
+    // `virtual`/`using` are ALSO reserved identifiers (JETH500 fires for the declaration name in
+    // checkReservedIdentifierNames); skip them here so the reject is a single, precise diagnostic and
+    // JETH499 stays specific to the names that are legal identifiers yet collide (`nonReentrant`,
+    // `override`).
+    if (KEPT_BUILTIN_DECORATOR_NAMES.has(name) && !RESERVED_SOLIDITY_IDENTIFIERS.has(name)) {
+      this.diags.error(
+        member.name,
+        'JETH499',
+        `a @modifier cannot be named '${name}': it collides with the built-in @${name} decorator, so an @${name} application would silently invoke the built-in instead of this modifier - rename the modifier`,
+      );
+      return;
+    }
     // A duplicate @modifier of the same name declared in the SAME contract is a genuine redeclaration
     // (solc: "Identifier already declared") - reject. A same-name declaration in a DIFFERENT contract
     // of the inheritance chain is an OVERRIDE (@virtual base -> @override derived); it is resolved by
