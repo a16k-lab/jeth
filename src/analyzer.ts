@@ -28501,6 +28501,18 @@ export class Analyzer {
     };
   }
 
+  /** Emit the standard JETH083 "no implicit conversion between the two operand types" error, shared by
+   *  the generic mismatch fall-through and the ADDRESS-literal decline path (which retypeLiteral leaves
+   *  silent). Keeps one message for every operand-type mismatch (address-literal, address-variable, and
+   *  ordinary type-vs-type), so the literal and variable operand paths reject identically. */
+  private mismatchOperands(left: Expr, right: Expr, node: ts.Node): void {
+    this.diags.error(
+      node,
+      'JETH083',
+      `type mismatch: ${displayName(left.type)} vs ${displayName(right.type)} (no implicit conversion)`,
+    );
+  }
+
   /** Make two operands share a type, retyping a literal toward the other side. */
   private unifyOperands(left: Expr, right: Expr, node: ts.Node): [Expr, Expr] | undefined {
     if (typesEqual(left.type, right.type)) return [left, right];
@@ -28518,10 +28530,21 @@ export class Analyzer {
     const rLit = right.kind === 'literalInt';
     if (rLit && !lLit) {
       const r = this.retypeLiteral(right, left.type, node);
+      // An ADDRESS-typed literal (address(0), address(this), a 40-hex checksummed literal) declines
+      // retypeLiteral SILENTLY - no diagnostic - unlike an out-of-range/bytesN/enum literal (which
+      // each emit their own). Without an error here the caller's expression error-recovery silently
+      // ACCEPTS the mismatched binary op, an over-acceptance (`u256var + address(0)`, `u256var &
+      // address(1)`), while the address-VARIABLE twin (`u256var + addrParam`) already rejects via the
+      // commonNumericType path below. solc rejects EVERY arithmetic/bitwise/comparison mix of an
+      // address and a non-address ("operator + cannot be applied to uint256 and address"), so emit the
+      // same JETH083 the variable path produces, closing the address-literal-operand hole. Mirrors the
+      // silent-address handling coerce() already has (retypeLiteral -> generic no-conversion error).
+      if (!r && right.type.kind === 'address') this.mismatchOperands(left, right, node);
       return r ? [left, r] : undefined;
     }
     if (lLit && !rLit) {
       const l = this.retypeLiteral(left, right.type, node);
+      if (!l && left.type.kind === 'address') this.mismatchOperands(left, right, node);
       return l ? [l, right] : undefined;
     }
     // mixed-width same-signedness operands (u8 + u256, i16 < i256, bytes4 == bytes32):
@@ -28536,11 +28559,7 @@ export class Analyzer {
         : right;
       return [l, r];
     }
-    this.diags.error(
-      node,
-      'JETH083',
-      `type mismatch: ${displayName(left.type)} vs ${displayName(right.type)} (no implicit conversion)`,
-    );
+    this.mismatchOperands(left, right, node);
     return undefined;
   }
 
