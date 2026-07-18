@@ -7,7 +7,7 @@
 //  - type-check each function body into typed IR (checked-by-default arithmetic),
 //    enforcing integer widths, BigInt-literal rule, and view/pure mutability.
 import ts from 'typescript';
-import { DiagnosticBag, demangleModuleName } from './diagnostics.js';
+import { DiagnosticBag, demangleModuleName, type Diagnostic } from './diagnostics.js';
 import { decoratorNames, ctorDecoratorNames, decoratorCall, heritageBases, HeritageBase } from './parser.js';
 import { resolveType, resolvePrimitiveName } from './typeresolver.js';
 import {
@@ -428,6 +428,12 @@ export class Analyzer {
   // accepted while solc rejects it). analyzeContract standalone-checks each declared modifier NOT in this
   // set after the function loops. Cleared per analyzeContract (a route-local applied set).
   private appliedModifierKeys = new Set<string>();
+  // UNUSED-MODIFIER-BODY (generic twin): the BARE names of generic @modifier TEMPLATES that were
+  // instantiated (i.e. APPLIED) somewhere during the current analyzeContract pass. An applied generic's
+  // monomorph body is checked at its inline site, so the post-loop standalone generic pass checks only
+  // the UNAPPLIED templates (whose body otherwise escapes the checker entirely). instantiateGenericModifier
+  // records the bare name here BEFORE it rewrites the application to the mangled key. Cleared per route.
+  private appliedGenericModifierNames = new Set<string>();
   // @struct declarations (name -> resolved struct type), collected before contracts
   private structsByName = new Map<string, JethType>();
   // CONTRACT-MEMBER custom error and event tables (collected before function bodies). File-level
@@ -3620,6 +3626,7 @@ export class Analyzer {
     // UNUSED-MODIFIER-BODY: a fresh applied-modifier set per route (application sites below record every
     // modifier whose body they check, so the post-loop standalone pass checks only the UNAPPLIED ones).
     this.appliedModifierKeys.clear();
+    this.appliedGenericModifierNames.clear();
     const rawState: RawStateVar[] = [];
     const rawFns: RawFunction[] = [];
 
@@ -4336,7 +4343,17 @@ export class Analyzer {
         if (rm) unappliedLibMods.push({ mod: rm, lib });
       }
     }
-    if (collectedMods.length > 0 || unappliedLibMods.length > 0) {
+    // UNUSED-MODIFIER-BODY (generic twin): a DECLARED-but-NEVER-APPLIED GENERIC @modifier template. An
+    // APPLIED generic is monomorphized + its body checked at the inline site (appliedGenericModifierNames);
+    // an UNAPPLIED one is never specialized, so its body reaches no checker (an over-acceptance for a type-
+    // parameter-INDEPENDENT break). Scope to templates declared by a class in THIS route's linearization.
+    const unappliedGenMods: { node: ts.MethodDeclaration; typeParams: string[]; definingContract: string; buffered: boolean }[] = [];
+    for (const [name, gen] of this.genericModifiersByName) {
+      if (this.appliedGenericModifierNames.has(name)) continue; // applied -> checked at its inline site
+      if (!this.currentLinNames.has(gen.definingContract)) continue; // declared in another route
+      unappliedGenMods.push(gen);
+    }
+    if (collectedMods.length > 0 || unappliedLibMods.length > 0 || unappliedGenMods.length > 0) {
       const snapAddressTaken = new Set(this.addressTaken);
       const snapInternallyCalled = new Set(this.internallyCalled);
       const snapSpecQueue = [...this.specializationQueue];
@@ -4357,6 +4374,9 @@ export class Analyzer {
       // LIB-MODIFIER: type-check each unapplied library modifier body in its LIBRARY's scope (currentLibrary=L,
       // no contract owner) - see checkUnappliedModifierBody's libraryName arm.
       for (const { mod, lib } of unappliedLibMods) this.checkUnappliedModifierBody(mod, lib);
+      // GENERIC TEMPLATES: check each unapplied generic modifier body under a DIVERSE probe set, reporting
+      // only errors that fire under EVERY probe (type-parameter-INDEPENDENT). See the helper.
+      for (const gen of unappliedGenMods) this.checkUnappliedGenericModifierBody(gen);
       // Drop every emission-affecting registration the unused bodies made (they emit no code): byte-identical
       // to the baseline where an unapplied modifier is never analyzed. The DIAGNOSTICS are kept (the point).
       this.addressTaken = snapAddressTaken;
@@ -10746,6 +10766,108 @@ export class Analyzer {
     this.memDynStructLocals = savedMemDynStruct;
   }
 
+  /** UNUSED-MODIFIER-BODY (generic twin): standalone-type-check a DECLARED-but-NEVER-APPLIED generic
+   *  @modifier TEMPLATE body. solc type-checks every declared modifier body regardless of use; a GENERIC
+   *  @modifier is a template JETH only monomorphizes + checks at an APPLICATION site, so an unapplied one
+   *  escaped the checker (a type-parameter-INDEPENDENT break - an undeclared identifier, a call to a
+   *  missing function, a wrong-arity call, a concrete bad-type assignment, a value-return - was silently
+   *  ACCEPTED while solc's monomorphized mirror rejects it: an over-acceptance).
+   *
+   *  A template body cannot be checked with `T` unresolved, and binding `T` to ONE concrete type would
+   *  over-REJECT a body valid at a DIFFERENT type (`v.length` is valid at bytes, not at uint256). So the
+   *  body is checked under a DIVERSE probe set of concrete bindings - one per capability class (numeric,
+   *  bool, address, dynamic bytes, string, bytesN, dynamic array, funcref, plus synthesized structs whose
+   *  fields are the body's member names, below) - and ONLY an error that fires under EVERY probe is
+   *  reported. Such an error holds for all those types, so it is type-parameter-INDEPENDENT (every
+   *  monomorphized mirror rejects it); an error that depends on `T` being a particular type is valid at
+   *  some probe and is excluded, so a valid unapplied generic modifier stays ACCEPTED.
+   *  (Residual: an access valid ONLY at a type OUTSIDE the probe set - a NESTED/deeper struct field, a
+   *  struct field of an aggregate type, or an enum member reached through the bare type parameter - can
+   *  survive the intersection; such a never-instantiated template body is an extreme corner and errs to a
+   *  clean reject, never a miscompile or over-acceptance.)
+   *
+   *  Diagnostics-only: the probe instantiations' emission side effects are discarded by the CALLER's
+   *  snapshot/restore block; each probe's diagnostics are captured into a scratch region of the bag and
+   *  truncated away, and only the intersection is re-emitted - so a valid unapplied generic modifier
+   *  stays byte-identical. */
+  private checkUnappliedGenericModifierBody(gen: {
+    node: ts.MethodDeclaration;
+    typeParams: string[];
+    definingContract: string;
+    buffered: boolean;
+  }): void {
+    // One representative concrete type per capability class a type parameter could take. A modifier param
+    // may not be a mapping, so no mapping probe is needed. u256 is included so any body VALID at u256 (the
+    // common controls) accepts.
+    const probes: JethType[] = [
+      { kind: 'uint', bits: 256 },
+      { kind: 'int', bits: 256 },
+      { kind: 'bool' },
+      { kind: 'address', payable: false },
+      { kind: 'bytes' },
+      { kind: 'string' },
+      { kind: 'bytesN', size: 32 },
+      { kind: 'array', element: { kind: 'uint', bits: 256 } }, // dynamic T[]: push/pop/length/index
+      { kind: 'funcref', params: [], ret: undefined }, // callable
+    ];
+    // Struct capability: a member access `v.foo` through the type parameter is valid at a STRUCT that HAS
+    // `foo` - so, unlike the value probes above, no fixed struct covers an arbitrary field NAME. Synthesize
+    // struct probes whose fields are EXACTLY the member names accessed anywhere in the body (one struct per
+    // candidate field TYPE), so `v.foo` is valid under the matching probe and is EXCLUDED from the
+    // intersection as the type-parameter-DEPENDENT access it is - while a genuinely type-INDEPENDENT error
+    // (an undeclared bare name / a missing free function / a member access on `this` or another local) is
+    // unaffected by U's binding and stays broken under every probe, struct included. Over-collecting names
+    // is safe: it can only make MORE `v.<name>` accesses valid, never resolve an error on a non-U base.
+    const memberNames = new Set<string>();
+    const collectMembers = (n: ts.Node): void => {
+      if (ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.name)) memberNames.add(n.name.text);
+      n.forEachChild(collectMembers);
+    };
+    if (gen.node.body) gen.node.body.forEachChild(collectMembers);
+    if (memberNames.size > 0) {
+      const fieldTypes: JethType[] = [
+        { kind: 'uint', bits: 256 },
+        { kind: 'bool' },
+        { kind: 'address', payable: false },
+        { kind: 'bytesN', size: 32 },
+      ];
+      fieldTypes.forEach((ft, ti) => {
+        const fields = [...memberNames].map((nm, i) => ({ name: nm, type: ft, slot: i, offset: 0 }));
+        probes.push({ kind: 'struct', name: `$genprobe$${ti}`, fields });
+      });
+    }
+    const keyOf = (d: Diagnostic): string => `${d.code}|${d.line}|${d.column}|${d.length}`;
+    let intersection: Map<string, Diagnostic> | undefined;
+    for (const probe of probes) {
+      const binding = new Map<string, JethType>();
+      for (const tp of gen.typeParams) binding.set(tp, probe);
+      const mark = this.diags.items.length;
+      this.withTypeBinding(binding, () => {
+        // instanceKey set: collectModifier fully resolves the template's params + shape under the binding
+        // (and emits the DECLARATION-level diagnostic - JETH324 value-return, JETH247 mapping param, etc. -
+        // if the declaration itself is broken), then checkUnappliedModifierBody checks the body statements.
+        const scratch: RawModifier[] = [];
+        this.collectModifier(gen.node, gen.definingContract, scratch, '$genprobe$');
+        const rm = scratch[0];
+        if (rm) this.checkUnappliedModifierBody(rm);
+      });
+      // Capture this probe's errors keyed by (code + span), then truncate them out of the bag so a probe's
+      // diagnostics never surface directly - only the surviving intersection is re-emitted below.
+      const produced = new Map<string, Diagnostic>();
+      for (let i = mark; i < this.diags.items.length; i++) {
+        const d = this.diags.items[i];
+        if (!d || d.severity !== 'error') continue;
+        const k = keyOf(d);
+        if (!produced.has(k)) produced.set(k, d);
+      }
+      this.diags.items.length = mark;
+      if (intersection === undefined) intersection = produced;
+      else for (const k of [...intersection.keys()]) if (!produced.has(k)) intersection.delete(k);
+      if (intersection.size === 0) break; // the intersection only shrinks; nothing survives
+    }
+    if (intersection) for (const d of intersection.values()) this.diags.items.push(d);
+  }
+
   /** Phase 5: collect a user-defined @modifier. Increment 1 supports a PRE-ONLY modifier: a single
    *  `_;` placeholder in TAIL position (the last statement). The pre-code is the guard that runs
    *  before the wrapped function body; post-placeholder code and a conditional placeholder are gated. */
@@ -10959,6 +11081,11 @@ export class Analyzer {
     site: ts.Node;
   }): string | undefined {
     const gen = this.genericModifiersByName.get(app.name)!;
+    // UNUSED-MODIFIER-BODY (generic twin): mark this template APPLIED (by its BARE name, before the caller
+    // rewrites app.name to the mangled key) so the post-loop standalone generic pass skips it - its
+    // monomorph body is checked here at the inline site (an uninstantiable use still marks it applied and
+    // suppresses the standalone pass, since it already emits its own diagnostic below).
+    this.appliedGenericModifierNames.add(app.name);
     const binding = this.resolveModifierGenericArgs(app, gen);
     if (!binding) return undefined;
     const args = gen.typeParams.map((tp) => binding.get(tp)!);

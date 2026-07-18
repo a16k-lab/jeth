@@ -833,4 +833,116 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
       expect(p.runtimeBytecode).toBe(b.runtimeBytecode);
     });
   });
+
+  // UNUSED-MODIFIER-BODY (generic twin): solc type-checks every declared modifier body regardless of use.
+  // A GENERIC @modifier is a TEMPLATE that JETH only monomorphizes + checks at an APPLICATION site, so a
+  // DECLARED-but-NEVER-APPLIED generic modifier's body escaped the checker entirely - a type-parameter-
+  // INDEPENDENT break (undeclared identifier / missing function / wrong arity / concrete bad-type / value-
+  // return) was silently ACCEPTED while solc's monomorphized mirror rejects it (an over-acceptance). The
+  // template body is now checked standalone under a DIVERSE probe set of concrete bindings; only an error
+  // that fires under EVERY probe (i.e. type-parameter-INDEPENDENT) is reported, so a body that is valid at
+  // SOME type (an applied generic, or an unapplied one valid for any type param) stays byte-identical.
+  describe('unapplied GENERIC @modifier body type-checking (solc parity)', () => {
+    // ---- FULL-AXIS CLOSE: each must now REJECT (solc's monomorphized mirror also rejects; non-vacuous) ----
+    it('OA close: undeclared identifier in an unapplied generic modifier body', () => {
+      const J = `class C { @modifier m<U>() { g; _; } get z(): External<u256> { return 7n; } }`;
+      const S = `contract C { modifier m() { g; _; } function z() external pure returns(uint256){ return 7; } }`;
+      expect(codes(J)).toContain('JETH072');
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('OA close: concrete bad-type assignment (let x: u256 = true)', () => {
+      const J = `class C { @modifier m<U>() { let x: u256 = true; _; } get z(): External<u256> { return 7n; } }`;
+      const S = `contract C { modifier m() { uint256 x = true; _; } function z() external pure returns(uint256){ return 7; } }`;
+      expect(codes(J)).toContain('JETH085');
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('OA close: call to a non-existent function', () => {
+      const J = `class C { @modifier m<U>() { nope(); _; } get z(): External<u256> { return 7n; } }`;
+      const S = `contract C { modifier m() { nope(); _; } function z() external pure returns(uint256){ return 7; } }`;
+      expect(codes(J).length).toBeGreaterThan(0);
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('OA close: wrong-argument-count call', () => {
+      const J = `class C { g(a: u256): u256 { return a; } @modifier m<U>() { this.g(1n, 2n); _; } get z(): External<u256> { return 7n; } }`;
+      const S = `contract C { function g(uint256 a) internal pure returns(uint256){return a;} modifier m() { g(1, 2); _; } function z() external pure returns(uint256){ return 7; } }`;
+      expect(codes(J)).toContain('JETH148');
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('OA close: return-with-value (a modifier cannot return a value)', () => {
+      const J = `class C { @modifier m<U>() { return 7n; _; } get z(): External<u256> { return 7n; } }`;
+      const S = `contract C { modifier m() { return 7; _; } function z() external pure returns(uint256){ return 7; } }`;
+      expect(codes(J)).toContain('JETH324');
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('OA close: MULTI-type-param generic modifier with a type-independent break', () => {
+      const J = `class C { @modifier m<A, B>() { g; _; } get z(): External<u256> { return 7n; } }`;
+      const S = `contract C { modifier m() { g; _; } function z() external pure returns(uint256){ return 7; } }`;
+      expect(codes(J)).toContain('JETH072');
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('OA close: an unapplied generic modifier declared in a BASE class (derived route)', () => {
+      const J = `abstract class B { @modifier m<U>() { g; _; } } class C extends B { get z(): External<u256> { return 7n; } }`;
+      const S = `abstract contract B { modifier m(){ g; _; } } contract C is B { function z() external pure returns(uint256){ return 7; } }`;
+      expect(codes(J)).toContain('JETH072');
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('OA close: a type-independent break in a whole-body (post-placeholder) generic modifier', () => {
+      const J = `class C { log: u256; @modifier m<U>() { this.log = 1n; _; g; } get z(): External<u256> { return 7n; } }`;
+      const S = `contract C { uint256 log; modifier m(){ log=1; _; g; } function z() external view returns(uint256){ return 7; } }`;
+      expect(codes(J)).toContain('JETH072');
+      expect(solcRejects(S)).toBe(true);
+    });
+
+    // ---- NO NEW OVER-REJECTION: each must still ACCEPT (a body VALID for any type param) ----
+    it('accept: valid unapplied generic modifier (require(true); _;)', () => {
+      const J = `class C { @modifier m<U>() { require(true, "x"); _; } get z(): External<u256> { return 7n; } }`;
+      const S = `contract C { modifier m() { require(true, "x"); _; } function z() external pure returns(uint256){ return 7; } }`;
+      expect(codes(J)).toEqual([]);
+      expect(solcRejects(S)).toBe(false);
+    });
+    it('accept: unapplied generic modifier consistently using its own param (let y: U = v)', () =>
+      expect(codes(`class C { @modifier m<U>(v: U) { let y: U = v; _; } get z(): External<u256> { return 7n; } }`)).toEqual([]));
+    it('accept: unapplied generic modifier reading this.<state>', () => {
+      const J = `class C { owner: address; @modifier m<U>() { require(msg.sender == this.owner, "x"); _; } get z(): External<u256> { return 7n; } }`;
+      const S = `contract C { address owner; modifier m(){ require(msg.sender==owner,"x"); _; } function z() external view returns(uint256){ return 7; } }`;
+      expect(codes(J)).toEqual([]);
+      expect(solcRejects(S)).toBe(false);
+    });
+    it('accept: unapplied generic body valid only at bytes (v.length) is NOT over-rejected (type-param-dependent)', () =>
+      expect(codes(`class C { @modifier m<U>(v: U) { let n: u256 = v.length; _; } get z(): External<u256> { return 7n; } }`)).toEqual([]));
+    it('accept: unapplied generic body reading a STRUCT FIELD via its type param is NOT over-rejected (synthesized-struct probe)', () => {
+      const J = `type P = { foo: u256 }; class C { @modifier m<U>(v: U) { let x: u256 = v.foo; _; } get z(): External<u256> { return 7n; } }`;
+      const S = `contract C { struct P { uint256 foo; } modifier m(P memory v){ uint256 x = v.foo; _; } function z() external pure returns(uint256){ return 7; } }`;
+      expect(codes(J)).toEqual([]);
+      expect(solcRejects(S)).toBe(false);
+    });
+    it('accept: generic modifier APPLIED on one method but not another (applied instance is checked at its site)', () => {
+      const J = `class C { s: u256 = 0n; @modifier g<U>(v: U) { require(true); _; } @g<u256>(1n) a(): External<void> { this.s = 1n; } b(): External<void> { this.s = 2n; } }`;
+      const S = `contract C { uint256 s; modifier g(uint256 v){ require(true); _; } function a() external g(1) { s=1; } function b() external { s=2; } }`;
+      expect(codes(J)).toEqual([]);
+      expect(solcRejects(S)).toBe(false);
+    });
+    it('accept: a non-generic modifier and a contract with no modifiers are unchanged', () => {
+      expect(codes(`class C { @modifier m() { require(true); _; } get z(): External<u256> { return 7n; } }`)).toEqual([]);
+      expect(codes(`class C { get z(): External<u256> { return 7n; } }`)).toEqual([]);
+    });
+
+    // ---- BYTE-IDENTITY: adding a VALID unapplied generic modifier changes NO creation/runtime bytecode ----
+    it('adding a valid unapplied SINGLE-type-param generic modifier does NOT change creation or runtime bytecode', () => {
+      const base = `class C { s: u256 = 0n; setS(v: u256): External<void> { this.s = v; } get getS(): External<u256> { return this.s; } }`;
+      const plus = `class C { s: u256 = 0n; @modifier gm<U>(v: U) { let y: U = v; require(true, "x"); _; } setS(v: u256): External<void> { this.s = v; } get getS(): External<u256> { return this.s; } }`;
+      const b = compile(base, { fileName: 'C.jeth' });
+      const p = compile(plus, { fileName: 'C.jeth' });
+      expect(p.creationBytecode).toBe(b.creationBytecode);
+      expect(p.runtimeBytecode).toBe(b.runtimeBytecode);
+    });
+    it('adding a valid unapplied MULTI-type-param generic modifier does NOT change creation or runtime bytecode', () => {
+      const base = `class C { s: u256 = 0n; setS(v: u256): External<void> { this.s = v; } get getS(): External<u256> { return this.s; } }`;
+      const plus = `class C { s: u256 = 0n; @modifier gm<A, B>() { require(1n > 0n); _; } setS(v: u256): External<void> { this.s = v; } get getS(): External<u256> { return this.s; } }`;
+      const b = compile(base, { fileName: 'C.jeth' });
+      const p = compile(plus, { fileName: 'C.jeth' });
+      expect(p.creationBytecode).toBe(b.creationBytecode);
+      expect(p.runtimeBytecode).toBe(b.runtimeBytecode);
+    });
+  });
 });
