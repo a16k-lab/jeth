@@ -421,6 +421,13 @@ export class Analyzer {
     { node: ts.MethodDeclaration; typeParams: string[]; definingContract: string; buffered: boolean }
   >();
   private modifierInstanceKeys = new Set<string>();
+  // UNUSED-MODIFIER-BODY: the modifiersByName KEYS whose body was type-checked at an APPLICATION site
+  // during the current analyzeContract pass (inlineModifier / buildModifierWrap / the ctor inliner).
+  // solc type-checks EVERY declared modifier body regardless of application; JETH only reaches a body by
+  // inlining it, so an UNAPPLIED modifier's body escaped the checker (a broken unused body was silently
+  // accepted while solc rejects it). analyzeContract standalone-checks each declared modifier NOT in this
+  // set after the function loops. Cleared per analyzeContract (a route-local applied set).
+  private appliedModifierKeys = new Set<string>();
   // @struct declarations (name -> resolved struct type), collected before contracts
   private structsByName = new Map<string, JethType>();
   // CONTRACT-MEMBER custom error and event tables (collected before function bodies). File-level
@@ -3589,6 +3596,9 @@ export class Analyzer {
     // contract plus its bases (the linearization). Set here so namedDim only accepts a bare constant name
     // that solc would also resolve (own / inherited), never one leaking from an unrelated contract.
     this.currentLinNames = new Set(lin.map((c) => c.name?.text).filter((n): n is string => n !== undefined));
+    // UNUSED-MODIFIER-BODY: a fresh applied-modifier set per route (application sites below record every
+    // modifier whose body they check, so the post-loop standalone pass checks only the UNAPPLIED ones).
+    this.appliedModifierKeys.clear();
     const rawState: RawStateVar[] = [];
     const rawFns: RawFunction[] = [];
 
@@ -4270,6 +4280,50 @@ export class Analyzer {
           });
         }
       });
+    }
+
+    // UNUSED-MODIFIER-BODY: solc type-checks EVERY declared @modifier body regardless of whether it is
+    // applied; JETH only reaches a body by INLINING it at an application site, so a DECLARED-but-UNAPPLIED
+    // modifier's body escaped the checker entirely (a broken unused body - an undeclared identifier, a
+    // bad-type assignment, a missing method - was silently ACCEPTED while solc rejects the file: an
+    // over-acceptance). Type-check each such body ONCE here, standalone, in the SAME scope the application
+    // path uses (its own params + `this`/state, `_;` legal, the modifier's DECLARING class), so a broken
+    // unused body rejects with the same diagnostic the applied case gives.
+    // Runs AFTER every body-checking pass (the function loops, super targets, getter-var bases, and the
+    // specialization drain) so appliedModifierKeys is complete. Iterating `collectedMods` scopes the pass
+    // to THIS route's contract modifier DECLARATIONS (library modifiers, keyed `L.name`, are collected
+    // separately and stay dead code as before; generic TEMPLATES live in genericModifiersByName, never
+    // here). A valid unused modifier body may reference an internal function / take a function address /
+    // use a generic - registering an emission side effect that would change bytecode for a body that emits
+    // NOTHING - so the pass snapshots and RESTORES the emission-affecting collections (mirroring the
+    // getter-var base pass), keeping a valid unused modifier byte-identical while still surfacing its
+    // type diagnostics.
+    if (collectedMods.length > 0) {
+      const snapAddressTaken = new Set(this.addressTaken);
+      const snapInternallyCalled = new Set(this.internallyCalled);
+      const snapSpecQueue = [...this.specializationQueue];
+      const snapSpecNames = new Map(this.specializedNames);
+      const snapFuncsByName = new Map(this.funcsByName);
+      const snapExtLibs = new Set(this.referencedExternalLibraries);
+      // Check EVERY declared body exactly once, matching solc (which type-checks each declaration's body
+      // in its declaring contract regardless of override/application). A declaration is skipped ONLY when
+      // it is the registered override WINNER for its name AND that winner was applied (its body is then
+      // already checked at the application site). An OVERRIDE-LOSER base declaration (`@virtual` replaced
+      // by a derived `@override`) is never applied and never the winner, so it is ALWAYS checked here -
+      // closing the same over-acceptance for a broken loser body as for a single unapplied modifier.
+      for (const cm of collectedMods) {
+        const isWinner = this.modifiersByName.get(cm.name) === cm;
+        if (isWinner && this.appliedModifierKeys.has(cm.name)) continue; // winner checked when applied
+        this.checkUnappliedModifierBody(cm);
+      }
+      // Drop every emission-affecting registration the unused bodies made (they emit no code): byte-identical
+      // to the baseline where an unapplied modifier is never analyzed. The DIAGNOSTICS are kept (the point).
+      this.addressTaken = snapAddressTaken;
+      this.internallyCalled = snapInternallyCalled;
+      this.specializationQueue = snapSpecQueue;
+      this.specializedNames = snapSpecNames;
+      this.funcsByName = snapFuncsByName;
+      this.referencedExternalLibraries = snapExtLibs;
     }
 
     // Internal function pointers: a call THROUGH a pointer of signature S can only reach a function
@@ -10196,6 +10250,8 @@ export class Analyzer {
       );
       return inner;
     }
+    // UNUSED-MODIFIER-BODY: this application checks the modifier's body below (see inlineModifier twin).
+    this.appliedModifierKeys.add(app.name);
     if (app.argNodes.length !== mod.params.length) {
       this.diags.error(
         app.site,
@@ -10432,6 +10488,9 @@ export class Analyzer {
       );
       return inner;
     }
+    // UNUSED-MODIFIER-BODY: this application checks the modifier's body below, so exclude it from the
+    // standalone unapplied-body pass (avoids a duplicate diagnostic for a broken APPLIED body).
+    this.appliedModifierKeys.add(app.name);
     if (app.argNodes.length !== mod.params.length) {
       this.diags.error(
         app.site,
@@ -10571,6 +10630,71 @@ export class Analyzer {
     this.popScope();
     this.scopes = savedScopes;
     return [{ kind: 'block', body: [...argDecls, ...lowered] }];
+  }
+
+  /** UNUSED-MODIFIER-BODY: type-check a DECLARED-but-UNAPPLIED @modifier body standalone (no application
+   *  site ever inlines it, so this is the ONLY place its body reaches the checker). Mirrors the scope the
+   *  application path (inlineModifier / buildModifierWrap) sets up so a VALID unused body still ACCEPTS:
+   *  a FRESH scope holding only the modifier's own params (aggregate params registered into the memory-
+   *  local maps like the applied path), `this`/state visible via the modifier's DECLARING class, and the
+   *  `_;` placeholder legal (placeholderInner set, lowering it to nothing since the result is discarded).
+   *  The context is the PERMISSIVE one an unapplied modifier carries in solc: nonpayable + internal-like
+   *  reachability (msg.value readable, state read/write/emit allowed - an unused modifier imposes no
+   *  payability/mutability requirement), NOT ctor-modifier code. Only DIAGNOSTICS matter here; the lowered
+   *  statements are thrown away and the caller has snapshotted/restored the emission-affecting state, so a
+   *  valid unused modifier stays byte-identical. */
+  private checkUnappliedModifierBody(mod: RawModifier): void {
+    if (!mod.node.body) return; // a bodyless modifier is rejected at collect time (JETH328)
+    const savedScopes = this.scopes;
+    const savedLoopDepth = this.loopDepth;
+    const savedModOwner = this.bodyOwnerContract;
+    const savedDefining = this.currentDefiningContract;
+    const savedMut = this.currentMutability;
+    const savedReach = this.currentExternallyReachable;
+    const savedIsGetter = this.currentIsGetter;
+    const savedLibrary = this.currentLibrary;
+    const savedInModCode = this.currentInCtorModifierCode;
+    const savedPlaceholder = this.placeholderInner;
+    const savedMemArray = this.memArrayLocals;
+    const savedMemAgg = this.memAggregateLocals;
+    const savedMemDyn = this.memDynLocals;
+    const savedMemDynStruct = this.memDynStructLocals;
+    this.scopes = [new Map()];
+    this.loopDepth = 0;
+    this.currentDefiningContract = mod.definingContract;
+    this.bodyOwnerContract = mod.definingContract;
+    this.currentMutability = 'nonpayable';
+    this.currentExternallyReachable = false;
+    this.currentIsGetter = false;
+    this.currentLibrary = undefined;
+    this.currentInCtorModifierCode = false;
+    this.placeholderInner = []; // `_;` accepted and lowered to nothing (the whole body is discarded)
+    this.memArrayLocals = new Set();
+    this.memAggregateLocals = new Map();
+    this.memDynLocals = new Set();
+    this.memDynStructLocals = new Map();
+    this.pushScope();
+    for (const p of mod.params) {
+      this.declareLocal(p.name, p.type);
+      this.registerAggregateModifierParam(p.name, p.type); // aggregate param p.length/p[i]/p.x resolution
+    }
+    const sink: Stmt[] = [];
+    for (const s of mod.node.body.statements) this.checkStatement(s, VOID, sink);
+    this.popScope();
+    this.scopes = savedScopes;
+    this.loopDepth = savedLoopDepth;
+    this.bodyOwnerContract = savedModOwner;
+    this.currentDefiningContract = savedDefining;
+    this.currentMutability = savedMut;
+    this.currentExternallyReachable = savedReach;
+    this.currentIsGetter = savedIsGetter;
+    this.currentLibrary = savedLibrary;
+    this.currentInCtorModifierCode = savedInModCode;
+    this.placeholderInner = savedPlaceholder;
+    this.memArrayLocals = savedMemArray;
+    this.memAggregateLocals = savedMemAgg;
+    this.memDynLocals = savedMemDyn;
+    this.memDynStructLocals = savedMemDynStruct;
   }
 
   /** Phase 5: collect a user-defined @modifier. Increment 1 supports a PRE-ONLY modifier: a single

@@ -640,4 +640,98 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
       expect(solcRejects(S)).toBe(true);
     });
   });
+
+  // UNUSED-MODIFIER-BODY OA: JETH only type-checked a @modifier body by INLINING it at an application
+  // site, so a DECLARED-but-UNAPPLIED modifier's body escaped the checker (a broken unused body was
+  // silently ACCEPTED while solc rejects the file). analyzeContract now type-checks every declared
+  // modifier body once, standalone, in its declaring-class scope with its params + `_;` legal. These pins
+  // lock the close (broken unused body now rejects, matching solc) and the no-over-rejection controls
+  // (a valid unused body still accepts + does not change bytecode).
+  describe('an unapplied @modifier body is still type-checked (OA close vs solc)', () => {
+    it('undeclared identifier in an UNUSED body -> JETH072 (solc also rejects; was an over-acceptance)', () => {
+      const J = `class C { @modifier only() { require(q, "x"); _; } get f(): External<u256> { return 1n; } }`;
+      const S = `contract C { modifier only() { require(q, "x"); _; } function f() external pure returns (uint256){ return 1; } }`;
+      expect(codes(J)).toContain('JETH072');
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('the SAME broken body already both-rejected when APPLIED (unchanged control)', () => {
+      const J = `class C { @modifier only() { require(q, "x"); _; } @only get f(): External<u256> { return 1n; } }`;
+      const S = `contract C { modifier only() { require(q, "x"); _; } function f() external only pure returns (uint256){ return 1; } }`;
+      expect(codes(J)).toContain('JETH072');
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('bad-type assignment in an UNUSED body rejects (solc also rejects)', () => {
+      const J = `class C { x: u256; @modifier only() { this.x = true; _; } get f(): External<u256> { return 1n; } }`;
+      const S = `contract C { uint256 x; modifier only() { x = true; _; } function f() external view returns (uint256){ return 1; } }`;
+      expect(codes(J).length).toBeGreaterThan(0);
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('a call to a non-existent method in an UNUSED body rejects (solc also rejects)', () => {
+      const J = `class C { @modifier only() { this.nope(); _; } get f(): External<u256> { return 1n; } }`;
+      const S = `contract C { modifier only() { nope(); _; } function f() external pure returns (uint256){ return 1; } }`;
+      expect(codes(J).length).toBeGreaterThan(0);
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('a broken UNUSED body with PARAMS rejects (solc also rejects)', () => {
+      const J = `class C { @modifier only(v: u256) { require(v > z, "x"); _; } get f(): External<u256> { return 1n; } }`;
+      const S = `contract C { modifier only(uint256 v) { require(v > z, "x"); _; } function f() external pure returns (uint256){ return 1; } }`;
+      expect(codes(J)).toContain('JETH072');
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('an UNUSED body reading a non-existent field rejects (solc also rejects)', () => {
+      const J = `class C { @modifier only() { require(this.ghost > 0n, "x"); _; } get f(): External<u256> { return 1n; } }`;
+      const S = `contract C { modifier only() { require(ghost > 0, "x"); _; } function f() external pure returns (uint256){ return 1; } }`;
+      expect(codes(J).length).toBeGreaterThan(0);
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('two UNUSED modifiers, one broken -> the file rejects (solc also rejects)', () => {
+      const J = `class C { x: u256; @modifier ok() { require(this.x > 0n, "x"); _; } @modifier bad() { require(q, "x"); _; } get f(): External<u256> { return 1n; } }`;
+      const S = `contract C { uint256 x; modifier ok() { require(x > 0, "x"); _; } modifier bad() { require(q, "x"); _; } function f() external view returns (uint256){ return 1; } }`;
+      expect(codes(J)).toContain('JETH072');
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('an override-LOSER base body (broken) is still checked even when unapplied (solc also rejects)', () => {
+      const J = `class B { z: u256; @virtual @modifier m() { require(qqq, "b"); _; } } class C extends B { @override @modifier m() { require(this.z > 0n, "c"); _; } get f(): External<u256> { return 1n; } }`;
+      const S = `contract B { uint256 z; modifier m() virtual { require(qqq, "b"); _; } } contract C is B { modifier m() override { require(z > 0, "c"); _; } function f() external view returns (uint256){ return 1; } }`;
+      expect(codes(J).length).toBeGreaterThan(0);
+      expect(solcRejects(S)).toBe(true);
+    });
+
+    // --- NO NEW OVER-REJECTION: a VALID unused modifier still accepts + is byte-identical ---
+    it('a VALID unused modifier (reads this.<field>, has `_;`) still accepts (solc accepts)', () => {
+      const J = `class C { x: u256; @modifier only() { require(this.x > 0n, "x"); _; } get f(): External<u256> { return 1n; } }`;
+      const S = `contract C { uint256 x; modifier only() { require(x > 0, "x"); _; } function f() external view returns (uint256){ return 1; } }`;
+      expect(codes(J)).toEqual([]);
+      expect(solcRejects(S)).toBe(false);
+    });
+    it('a VALID unused modifier using its PARAMS still accepts', () =>
+      expect(codes(`class C { @modifier only(v: u256) { require(v > 0n, "x"); _; } get f(): External<u256> { return 1n; } }`)).toEqual([]));
+    it('a VALID unused modifier that writes state / emits / reads msg.value still accepts', () => {
+      expect(codes(`class C { x: u256; @modifier only() { this.x = 7n; _; } get f(): External<u256> { return 1n; } }`)).toEqual([]);
+      expect(codes(`class C { @modifier only() { require(msg.value >= 0n, "x"); _; } get f(): External<u256> { return 1n; } }`)).toEqual([]);
+      expect(codes(`class C { E: event<{ a: u256 }>; @modifier only() { emit(this.E(1n)); _; } get f(): External<u256> { return 1n; } }`)).toEqual([]);
+    });
+    it('a VALID unused library modifier is unaffected (still dead code, both accept)', () =>
+      expect(codes(`static class L { @modifier only() { require(true, "x"); _; } add(a: u256, b: u256): u256 { return a + b; } }\nclass C { get f(): External<u256> { return L.add(5n, 6n); } }`)).toEqual([]));
+    it('adding a VALID unused modifier does NOT change creation or runtime bytecode', () => {
+      const base = `class C { x: u256; g(v: u256): External<void> { this.x = v; } get f(): External<u256> { return this.x; } }`;
+      const plus = `class C { x: u256; @modifier only() { require(this.x >= 0n, "x"); _; } g(v: u256): External<void> { this.x = v; } get f(): External<u256> { return this.x; } }`;
+      const b = compile(base, { fileName: 'C.jeth' });
+      const p = compile(plus, { fileName: 'C.jeth' });
+      expect(p.creationBytecode).toBe(b.creationBytecode);
+      expect(p.runtimeBytecode).toBe(b.runtimeBytecode);
+    });
+    it('a VALID unused modifier whose body calls an internal fn + writes state stays byte-identical', () => {
+      const base = `class C { x: u256; chk(): bool { return this.x > 0n; } g(v: u256): External<void> { this.x = v; } }`;
+      const plus = `class C { x: u256; chk(): bool { return this.x > 0n; } @modifier only() { require(this.chk(), "x"); this.x = this.x; _; } g(v: u256): External<void> { this.x = v; } }`;
+      const b = compile(base, { fileName: 'C.jeth' });
+      const p = compile(plus, { fileName: 'C.jeth' });
+      expect(p.creationBytecode).toBe(b.creationBytecode);
+      expect(p.runtimeBytecode).toBe(b.runtimeBytecode);
+    });
+    it('the built-in @nonReentrant and a modifier-free contract are unaffected', () => {
+      expect(codes(`class C { x: u256; @nonReentrant g(v: u256): External<void> { this.x = v; } }`)).toEqual([]);
+      expect(codes(`class C { x: u256; g(v: u256): External<void> { this.x = v; } get f(): External<u256> { return this.x; } }`)).toEqual([]);
+    });
+  });
 });
