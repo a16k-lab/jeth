@@ -77,7 +77,7 @@ describe('long-tail batch B: array-literal crosses (B1-B4) byte-identical to sol
     let m: Arr<u256[], 2> = c ? [a, b] : [b, a];
     return m[0n][0n] * 100n + m[1n].length;
   }
-  get alias(c: bool): External<u256> {
+  get aliasF(c: bool): External<u256> {
     let a: u256[] = [1n, 2n]; let b: u256[] = [3n];
     let m: Arr<u256[], 2> = c ? [a, b] : [b, a];
     m[0n][0n] = 99n;
@@ -198,8 +198,8 @@ describe('long-tail batch B: array-literal crosses (B1-B4) byte-identical to sol
       ['enc(bool)', 'enc(bool)', W(0)],
       ['bind(bool)', 'bind(bool)', W(1)],
       ['bind(bool)', 'bind(bool)', W(0)],
-      ['alias(bool)', 'alias_(bool)', W(1)],
-      ['alias(bool)', 'alias_(bool)', W(0)],
+      ['aliasF(bool)', 'alias_(bool)', W(1)],
+      ['aliasF(bool)', 'alias_(bool)', W(0)],
       ['locals(bool)', 'locals(bool)', W(1)],
       ['locals(bool)', 'locals(bool)', W(0)],
       ['ev(bool)', 'ev(bool)', W(1)],

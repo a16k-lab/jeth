@@ -194,7 +194,7 @@ describe('A-LIT-RESID: a whole CALLDATA-param ternary branch - byte-identical to
     const J = `class C {
       sA: Arr<u256[],2>;
       seed(): External<void> { this.sA[0n].push(50n); this.sA[1n].push(60n); }
-      get alias(c: bool): External<u256> { let x: u256[] = new Array<u256>(1); x[0n]=1n; let y: u256[] = new Array<u256>(1); y[0n]=2n; let m1: Arr<u256[],2> = [x,y]; let m2: Arr<u256[],2> = [y,x]; let q: Arr<u256[],2> = c ? m1 : m2; q[0n][0n] = 777n; return m1[0n][0n]; }
+      get aliasF(c: bool): External<u256> { let x: u256[] = new Array<u256>(1); x[0n]=1n; let y: u256[] = new Array<u256>(1); y[0n]=2n; let m1: Arr<u256[],2> = [x,y]; let m2: Arr<u256[],2> = [y,x]; let q: Arr<u256[],2> = c ? m1 : m2; q[0n][0n] = 777n; return m1[0n][0n]; }
       get idx(c: bool, p: Arr<u256[],2>, a: u256[], b: u256[]): External<u256> { return (c ? p : [a, b])[0n][0n]; }
       get stl(c: bool, a: u256[], b: u256[]): External<u256> { let q: Arr<u256[],2> = c ? this.sA : [a, b]; return q[0n][0n]; } }`;
     const S = `contract C {
@@ -211,15 +211,15 @@ describe('A-LIT-RESID: a whole CALLDATA-param ternary branch - byte-identical to
     // alias is spelled `alias` in JETH and `alias_` in Solidity (alias is not a solc keyword clash, but the
     // selectors must be compared per-compiler), so compare its VALUES rather than a shared selector.
     for (const c of [1, 0]) {
-      const rj = await h.call(aj, sel('alias(bool)') + W(c));
+      const rj = await h.call(aj, sel('aliasF(bool)') + W(c));
       const rs = await h.call(as, sel('alias_(bool)') + W(c));
       expect(rj.success, 'alias ' + c).toBe(rs.success);
       expect(rj.returnHex, 'alias ' + c).toBe(rs.returnHex);
     }
     // NON-VACUITY: writing through the ternary result must ALIAS m1 on the c=1 arm (777) and leave it alone
     // on the c=0 arm (1) - the mem|mem twin of W2b.
-    expect(BigInt((await h.call(aj, sel('alias(bool)') + W(1))).returnHex)).toBe(777n);
-    expect(BigInt((await h.call(aj, sel('alias(bool)') + W(0))).returnHex)).toBe(1n);
+    expect(BigInt((await h.call(aj, sel('aliasF(bool)') + W(1))).returnHex)).toBe(777n);
+    expect(BigInt((await h.call(aj, sel('aliasF(bool)') + W(0))).returnHex)).toBe(1n);
     const cd = W(0x60) + W(0xa0) + W(1) + W(11) + W(1) + W(22);
     for (const [sg, args] of [
       ['stl(bool,uint256[],uint256[])', W(1) + cd],

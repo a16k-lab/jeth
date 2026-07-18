@@ -113,12 +113,31 @@ const KEPT_BUILTIN_DECORATOR_NAMES = new Set(['nonReentrant', 'virtual', 'overri
 // PARSE-REJECTS everywhere an identifier is declared (a var / field / parameter / function / modifier /
 // struct-or-event member name). Accepting them is an over-acceptance; checkReservedIdentifierNames rejects
 // exactly this minimal set (JETH500). `using` and `virtual` are also kept decorator names above.
-// PARSE-REJECTS at EVERY identifier DECLARATION name: a var / field / parameter / function / modifier /
+// PARSE-REJECTS at EVERY identifier DECLARATION name (a var / field / parameter / function / modifier /
 // struct-or-event member name AND a contract-or-library-or-abstract (class) / interface / enum / enum-member /
-// struct-or-type-alias name. All four are reserved keywords in solc 0.8.35 (verified: solc emits a ParserError
-// for a declaration named any of them, e.g. `uint256 override = 9;`). `virtual` / `using` / `override` are also
-// kept decorator names, so a @modifier declared with one is caught here (a single JETH500) rather than JETH499.
-const RESERVED_SOLIDITY_IDENTIFIERS = new Set(['virtual', 'using', 'override', 'anonymous']);
+// struct-or-type-alias name). This is the FULL set of solc-0.8.35 keywords + reserved-for-future words that
+// JETH's TypeScript-based lexer would otherwise accept as ordinary identifiers where solc parse-rejects them
+// (each verified: `uint256 <word> = 1;` is a solc ParserError while `let <word>: u256 = 1n;` compiled in JETH -
+// an over-acceptance). `error` is deliberately EXCLUDED (solc accepts it as an identifier). JS reserved words
+// (case/default/in/switch/typeof/var/delete/enum/function/import/new/return/if/... plus virtual/using/override/
+// anonymous once listed here) are already rejected by the TS grammar. Type/location/unit keywords (address /
+// bool / bytes / string / mapping / memory / storage / calldata / wei / gwei / ether / seconds / ...) are
+// keywords in name position only - a field/param/local named one of them; they never appear in TYPE position
+// here, so this does not touch `x: address` etc. `receive` and `fallback` are DELIBERATELY excluded: JETH uses
+// them as the special-entry METHOD names (`receive(): Payable<void>`, `fallback(...)`), a valid declaration name
+// solc also accepts in that position; a plain variable named `receive`/`fallback` is a rare residual OA left
+// open to keep the special entries working. `virtual`/`using`/`override` are also kept decorator names, so a
+// @modifier declared with one is caught here (a single JETH500) rather than JETH499.
+const RESERVED_SOLIDITY_IDENTIFIERS = new Set([
+  'address', 'after', 'alias', 'anonymous', 'apply', 'as', 'assembly', 'auto', 'bool', 'byte', 'bytes',
+  'calldata', 'constant', 'constructor', 'contract', 'copyof', 'days', 'define', 'emit', 'ether', 'event',
+  'external', 'final', 'fixed', 'gwei', 'hex', 'hours', 'immutable', 'implements', 'indexed',
+  'inline', 'interface', 'internal', 'is', 'let', 'library', 'macro', 'mapping', 'match', 'memory', 'minutes',
+  'modifier', 'mutable', 'of', 'override', 'partial', 'payable', 'pragma', 'private', 'promise', 'public',
+  'pure', 'reference', 'relocatable', 'returns', 'sealed', 'seconds', 'sizeof', 'static', 'storage',
+  'string', 'struct', 'supports', 'type', 'typedef', 'ufixed', 'unchecked', 'using', 'view', 'virtual', 'weeks',
+  'wei',
+]);
 
 // CONTRACT-TYPE-PARAM: the brand prefix a contract/interface reference TYPE carries when modeled as a
 // branded address. `__ctref:<Name>` - the leading `__` and colon cannot appear in a source identifier,

@@ -50,7 +50,7 @@ describe('new Array<Arr<P,N>>(n) zero image - byte-identical to solc 0.8.35', ()
     const J = `${IN}
       class C {
         get mc(): External<u256> { let m: Arr<In,2>[] = new Array<Arr<In,2>>(1); m[0n][0n]=In(1n,2n); m[0n][1n]=In(3n,4n); return m[0n][0n].a; }
-        get alias(): External<u256> { let m: Arr<In,2>[] = new Array<Arr<In,2>>(1); m[0n][0n].a=1n; m[0n][1n].a=3n; return m[0n][0n].a; }
+        get aliasF(): External<u256> { let m: Arr<In,2>[] = new Array<Arr<In,2>>(1); m[0n][0n].a=1n; m[0n][1n].a=3n; return m[0n][0n].a; }
         get freshRet(): External<Arr<In,2>[]> { let m: Arr<In,2>[] = new Array<Arr<In,2>>(1); return m; }
         get retW(): External<Arr<In,2>[]> { let m: Arr<In,2>[] = new Array<Arr<In,2>>(1); m[0n][0n]=In(1n,2n); m[0n][1n]=In(3n,4n); return m; }
         get enc(): External<bytes> { let m: Arr<In,2>[] = new Array<Arr<In,2>>(1); m[0n][0n]=In(1n,2n); m[0n][1n]=In(3n,4n); return abi.encode(m); }
@@ -73,7 +73,7 @@ describe('new Array<Arr<P,N>>(n) zero image - byte-identical to solc 0.8.35', ()
     // the JETH getter is `alias`; solc reserves it, so the mirror is alias_() - compare by explicit pairing.
     const pairs: [string, string][] = [
       ['mc()', 'mc()'],
-      ['alias()', 'alias_()'],
+      ['aliasF()', 'alias_()'],
       ['freshRet()', 'freshRet()'],
       ['retW()', 'retW()'],
       ['enc()', 'enc()'],
@@ -91,7 +91,7 @@ describe('new Array<Arr<P,N>>(n) zero image - byte-identical to solc 0.8.35', ()
     // NON-VACUITY: pin the exact pre-fix wrong values, so a regression cannot pass by "both compile".
     const mc = await h.call(aj, sel('mc()'));
     expect(BigInt(mc.returnHex!)).toBe(1n); // was 288 = 0x120, a raw memory pointer
-    const al = await h.call(aj, sel('alias()'));
+    const al = await h.call(aj, sel('aliasF()'));
     expect(BigInt(al.returnHex!)).toBe(1n); // was 3: both inner elements aliased ONE word
     // the fresh (never-written) return must be ALL ZERO - it leaked a stale 0xe0 pointer word before.
     // (pad32/W returns 64 hex chars with NO 0x prefix - never .slice(2) it.)

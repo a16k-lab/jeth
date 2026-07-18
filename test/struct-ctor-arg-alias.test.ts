@@ -235,7 +235,7 @@ describe('W6A: transient static captures stay accepted byte-identical (no regres
     type I = { xs: u256[] };
     type M = { i: I };
     class C {
-      get alias(): External<u256> { let t: T = T(5n); let u: T = t; t.n = 9n; return u.n; }
+      get aliasF(): External<u256> { let t: T = T(5n); let u: T = t; t.n = 9n; return u.n; }
       get elem(): External<u256> { let t: T = T(5n); let xs: T[] = new Array<T>(1n); xs[0n] = t; t.n = 9n; return xs[0n].n; }
       get lit(): External<u256> { let t: T = T(5n); let xs: T[] = [t]; t.n = 9n; return xs[0n].n; }
       get fld(): External<u256> { let m: M = M(I(new Array<u256>(1n))); let z: I = m.i; z.xs[0n] = 7n; return m.i.xs[0n]; } }`;
@@ -250,7 +250,7 @@ describe('W6A: transient static captures stay accepted byte-identical (no regres
     const h = await Harness.create();
     const aj = await h.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
     const as = await h.deploy(compileSolidity(SPDX + S, 'C').creation);
-    const pairs: [string, string][] = [['alias()', 'alias_()'], ['elem()', 'elem()'], ['lit()', 'lit()'], ['fld()', 'fld()']];
+    const pairs: [string, string][] = [['aliasF()', 'alias_()'], ['elem()', 'elem()'], ['lit()', 'lit()'], ['fld()', 'fld()']];
     for (const [js, ss] of pairs) {
       const rj = await h.call(aj, sel(js));
       const rs = await h.call(as, sel(ss));

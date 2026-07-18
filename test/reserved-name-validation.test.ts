@@ -249,3 +249,39 @@ describe('CONTROL: built-in @nonReentrant guard still reverts on re-entrance (un
     expect(g.returnHex).toBe('0x' + pad(1n));
   });
 });
+
+// (C) 2026-07-18 - the reserved-word ban was EXPANDED (user ruling) from the minimal 4-word set to the
+// FULL solc-0.8.35 reserved-word list: every keyword / reserved-for-future word that JETH's TS lexer would
+// accept as an identifier where solc parse-rejects it. `receive` / `fallback` are EXCLUDED (JETH uses them
+// as special-entry method names) and `error` is EXCLUDED (solc accepts it as an identifier).
+describe('JETH500: the full solc reserved-word list rejects at declaration names (expanded set)', () => {
+  const SAMPLE = [
+    'after', 'alias', 'apply', 'as', 'auto', 'byte', 'copyof', 'define', 'final', 'implements',
+    'inline', 'is', 'let', 'macro', 'match', 'mutable', 'of', 'partial', 'reference', 'sealed', 'sizeof',
+    'static', 'supports', 'typedef', 'immutable', 'indexed', 'unchecked', 'emit', 'event', 'payable',
+    'modifier', 'calldata', 'memory', 'storage', 'mapping', 'hex', 'assembly', 'address',
+    'bool', 'string', 'bytes', 'external', 'internal', 'public', 'private', 'pure', 'view', 'constant',
+    'contract', 'interface', 'library', 'struct', 'type', 'pragma', 'returns', 'fixed', 'ufixed',
+    'wei', 'gwei', 'ether', 'seconds', 'minutes', 'hours', 'days', 'weeks',
+  ];
+  it('each reserved word rejects (JETH500) as a local var AND as a field name', () => {
+    for (const w of SAMPLE) {
+      expect(codes(`class C { get f(): External<u256> { let ${w}: u256 = 1n; return ${w}; } }`), `local ${w}`).toContain('JETH500');
+      expect(codes(`class C { ${w}: u256; get f(): External<u256> { return this.${w}; } }`), `field ${w}`).toContain('JETH500');
+    }
+  });
+  it('EXCLUSIONS: receive/fallback (JETH special entries) and `error` are NOT reserved', () => {
+    // a plain local/field named receive/fallback/error still ACCEPTS (they are not in the reserved set).
+    for (const w of ['receive', 'fallback', 'error']) {
+      expect(accepts(`class C { get f(): External<u256> { let ${w}: u256 = 1n; return ${w}; } }`), `local ${w}`).toBe(true);
+    }
+    // the fallback SPECIAL-ENTRY method still compiles (the reason receive/fallback are excluded from the
+    // ban); the receive special entry is covered by test/native-receive-fallback.test.ts.
+    expect(accepts(`class C { fallback(): External<void> {} }`)).toBe(true);
+  });
+  it('lookalikes and non-reserved keyword-adjacent names still accept', () => {
+    for (const w of ['afterX', 'typeOf', 'isValid', 'staticData', 'mappingKey', 'addressBook', 'errorCount']) {
+      expect(accepts(`class C { get f(): External<u256> { let ${w}: u256 = 1n; return ${w}; } }`), w).toBe(true);
+    }
+  });
+});

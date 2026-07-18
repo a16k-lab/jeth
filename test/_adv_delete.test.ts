@@ -249,12 +249,12 @@ describe('delete: struct containing a mapping field', () => {
   const JETH = `type S = { a: u256; m: mapping<address, u256>; b: u256; };
 class C {
   s: S;                // a@0, m@1, b@2
-  after: u256;         // slot 3
+  afterF: u256;         // slot 3
   seed(): External<void> {
     this.s.a = 111n; this.s.b = 222n;
     this.s.m[address(0xa11ce0000000000000000000000000000000n)] = 777n;
     this.s.m[address(0xb0b0000000000000000000000000000000000n)] = 888n;
-    this.after = 0xcafen;
+    this.afterF = 0xcafen;
   }
   delS(): External<void> { delete this.s; }
 }`;

@@ -133,8 +133,10 @@ describe('controls: the designed hoist + keyword-adjacent legit shapes stay acce
   it('`const` as an ordinary declaration inside a method body stays accepted', () => {
     expect(rejects('class C { get g(): External<u256> { const x: u256 = 5n; return x; } }').codes).toEqual([]);
   });
-  it('fields NAMED like keywords stay accepted when typed (constant / exported / even const)', () => {
-    expect(rejects('class C { constant: u256; get g(): External<u256> { return this.constant; } }').codes).toEqual([]);
+  it('a reserved word as a field name rejects (JETH500 = solc parse error); keyword-adjacent legit names stay accepted', () => {
+    // `constant` IS a Solidity reserved word: solc parse-rejects `uint256 constant;` and JETH now matches (JETH500).
+    expect(rejects('class C { constant: u256; get g(): External<u256> { return this.constant; } }').codes).toContain('JETH500');
+    // `exported` / `const` are NOT Solidity reserved words (keyword-adjacent only): solc accepts them, so JETH does too.
     expect(rejects('class C { exported: u256; get g(): External<u256> { return this.exported; } }').codes).toEqual([]);
     expect(rejects(`class C { const: u256;${G}`).codes).toEqual([]);
   });

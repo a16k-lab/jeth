@@ -26,9 +26,9 @@ class Cube3D {
   cube: Arr<Arr<Arr<u256, 2>, 2>, 2>;        // slots 1-8
   sentinelAfter: u256;                        // slot 9
 
-  setSent(before: u256, after: u256): External<void> {
+  setSent(before: u256, afterF: u256): External<void> {
     this.sentinelBefore = before;
-    this.sentinelAfter = after;
+    this.sentinelAfter = afterF;
   }
   setCube(a: u256, b: u256, c: u256, v: u256): External<void> {
     this.cube[a][b][c] = v;

@@ -78,7 +78,7 @@ describe('RECURSIVE-REF-STRUCT: self / mutual reference through a P[] / mapping 
       expect(await stor(aj, 0n)).toBe(await stor(as, 0n));
     };
     await run(
-      `type A = { x: u256; bs: B[] }; type B = { y: u256; as: A[] };\nclass C { a: A; s(v: u256): External<void> { this.a.x = v; } get g(): External<u256> { return this.a.x; } }`,
+      `type A = { x: u256; bs: B[] }; type B = { y: u256; asF: A[] };\nclass C { a: A; s(v: u256): External<void> { this.a.x = v; } get g(): External<u256> { return this.a.x; } }`,
       `contract C { struct A { uint256 x; B[] bs; } struct B { uint256 y; A[] as_; } A a; function s(uint256 v) external { a.x = v; } function g() external view returns(uint256){ return a.x; } }`,
     );
     await run(

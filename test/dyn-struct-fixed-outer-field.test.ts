@@ -68,7 +68,7 @@ describe('W5C: dyn-struct with a fixed-outer dynamic-element array field - byte-
         get ge(): External<bytes> { let m: P = P(["a","${LONG}"], 7n); return abi.encode(m); }
         bump(p: P): P { p.n = p.n + 1n; p.xs[0n] = "B"; return p; }
         get gi(): External<P> { let m: P = P(["x","y"], 9n); return this.bump(m); }
-        get alias(): External<string> { let m: P = P(["a","b"], 1n); this.bump(m); return m.xs[0n]; }
+        get aliasF(): External<string> { let m: P = P(["a","b"], 1n); this.bump(m); return m.xs[0n]; }
         get ln(): External<u256> { let m: P = P(["a","b"], 9n); return m.xs.length; }
         get rp(): External<string> { let m: P = P(["a","b"], 1n); let t: Arr<string,2> = ["e","fff"]; m.xs = t; t[0n] = "MUT"; return m.xs[0n]; } }`,
       `${SP} contract C {
