@@ -735,6 +735,124 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
     });
   });
 
+  // MEM-ARRAY-MODIFIER-PARAM push/pop OA close: `push`/`pop` are STORAGE-array-only; a modifier array
+  // PARAM is a MEMORY reference, so solc rejects `v.push(...)`/`v.pop()` in the body ("Member push/pop is
+  // not available in <T> memory outside of storage"). In a NORMAL function a memory-array push rode
+  // through analysis and was only rejected at CODEGEN (the generic JETH900 in yul.ts), reached solely when
+  // the body is actually lowered - but a DECLARED-but-UNAPPLIED @modifier body is type-checked into a
+  // discarded sink and NEVER lowered, so codegen never ran and `v.push(1n)` was OVER-ACCEPTED. The fix is
+  // an analysis-time gate in checkArrayMutator: a memArray/memArrayExpr base (any memory array) rejects
+  // push/pop with JETH210 (the same "requires a storage array" code the bytes/string memory push already
+  // emits), the memory analog of the calldata (JETH214) / fixed (JETH218) rejects. Since the generic
+  // checker checks each probe monomorphization through the SAME body path, the generic + chimera cases
+  // close for free. STORAGE push/pop and every VALID memory-array-param access (v[i]/v.length/return
+  // v/abi.encode(v)/pass-to-internal/struct-field) are untouched.
+  describe('push/pop on a MEMORY array modifier param is a clean reject (OA close vs solc)', () => {
+    // ---- FULL-AXIS CLOSE: each was an over-acceptance; each must now REJECT (solc rejects the mirror) ----
+    const oa = (name: string, J: string, S: string) =>
+      it(name, () => {
+        expect(codes(J).length).toBeGreaterThan(0);
+        expect(solcRejects(S)).toBe(true);
+      });
+    oa('push on an u256[] param (UNAPPLIED, non-generic)',
+      `class C { x: u256; @modifier m(v: u256[]) { v.push(1n); _; } get z(): External<u256> { return this.x; } }`,
+      `contract C { uint256 x; modifier m(uint256[] memory v){ v.push(1); _; } function z() external view returns(uint256){ return x; } }`);
+    oa('pop on an u256[] param (UNAPPLIED, non-generic)',
+      `class C { x: u256; @modifier m(v: u256[]) { v.pop(); _; } get z(): External<u256> { return this.x; } }`,
+      `contract C { uint256 x; modifier m(uint256[] memory v){ v.pop(); _; } function z() external view returns(uint256){ return x; } }`);
+    oa('push on a bytes param',
+      `class C { x: u256; @modifier m(v: bytes) { v.push(1n); _; } get z(): External<u256> { return this.x; } }`,
+      `contract C { uint256 x; modifier m(bytes memory v){ v.push(1); _; } function z() external view returns(uint256){ return x; } }`);
+    oa('pop on a bytes param',
+      `class C { x: u256; @modifier m(v: bytes) { v.pop(); _; } get z(): External<u256> { return this.x; } }`,
+      `contract C { uint256 x; modifier m(bytes memory v){ v.pop(); _; } function z() external view returns(uint256){ return x; } }`);
+    oa('push on a string param',
+      `class C { x: u256; @modifier m(v: string) { v.push("a"); _; } get z(): External<u256> { return this.x; } }`,
+      `contract C { uint256 x; modifier m(string memory v){ v.push(0x61); _; } function z() external view returns(uint256){ return x; } }`);
+    oa('push on a struct P[] param',
+      `type P = { a: u256 }; class C { x: u256; @modifier m(v: P[]) { v.push({a:1n}); _; } get z(): External<u256> { return this.x; } }`,
+      `struct P{uint256 a;} contract C { uint256 x; modifier m(P[] memory v){ v.push(P(1)); _; } function z() external view returns(uint256){ return x; } }`);
+    oa('push on a dynamic-struct D[] param',
+      `type D = { s: string }; class C { x: u256; @modifier m(v: D[]) { v.push({s:"a"}); _; } get z(): External<u256> { return this.x; } }`,
+      `struct D{string s;} contract C { uint256 x; modifier m(D[] memory v){ v.push(D("a")); _; } function z() external view returns(uint256){ return x; } }`);
+    oa('push on an Arr<u256,3> param',
+      `class C { x: u256; @modifier m(v: Arr<u256,3>) { v.push(1n); _; } get z(): External<u256> { return this.x; } }`,
+      `contract C { uint256 x; modifier m(uint256[3] memory v){ v.push(1); _; } function z() external view returns(uint256){ return x; } }`);
+    oa('GENERIC push (every monomorphization rejects)',
+      `class C { x: u256; @modifier m<T>(v: T) { v.push(1n); _; } get z(): External<u256> { return this.x; } }`,
+      `contract C { uint256 x; modifier m(uint256[] memory v){ v.push(1); _; } function z() external view returns(uint256){ return x; } }`);
+    oa('GENERIC pop (every monomorphization rejects)',
+      `class C { x: u256; @modifier m<T>(v: T) { v.pop(); _; } get z(): External<u256> { return this.x; } }`,
+      `contract C { uint256 x; modifier m(uint256[] memory v){ v.pop(); _; } function z() external view returns(uint256){ return x; } }`);
+    oa('CHIMERA push + memory reassign (no location permits both)',
+      `class C { x: u256; @modifier m(v: u256[]) { v.push(1n); v = new Array<u256>(3n); _; } get z(): External<u256> { return this.x; } }`,
+      `contract C { uint256 x; modifier m(uint256[] memory v){ v.push(1); v = new uint256[](3); _; } function z() external view returns(uint256){ return x; } }`);
+    oa('GENERIC chimera push + memory reassign',
+      `class C { x: u256; @modifier m<T>(v: T) { v.push(1n); v = new Array<u256>(3n); _; } get z(): External<u256> { return this.x; } }`,
+      `contract C { uint256 x; modifier m(uint256[] memory v){ v.push(1); v = new uint256[](3); _; } function z() external view returns(uint256){ return x; } }`);
+    oa('CHIMERA pop + memory reassign',
+      `class C { x: u256; @modifier m(v: u256[]) { v.pop(); v = new Array<u256>(3n); _; } get z(): External<u256> { return this.x; } }`,
+      `contract C { uint256 x; modifier m(uint256[] memory v){ v.pop(); v = new uint256[](3); _; } function z() external view returns(uint256){ return x; } }`);
+
+    it('the base OA case rejects with JETH210 specifically (memory array has no push/pop)', () =>
+      expect(codes(`class C { x: u256; @modifier m(v: u256[]) { v.push(1n); _; } get z(): External<u256> { return this.x; } }`)).toContain('JETH210'));
+
+    // ---- CONTROL: the same reject already applied to a NORMAL function's memory-array local (ground truth,
+    //      previously the codegen JETH900; now the same analysis-time JETH210). Still a clean reject. ----
+    it('a NORMAL function memory-array-local push/pop still rejects (solc also rejects)', () => {
+      expect(codes(`class C { f(): External<void> { let a: u256[] = [1n,2n]; a.push(3n); } }`).length).toBeGreaterThan(0);
+      expect(codes(`class C { f(): External<void> { let a: u256[] = [1n,2n]; a.pop(); } }`).length).toBeGreaterThan(0);
+      expect(solcRejects(`contract C { function f() external { uint256[] memory a=new uint256[](2); a[0]=1;a[1]=2; a.push(3); } }`)).toBe(true);
+    });
+
+    // ---- NO NEW OVER-REJECTION: every VALID memory-array-param access still ACCEPTS (solc accepts) ----
+    const acc = (name: string, J: string) => it(name, () => expect(codes(J)).toEqual([]));
+    acc('valid require(v.length) body', `class C { x: u256; @modifier m(v: u256[]) { require(v.length > 0n, "e"); _; } get z(): External<u256> { return this.x; } }`);
+    acc('valid v[0] read body', `class C { x: u256; @modifier m(v: u256[]) { require(v[0n] >= 0n, "e"); _; } get z(): External<u256> { return this.x; } }`);
+    acc('valid abi.encode(v) body', `class C { x: u256; @modifier m(v: u256[]) { let b: bytes = abi.encode(v); require(b.length > 0n, "e"); _; } get z(): External<u256> { return this.x; } }`);
+    acc('valid pass v to an internal fn body', `class C { x: u256; sum(w: u256[]): u256 { return w.length; } @modifier m(v: u256[]) { require(this.sum(v) >= 0n, "e"); _; } get z(): External<u256> { return this.x; } }`);
+    acc('valid struct-field read body', `type P = { a: u256 }; class C { x: u256; @modifier m(v: P) { require(v.a > 0n, "e"); _; } get z(): External<u256> { return this.x; } }`);
+    acc('valid GENERIC v.length body (valid at bytes)', `class C { x: u256; @modifier m<T>(v: T) { require(v.length >= 0n, "e"); _; } get z(): External<u256> { return this.x; } }`);
+    acc('valid GENERIC let y:T=v body', `class C { x: u256; @modifier m<T>(v: T) { let y: T = v; _; } get z(): External<u256> { return this.x; } }`);
+    acc('a STORAGE array push/pop in a NORMAL function still accepts', `class C { arr: u256[]; f(x: u256): External<void> { this.arr.push(x); } g(): External<void> { this.arr.pop(); } }`);
+
+    // ---- STORAGE push STILL WORKS: deploy + run + read raw slots byte-identical to solc ----
+    it('this.arr.push / .pop remain byte-identical to solc (raw slots + returndata)', async () => {
+      const J = `class C { arr: u256[]; push1(x: u256): External<void> { this.arr.push(x); } popIt(): External<void> { this.arr.pop(); } get len(): External<u256> { return this.arr.length; } get at(i: u256): External<u256> { return this.arr[i]; } }`;
+      const S = `contract C { uint256[] arr; function push1(uint256 x) external { arr.push(x); } function popIt() external { arr.pop(); } function len() external view returns(uint256){ return arr.length; } function at(uint256 i) external view returns(uint256){ return arr[i]; } }`;
+      const j = await depJ(J), s = await depS(S);
+      for (const v of [11n, 22n, 33n]) {
+        await j.h.call(j.a, '0x' + sel('push1(uint256)') + pad32(v));
+        await s.h.call(s.a, '0x' + sel('push1(uint256)') + pad32(v));
+      }
+      const rjl = await j.h.call(j.a, '0x' + sel('len()')), rsl = await s.h.call(s.a, '0x' + sel('len()'));
+      expect(rjl.returnHex).toBe(rsl.returnHex);
+      const rja = await j.h.call(j.a, '0x' + sel('at(uint256)') + pad32(1n)), rsa = await s.h.call(s.a, '0x' + sel('at(uint256)') + pad32(1n));
+      expect(rja.returnHex).toBe(rsa.returnHex);
+      await j.h.call(j.a, '0x' + sel('popIt()')); await s.h.call(s.a, '0x' + sel('popIt()'));
+      expect(await readSlot(j.h, j.a, 0n)).toBe(await readSlot(s.h, s.a, 0n));
+    });
+
+    // ---- an APPLIED modifier with a VALID array-param body runs byte-identically (the fix is diag-only) ----
+    it('an APPLIED modifier reading v.length / v[i] runs byte-identical to solc', async () => {
+      const J = `class C { n: u256; @modifier m(v: u256[]) { require(v.length > 0n && v[0n] == 5n, "e"); _; } @m([5n,6n]) bump(): External<void> { this.n = this.n + 7n; } }`;
+      const S = `contract C { uint256 n; modifier m(uint256[] memory v){ require(v.length>0 && v[0]==5,"e"); _; } function f_mk() internal pure returns(uint256[] memory){ uint256[] memory a=new uint256[](2); a[0]=5;a[1]=6; return a; } function bump() external m(f_mk()) { n = n + 7; } }`;
+      const j = await depJ(J), s = await depS(S);
+      await j.h.call(j.a, '0x' + sel('bump()')); await s.h.call(s.a, '0x' + sel('bump()'));
+      expect(await readSlot(j.h, j.a, 0n)).toBe(await readSlot(s.h, s.a, 0n));
+    });
+
+    // ---- BYTE-IDENTITY: adding a VALID unapplied array-param modifier changes NO bytecode ----
+    it('adding a valid unapplied array-param modifier does NOT change creation or runtime bytecode', () => {
+      const base = `class C { s: u256 = 0n; setS(v: u256): External<void> { this.s = v; } get getS(): External<u256> { return this.s; } }`;
+      const plus = `class C { s: u256 = 0n; @modifier m(v: u256[]) { require(v.length >= 0n, "x"); _; } setS(v: u256): External<void> { this.s = v; } get getS(): External<u256> { return this.s; } }`;
+      const b = compile(base, { fileName: 'C.jeth' });
+      const p = compile(plus, { fileName: 'C.jeth' });
+      expect(p.creationBytecode).toBe(b.creationBytecode);
+      expect(p.runtimeBytecode).toBe(b.runtimeBytecode);
+    });
+  });
+
   // LIB-MODIFIER unapplied-body OA close: a @modifier declared in a `static class L` (library) is registered
   // under a qualified `L.name` key in a SEPARATE list from contract modifiers, so the contract-modifier
   // unapplied-body pass never reached it - a DECLARED-but-UNAPPLIED library modifier body escaped the

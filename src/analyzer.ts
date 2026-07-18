@@ -13005,6 +13005,23 @@ export class Analyzer {
       this.diags.error(call, 'JETH218', `a fixed-size array has no '${method}' (length is constant)`);
       return;
     }
+    // push/pop are STORAGE-array-only; a MEMORY array (a `let xs: u256[]` local, a modifier/internal
+    // memory array param, or a memory array produced by an expression) has no push/pop, exactly like
+    // solc's "Member push/pop is not available in <T> memory outside of storage". In a NORMAL function
+    // body a memArray push previously rode through to a codegen reject (the generic JETH900 in yul.ts,
+    // reached only when the body is actually lowered); this analysis-time gate is the memory analog of
+    // the calldata (JETH214) / fixed (JETH218) rejects just above and, crucially, ALSO fires for a body
+    // that is type-checked but NEVER lowered - a DECLARED-but-UNAPPLIED @modifier body (its statements
+    // are checked into a discarded sink by checkUnappliedModifierBody, so codegen never runs). Without
+    // it, `@modifier m(v: u256[]) { v.push(1n); _; }` on an un-applied modifier was OVER-ACCEPTED while
+    // solc rejects the memory-array push. Reuses JETH210 (the same "requires a storage array" code the
+    // bytes/string memory push and the resolveArrayExpr-undefined path already emit). SOUND: solc never
+    // accepts push/pop on a memory array, so this can only turn an existing miscompile/over-acceptance
+    // into a clean reject, never over-reject a valid program.
+    if (arr.base.kind === 'memArray' || arr.base.kind === 'memArrayExpr') {
+      this.diags.error(call, 'JETH210', `'${method}' requires a storage array (this.arr.${method}(...))`);
+      return;
+    }
     this.currentWritesState = true;
     if (method === 'pop') {
       if (call.arguments.length !== 0) this.diags.error(call, 'JETH215', 'pop() takes no arguments');
