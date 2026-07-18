@@ -1099,4 +1099,97 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
       expect(p.runtimeBytecode).toBe(b.runtimeBytecode);
     });
   });
+
+  // OR LIFT: a U-typed body LOCAL / annotation (`let y: U = v`) inside an APPLIED generic @modifier body was
+  // over-rejected JETH013 ("unknown JETH type 'U'"): collectModifier stores the body's RAW TS statements and
+  // they were re-checked at the application site OUTSIDE the monomorphization binding, so U did not resolve.
+  // Now RawModifier carries the concrete binding and withModifierTypeBinding restores it around body lowering
+  // at every application site (buildModifierWrap / inlineModifier / inlineModifierBodyIntoCtor), so U resolves
+  // to the concrete instantiation - byte-identical to solc's monomorphized modifier body. The binding is
+  // restored ONLY around the modifier body (not the caller-scope application args), so it does not leak. This
+  // introduces zero miscompiles / over-acceptances (a body broken AT the concrete type still rejects) and zero
+  // new over-rejections (adversarially verified deploy+run+decode across instantiation types and body shapes).
+  describe('APPLIED generic @modifier with a U-typed body local resolves to the instantiation (OR lift, solc parity)', () => {
+    it('OR CLOSED: the exact witness now accepts (solc monomorph accepts)', () => {
+      const J = `class C { s: u256 = 0n; @modifier lim<U>(v: U) { let y: U = v; _; } @lim<u256>(3n) f(x: u256): External<void> { this.s = x; } }`;
+      const S = `contract C { uint256 s; modifier lim(uint256 v){ uint256 y = v; _; } function f(uint256 x) external lim(3) { s = x; } }`;
+      expect(codes(J)).toEqual([]);
+      expect(solcRejects(S)).toBe(false);
+    });
+    // ---- no new over-rejection: valid U-typed-local bodies ACCEPT across instantiation types + body shapes ----
+    it('accept: U-typed local at value types (u256/address/bool) and multi-type-param', () => {
+      expect(codes(`class C { s: u256 = 0n; @modifier m<U>(v: U){ let y: U = v; this.s = 1n; _; } @m<u256>(7n) f(): External<void> {} }`)).toEqual([]);
+      expect(codes(`class C { a: address; @modifier m<U>(v: U){ let y: U = v; this.a = y; _; } @m<address>(address(0xabn)) f(): External<void> {} }`)).toEqual([]);
+      expect(codes(`class C { s: u256 = 0n; @modifier m<U>(v: U){ let y: U = v; if (y) { this.s = 1n; } _; } @m<bool>(true) f(): External<void> {} }`)).toEqual([]);
+      expect(codes(`class C { s: u256 = 0n; t: u256 = 0n; @modifier m<A,B>(p: A, q: B){ let x: A = p; let y: B = q; this.s = x; this.t = y; _; } @m<u256,u256>(5n,9n) f(): External<void> {} }`)).toEqual([]);
+    });
+    it('accept: U-typed local at a struct instantiation (field read), function site', () => {
+      const J = `type P = { a: u256; b: u256 }; class C { s: u256 = 0n; @modifier m<U>(v: U){ let y: U = v; this.s = y.a; _; } @m<P>(P(8n,3n)) f(): External<void> {} }`;
+      const S = `struct P { uint256 a; uint256 b; } contract C { uint256 s; modifier m(P memory v){ P memory y = v; s = y.a; _; } function f() external m(P(8,3)) {} }`;
+      expect(codes(J)).toEqual([]);
+      expect(solcRejects(S)).toBe(false);
+    });
+    it('accept: U-typed local in post-placeholder and conditional-placeholder shapes', () => {
+      expect(codes(`class C { s: u256 = 0n; @modifier m<U>(v: U){ _; let y: U = v; this.s = y; } @m<u256>(7n) f(x: u256): External<void> { this.s = x; } }`)).toEqual([]);
+      expect(codes(`class C { s: u256 = 0n; @modifier m<U>(v: U){ let y: U = v; if (true) { _; } this.s = y; } @m<u256>(7n) f(x: u256): External<void> { this.s = x; } }`)).toEqual([]);
+    });
+    // ---- no new over-acceptance: a body broken AT THE CONCRETE TYPE still rejects (solc parity) ----
+    it('OA guard: a U-typed local misused at the concrete instantiation still rejects on both sides', () => {
+      const bad: [string, string][] = [
+        [`class C { s: u256 = 0n; @modifier m<U>(v: U){ let y: U = (1n > 0n); _; } @m<u256>(3n) f(): External<void> { this.s = 1n; } }`,
+         `contract C { uint256 s; modifier m(uint256 v){ uint256 y = (1>0); _; } function f() external m(3) { s=1; } }`],
+        [`class C { s: u256 = 0n; @modifier m<U>(v: U){ let y: U = v.foo; _; } @m<u256>(3n) f(): External<void> { this.s = 1n; } }`,
+         `contract C { uint256 s; modifier m(uint256 v){ uint256 y = v.foo; _; } function f() external m(3) { s=1; } }`],
+        [`class C { s: u256 = 0n; @modifier m<U>(v: U){ v.push(1n); _; } @m<u256>(3n) f(): External<void> { this.s = 1n; } }`,
+         `contract C { uint256 s; modifier m(uint256 v){ v.push(1); _; } function f() external m(3) { s=1; } }`],
+      ];
+      for (const [J, S] of bad) {
+        expect(codes(J).length).toBeGreaterThan(0);
+        expect(solcRejects(S)).toBe(true);
+      }
+    });
+    it('OA guard: a genuinely unknown type in the body still rejects JETH013 (binding is not a blanket suppressor)', () => {
+      const J = `class C { s: u256 = 0n; @modifier m<U>(v: U){ let y: NoSuch = v; _; } @m<u256>(3n) f(): External<void> { this.s = 1n; } }`;
+      const S = `contract C { uint256 s; modifier m(uint256 v){ NoSuch y = v; _; } function f() external m(3) { s=1; } }`;
+      expect(codes(J)).toContain('JETH013');
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('no leak: the type parameter U is NOT visible in the wrapped function body (still JETH013)', () => {
+      const J = `class C { s: u256 = 0n; @modifier m<U>(v: U){ let y: U = v; _; } @m<u256>(3n) f(): External<void> { let z: U = 1n; this.s = 1n; } }`;
+      const S = `contract C { uint256 s; modifier m(uint256 v){ uint256 y = v; _; } function f() external m(3) { U z = 1; s=1; } }`;
+      expect(codes(J)).toContain('JETH013');
+      expect(solcRejects(S)).toBe(true);
+    });
+    // ---- deploy+run+decode byte-identity (the runtime lock) ----
+    it('byte-identical run: a U-typed local carries the value into storage (u256)', async () => {
+      const J = `class C { s: u256 = 0n; @modifier lim<U>(v: U){ let y: U = v; this.s = y; _; } @lim<u256>(7n) f(): External<u256> { return this.s; } }`;
+      const S = `contract C { uint256 s; modifier lim(uint256 v){ uint256 y = v; s = y; _; } function f() external lim(7) returns(uint256){ return s; } }`;
+      const j = await depJ(J),
+        s = await depS(S);
+      const rj = await j.h.call(j.a, '0x' + sel('f()'));
+      const rs = await s.h.call(s.a, '0x' + sel('f()'));
+      expect(rj.success).toBe(rs.success);
+      expect(rj.returnHex).toBe(rs.returnHex);
+      expect(BigInt(rj.returnHex)).toBe(7n);
+      expect(await readSlot(j.h, j.a, 0n)).toBe(await readSlot(s.h, s.a, 0n));
+    });
+    it('byte-identical run: post-placeholder U-typed local and a multi-type-param body', async () => {
+      const J1 = `class C { s: u256 = 0n; @modifier lim<U>(v: U){ _; let y: U = v; this.s = y; } @lim<u256>(7n) f(x: u256): External<void> { this.s = x; } }`;
+      const S1 = `contract C { uint256 s; modifier lim(uint256 v){ _; uint256 y = v; s = y; } function f(uint256 x) external lim(7) { s = x; } }`;
+      const j1 = await depJ(J1),
+        s1 = await depS(S1);
+      await j1.h.call(j1.a, '0x' + sel('f(uint256)') + pad32(3n));
+      await s1.h.call(s1.a, '0x' + sel('f(uint256)') + pad32(3n));
+      expect(await readSlot(j1.h, j1.a, 0n)).toBe(await readSlot(s1.h, s1.a, 0n));
+      expect(BigInt(await readSlot(j1.h, j1.a, 0n))).toBe(7n);
+      const J2 = `class C { s: u256 = 0n; t: u256 = 0n; @modifier two<A,B>(p: A, q: B){ let x: A = p; let y: B = q; this.s = x; this.t = y; _; } @two<u256,u256>(5n,9n) f(): External<u256> { return this.s + this.t; } }`;
+      const S2 = `contract C { uint256 s; uint256 t; modifier two(uint256 p, uint256 q){ uint256 x = p; uint256 y = q; s = x; t = y; _; } function f() external two(5,9) returns(uint256){ return s + t; } }`;
+      const j2 = await depJ(J2),
+        s2 = await depS(S2);
+      const rj = await j2.h.call(j2.a, '0x' + sel('f()'));
+      const rs = await s2.h.call(s2.a, '0x' + sel('f()'));
+      expect(rj.returnHex).toBe(rs.returnHex);
+      expect(BigInt(rj.returnHex)).toBe(14n);
+    });
+  });
 });

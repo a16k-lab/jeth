@@ -306,6 +306,14 @@ interface RawModifier {
   // (there is no synthesized body to early-exit from without jumping past the remaining wrap), so a
   // ctor-applied modifier with a bare return stays gated (P1-20).
   hasBareReturn?: boolean;
+  // L15 (generic @modifier): the concrete type binding (type-param name -> instantiation type) captured
+  // at monomorphization. collectModifier stores the body's RAW TS statements; those are re-checked at
+  // each application site (buildModifierWrap / inlineModifier / inlineModifierBodyIntoCtor), OUTSIDE the
+  // withTypeBinding that was active during collection - so a U-typed body local (`let y: U = v`) or any
+  // U-typed annotation in the body would fail to resolve (JETH013). Restoring this binding around body
+  // lowering (withModifierTypeBinding) makes those resolve to the concrete instantiation, matching solc's
+  // monomorphized modifier body. undefined for a NON-generic modifier (nothing to restore; wrap is a no-op).
+  binding?: Map<string, JethType>;
 }
 
 export class Analyzer {
@@ -9680,6 +9688,15 @@ export class Analyzer {
     }
   }
 
+  /** L15: run `fn` with a monomorphized generic @modifier's captured type binding restored (so a U-typed
+   *  body local / annotation resolves to the concrete instantiation type when the body's raw TS statements
+   *  are lowered at the application site), or plainly for a NON-generic modifier (mod.binding undefined -
+   *  a no-op). Wraps ONLY the modifier's own body lowering; the application ARGS are checked in the caller
+   *  scope, where the type parameter is not visible, so they stay outside this binding. */
+  private withModifierTypeBinding<R>(mod: RawModifier, fn: () => R): R {
+    return mod.binding ? this.withTypeBinding(mod.binding, fn) : fn();
+  }
+
   /** A unique, valid-identifier mangled name for `f` specialized at the given concrete types.
    *  Distinct from any user function name (the `$` separators are illegal in a TS identifier, so a
    *  user could never declare a colliding name) and one-to-one with the type tuple, so it doubles
@@ -10353,7 +10370,10 @@ export class Analyzer {
       this.placeholderInner = inner;
       const savedModOwnerC = this.bodyOwnerContract;
       if (mod.definingContract !== undefined) this.bodyOwnerContract = mod.definingContract;
-      for (const s of mod.bodyStmts) this.checkStatement(s, VOID, lowered);
+      const bodyC = mod.bodyStmts;
+      this.withModifierTypeBinding(mod, () => {
+        for (const s of bodyC) this.checkStatement(s, VOID, lowered);
+      });
       this.bodyOwnerContract = savedModOwnerC;
       this.placeholderInner = savedPlaceholder;
       this.popScope();
@@ -10369,9 +10389,11 @@ export class Analyzer {
     const savedModOwner = this.bodyOwnerContract;
     if (mod.definingContract !== undefined) this.bodyOwnerContract = mod.definingContract;
     const pre: Stmt[] = [];
-    for (const s of mod.preStmts) this.checkStatement(s, VOID, pre);
     const post: Stmt[] = [];
-    for (const s of mod.postStmts) this.checkStatement(s, VOID, post);
+    this.withModifierTypeBinding(mod, () => {
+      for (const s of mod.preStmts) this.checkStatement(s, VOID, pre);
+      for (const s of mod.postStmts) this.checkStatement(s, VOID, post);
+    });
     this.bodyOwnerContract = savedModOwner;
     this.popScope();
     this.scopes = savedScopes;
@@ -10610,7 +10632,9 @@ export class Analyzer {
     if (isConstructor) this.currentInCtorModifierCode = true;
     const savedModOwner = this.bodyOwnerContract;
     if (mod.definingContract !== undefined) this.bodyOwnerContract = mod.definingContract;
-    for (const s of mod.preStmts) this.checkStatement(s, VOID, pre);
+    this.withModifierTypeBinding(mod, () => {
+      for (const s of mod.preStmts) this.checkStatement(s, VOID, pre);
+    });
     this.bodyOwnerContract = savedModOwner;
     this.currentInCtorModifierCode = savedInModCode;
     this.popScope();
@@ -10684,7 +10708,9 @@ export class Analyzer {
     this.currentInCtorModifierCode = true;
     const savedModOwner = this.bodyOwnerContract;
     if (mod.definingContract !== undefined) this.bodyOwnerContract = mod.definingContract;
-    for (const s of mod.node.body!.statements) this.checkStatement(s, VOID, lowered);
+    this.withModifierTypeBinding(mod, () => {
+      for (const s of mod.node.body!.statements) this.checkStatement(s, VOID, lowered);
+    });
     this.bodyOwnerContract = savedModOwner;
     this.currentInCtorModifierCode = savedInModCode;
     this.placeholderInner = savedPlaceholder;
@@ -11153,6 +11179,9 @@ export class Analyzer {
     const rm = scratch[0];
     if (!rm) return undefined; // collectModifier emitted the precise diagnostic for this instantiation
     rm.name = key;
+    // L15: capture the concrete binding so each application site can restore it around body lowering (a
+    // U-typed body local / annotation `let y: U = v` re-resolves outside collectModifier's withTypeBinding).
+    rm.binding = binding;
     this.modifiersByName.set(key, rm);
     this.modifierInstanceKeys.add(key);
     return key;
