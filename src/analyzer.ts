@@ -2479,13 +2479,54 @@ export class Analyzer {
     };
     for (const m of cls.members) {
       if (ts.isPropertyDeclaration(m)) {
-        if (this.isErrorEventFieldDecl(m)) continue; // a declaration, not a typed field (its own gates apply)
+        // A native error/event FIELD carries its parameter types inside `event<{...}>` / `error<{...}>`;
+        // resolve THOSE (an undefined event/error param type is rejected by solc just like a method's).
+        if (this.isErrorEventFieldDecl(m)) {
+          this.resolveErrorEventFieldTypes(m, resolve);
+          continue;
+        }
         resolve(m.type);
+      } else if (ts.isConstructorDeclaration(m)) {
+        // A constructor is legal in an abstract base; solc type-checks its parameter types too.
+        for (const p of m.parameters) resolve(p.type);
       } else if (ts.isMethodDeclaration(m) || ts.isGetAccessorDeclaration(m)) {
-        if (decoratorNames(m).includes('modifier')) continue; // a @modifier is not an ABI signature
+        // A @modifier is not an ABI signature, but its PARAMETER types are still resolved by solc (an
+        // undefined modifier-param type is an error); it has no return type to resolve.
+        if (decoratorNames(m).includes('modifier')) {
+          for (const p of m.parameters) resolve(p.type);
+          continue;
+        }
         for (const p of m.parameters) resolve(p.type);
         resolve(m.type);
       }
+    }
+  }
+
+  /** Resolve the parameter TYPES of a native error/event FIELD declaration on a stray class (`E: event<{ x:
+   *  indexed<T> }>` / `Bad: error<{ n: T }>`). The `indexed<T>` wrapper is unwrapped to T first - the
+   *  deployed synthesizeErrorEventDecl unwraps it too, and resolving `indexed` itself would spuriously
+   *  reject a valid `indexed<u256>`. Only the payload TYPE is resolved: the structural error/event gates
+   *  (JETH353/JETH129) belong to the deployed path and are deliberately not re-run for a signature-only
+   *  stray base. A malformed field (no type argument, not an object type, no field type) is skipped - its
+   *  own gate fires on the deployed path, and a stray base is checked for undefined types only. */
+  private resolveErrorEventFieldTypes(member: ts.PropertyDeclaration, resolve: (t: ts.TypeNode | undefined) => void): void {
+    const t = member.type;
+    if (!t || !ts.isTypeReferenceNode(t) || !t.typeArguments || t.typeArguments.length !== 1) return;
+    const lit = t.typeArguments[0]!;
+    if (!ts.isTypeLiteralNode(lit)) return;
+    for (const fm of lit.members) {
+      if (!ts.isPropertySignature(fm) || !fm.type) continue;
+      let pType: ts.TypeNode = fm.type;
+      if (
+        ts.isTypeReferenceNode(pType) &&
+        ts.isIdentifier(pType.typeName) &&
+        pType.typeName.text === 'indexed' &&
+        pType.typeArguments &&
+        pType.typeArguments.length === 1
+      ) {
+        pType = pType.typeArguments[0]!;
+      }
+      resolve(pType);
     }
   }
 

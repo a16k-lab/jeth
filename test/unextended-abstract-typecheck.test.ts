@@ -91,6 +91,39 @@ describe('an unextended abstract class is type-checked (solc parity)', () => {
     expect(codes(`abstract class B { f: u256; }\nabstract class D { g: u256; }`)).toContain('JETH041');
   });
 
+  it('an UNDEFINED type in an event/error FIELD, a CONSTRUCTOR param, or a @modifier param rejects (JETH013), like solc', () => {
+    // These four member surfaces were the HOLE in the first pass: an event/error field's parameter types
+    // (inside `event<{...}>` / `error<{...}>`), a constructor's parameter types, and a @modifier's
+    // parameter types reached no type checker on a stray abstract base, so an undefined type there was
+    // silently accepted while solc rejects the twin (an over-acceptance).
+    // event field param (through the `indexed<...>` unwrap):
+    expect(codes(`abstract class B { E: event<{ x: indexed<Nope> }>; }\n${DEPLOYABLE}`)).toContain('JETH013');
+    // error field param:
+    expect(codes(`abstract class B { Bad: error<{ n: Nope }>; }\n${DEPLOYABLE}`)).toContain('JETH013');
+    // constructor param:
+    expect(codes(`abstract class B { constructor(x: Nope) {} }\n${DEPLOYABLE}`)).toContain('JETH013');
+    // @modifier param:
+    expect(codes(`abstract class B { @modifier only(x: Nope) { _; } }\n${DEPLOYABLE}`)).toContain('JETH013');
+
+    // THE CONTROLS: the identical shapes with a LEGAL type accept on BOTH JETH and solc (so the reject is
+    // driven by the undefined type, not by the member kind - `indexed<u256>` must NOT reject on the
+    // `indexed` wrapper).
+    expect(accepts(`abstract class B { E: event<{ x: indexed<u256> }>; }\n${DEPLOYABLE}`)).toBe(true);
+    expect(accepts(`abstract class B { Bad: error<{ n: u256 }>; }\n${DEPLOYABLE}`)).toBe(true);
+    expect(accepts(`abstract class B { constructor(x: u256) {} }\n${DEPLOYABLE}`)).toBe(true);
+    expect(accepts(`abstract class B { @modifier only(x: u256) { _; } }\n${DEPLOYABLE}`)).toBe(true);
+
+    // THE SOLC WITNESSES: each undefined-typed form is an error, its legal twin accepts.
+    expect(solcAccepts(`abstract contract B { event E(Nope indexed x); } ${SOL_DEPLOYABLE}`)).toBe(false);
+    expect(solcAccepts(`abstract contract B { event E(uint256 indexed x); } ${SOL_DEPLOYABLE}`)).toBe(true);
+    expect(solcAccepts(`abstract contract B { error Bad(Nope n); } ${SOL_DEPLOYABLE}`)).toBe(false);
+    expect(solcAccepts(`abstract contract B { error Bad(uint256 n); } ${SOL_DEPLOYABLE}`)).toBe(true);
+    expect(solcAccepts(`abstract contract B { constructor(Nope x) {} } ${SOL_DEPLOYABLE}`)).toBe(false);
+    expect(solcAccepts(`abstract contract B { constructor(uint256 x) {} } ${SOL_DEPLOYABLE}`)).toBe(true);
+    expect(solcAccepts(`abstract contract B { modifier only(Nope x) { _; } } ${SOL_DEPLOYABLE}`)).toBe(false);
+    expect(solcAccepts(`abstract contract B { modifier only(uint256 x) { _; } } ${SOL_DEPLOYABLE}`)).toBe(true);
+  });
+
   // ---- THE OVER-REJECTION GUARD (the #1 risk of this change) --------------------------------------
   // An unextended abstract base may legitimately contain anything a deriving contract would use. Each
   // shape below must still COMPILE, and the emitted creation bytecode must be UNCHANGED by the added
