@@ -237,9 +237,17 @@ describe('storage dyn-struct array with a nested-dynamic-leaf field - byte-ident
     );
   });
 
-  it('a direct array-literal constructor arg for a nested-leaf field still cleanly rejects (JETH226, solc parity)', () => {
-    const src = `type D = { id: u256; tags: bytes[]; };
-      class C { vals: D[]; f(): External<void> { this.vals.push(D(1n, [bytes("x")])); } }`;
-    expect(codes(src)).toContain('JETH226');
+  it('LIFTED: a direct array-literal constructor arg for a nested-leaf field now accepts (byte-identical to new+fill); Arr<T,N>[] stays rejected', async () => {
+    // solc rejects the literal spelling (fixed [N] -> dynamic), so this is a documented JETH superset; the
+    // built image is byte-identical to `D(1, <newArrayValue>)`. A FIXED-inner value array (Arr<T,N>[])
+    // literal STAYS a clean JETH226 reject (its mem->storage copy hits a pre-existing payload-drop bug).
+    const J = `type D = { id: u256; tags: bytes[]; };
+      class C { vals: D[]; f(): External<void> { this.vals.push(D(1n, [bytes("xy"),bytes("z")])); } get bl(): External<u256> { return this.vals[0n].tags[0n].length; } get n(): External<u256> { return this.vals.length; } }`;
+    const S = `struct D { uint256 id; bytes[] tags; }
+      contract C { D[] vals; function f() external { bytes[] memory t = new bytes[](2); t[0]="xy"; t[1]="z"; vals.push(D(1, t)); } function bl() external view returns(uint256){ return vals[0].tags[0].length; } function n() external view returns(uint256){ return vals.length; } }`;
+    await diff(J, S, [['f()'], ['bl()'], ['n()']]);
+    expect(
+      codes(`type D = { id: u256; g: Arr<u256,2>[]; }; class C { vals: D[]; f(): External<void> { this.vals.push(D(1n, [[u256(1n),2n]])); } }`),
+    ).toContain('JETH226');
   });
 });

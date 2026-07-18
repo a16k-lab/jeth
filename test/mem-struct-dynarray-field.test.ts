@@ -134,28 +134,26 @@ describe('MEM-STRUCT-DYNARRAY-FIELD: safe read side is byte-identical; literal c
     expect(BigInt(bytesToHex(await hj.evm.stateManager.getStorage(aj, hx(pad(dataBase + 2n)))))).toBe(33n);
   });
 
-  it('KEEP-REJECT: an inline array literal as a dynamic-array constructor field stays a clean JETH226 reject (solc parity)', () => {
-    // Each of these is REJECTED by solc (fixed [N] -> dynamic implicit conversion), so JETH accepting it
-    // would be an over-acceptance. JETH keeps the JETH226 reject; the differential-verified byte-identical
-    // path is the local form (guarded by the SAFE tests above), not the literal.
-    const cases: [string, string][] = [
-      // [JETH source, solc twin that solc rejects]
+  it('LIFTED: an inline array literal for a value / nested-leaf dynamic-array constructor field now accepts (byte-identical to new+fill); Arr<T,N>[] and Q[] literals stay rejected', async () => {
+    // solc rejects the literal spelling (fixed [N] -> dynamic implicit conversion) in EVERY position, so this
+    // is a documented JETH SUPERSET (like `let a: u256[] = [..]`), byte-identical to solc's `new T[](n)` +
+    // fill VALUE form (the correct differential mirror; the inline-literal solc twin still rejects). A
+    // FIXED-inner value array (Arr<T,N>[]) and a struct-element array (Q[]) STAY a clean JETH226 reject:
+    // the former hits a pre-existing mem->storage copy bug, the latter is solc-unsupported whole-value.
+    // Byte-identity to the value form (deploy+run, non-vacuous):
+    await eqCalls(
+      `type P={id:u256,pts:u256[]}; class C{ get g():External<u256>{ let p:P=P(7n,[u256(1n),2n,3n]); return p.pts[2n]; } get l():External<u256>{ let p:P=P(7n,[u256(1n),2n,3n]); return p.pts.length; } }`,
+      `contract C{ struct P{uint256 id;uint256[] pts;} function g() external pure returns(uint256){ uint256[] memory t=new uint256[](3); t[0]=1;t[1]=2;t[2]=3; P memory p=P(7,t); return p.pts[2]; } function l() external pure returns(uint256){ uint256[] memory t=new uint256[](3); t[0]=1;t[1]=2;t[2]=3; P memory p=P(7,t); return p.pts.length; } }`,
       [
-        `type S={arr:u256[]}; class C{ get g():External<u256>{ let s:S={arr:[3n,4n]}; return s.arr[0n]; } }`,
-        `contract C{ struct S{uint256[] arr;} function g() external pure returns(uint256){ S memory s=S({arr:[uint256(3),4]}); return s.arr[0]; } }`,
+        ['g()', ''],
+        ['l()', ''],
       ],
-      [
-        `type P={id:u256,pts:u256[]}; class C{ get g():External<u256>{ let p:P=P(7n,[1n,2n]); return p.id; } }`,
-        `contract C{ struct P{uint256 id;uint256[] pts;} function g() external pure returns(uint256){ P memory p=P(7,[uint256(1),2]); return p.id; } }`,
-      ],
-      [
-        `type D={id:u256,tags:bytes[]}; class C{ get g():External<u256>{ let d:D=D(1n,[bytes("x")]); return d.id; } }`,
-        `contract C{ struct D{uint256 id;bytes[] tags;} function g() external pure returns(uint256){ bytes[1] memory a=[bytes("x")]; D memory d=D(1,a); return d.id; } }`,
-      ],
-    ];
-    for (const [j, s] of cases) {
-      expect(codes(j), `JETH must reject: ${j.slice(0, 60)}`).toContain('JETH226');
-      expect(solcRejects(s), `solc must reject the twin: ${s.slice(0, 60)}`).toBe(true);
-    }
+    );
+    // object-literal struct form and a bytes[] nested-leaf field also accept:
+    expect(codes(`type S={arr:u256[]}; class C{ get g():External<u256>{ let s:S={arr:[u256(3n),4n]}; return s.arr[0n]; } }`)).toEqual([]);
+    expect(codes(`type D={id:u256,tags:bytes[]}; class C{ get g():External<u256>{ let d:D=D(1n,[bytes("x")]); return d.id; } }`)).toEqual([]);
+    // STILL a clean JETH226 reject:
+    expect(codes(`type P={id:u256,g:Arr<u256,2>[]}; class C{ get f():External<u256>{ let p:P=P(7n,[[u256(1n),2n]]); return p.id; } }`)).toContain('JETH226');
+    expect(codes(`type Q={x:u256}; type P={id:u256,qs:Q[]}; class C{ get f():External<u256>{ let p:P=P(7n,[Q(1n)]); return p.id; } }`)).toContain('JETH226');
   });
 });

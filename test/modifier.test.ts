@@ -1278,4 +1278,46 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
       expect(codes(J)).toContain('JETH072');
     });
   });
+
+  // OR LIFT: a bare string LITERAL as a generic @modifier argument - `@modifier m<T>(v: T){...} @m("hi")` -
+  // was over-rejected JETH074 ("a string literal is only valid where a string/bytes value is expected"),
+  // because the generic-arg inference checked the literal with no expected type. solc accepts it (infers a
+  // string param). FIX: resolveModifierGenericArgs infers T=string for a bare string/no-substitution-template
+  // literal (solc's default literal type); the concrete monomorph still re-checks the literal against the
+  // bound param type at the inline site, and an explicit @m<bytes>("...") still selects bytes.
+  describe('string literal as a generic @modifier argument infers T=string (OR lift, solc parity)', () => {
+    it('OR CLOSED: @m("hi") on a ctor and a function infers T=string and is byte-identical', async () => {
+      const J = `class C { s: string; @modifier m<T>(v: T) { this.s = v; _; } @m("hi") constructor() {} get gs(): External<string> { return this.s; } }`;
+      const S = `contract C { string s; modifier m(string memory v){ s = v; _; } constructor() m("hi") {} function gs() external view returns(string memory){ return s; } }`;
+      expect(codes(J)).toEqual([]);
+      expect(solcRejects(S)).toBe(false);
+      const j = await depJ(J),
+        s = await depS(S);
+      expect((await j.h.call(j.a, '0x' + sel('gs()'))).returnHex).toBe((await s.h.call(s.a, '0x' + sel('gs()'))).returnHex);
+      // function-applied form
+      const JF = `class C { s: string = ""; @modifier m<T>(v: T) { this.s = v; _; } @m("world") f(): External<void> {} get gs(): External<string> { return this.s; } }`;
+      const SF = `contract C { string s; modifier m(string memory v){ s = v; _; } function f() external m("world") {} function gs() external view returns(string memory){ return s; } }`;
+      const jf = await depJ(JF),
+        sf = await depS(SF);
+      await jf.h.call(jf.a, '0x' + sel('f()'));
+      await sf.h.call(sf.a, '0x' + sel('f()'));
+      expect((await jf.h.call(jf.a, '0x' + sel('gs()'))).returnHex).toBe((await sf.h.call(sf.a, '0x' + sel('gs()'))).returnHex);
+    });
+    it('accept: no-substitution template literal, multi-type-param, and explicit @m<bytes> still selects bytes', () => {
+      expect(codes('class C { s: string; @modifier m<T>(v: T) { this.s = v; _; } @m(`hey`) constructor() {} get gs(): External<string> { return this.s; } }')).toEqual([]);
+      expect(codes(`class C { s: string; n: u256; @modifier m2<A,B>(a: A, b: B) { this.s = a; this.n = b; _; } @m2("hi", 5n) constructor() {} get gs(): External<string> { return this.s; } }`)).toEqual([]);
+      expect(codes(`class C { b: bytes; @modifier m<T>(v: T) { this.b = v; _; } @m<bytes>("hi") constructor() {} get gb(): External<bytes> { return this.b; } }`)).toEqual([]);
+    });
+    it('OA guard: a string-literal arg whose body assigns v to a u256 field still rejects (T=string, mismatch)', () => {
+      const J = `class C { n: u256; @modifier m<T>(v: T) { this.n = v; _; } @m("hi") constructor() {} get gn(): External<u256> { return this.n; } }`;
+      const S = `contract C { uint256 n; modifier m(string memory v){ n = v; _; } constructor() m("hi") {} function gn() external view returns(uint256){ return n; } }`;
+      expect(codes(J)).toContain('JETH085');
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('residual (documented): @m("hi") with a bytes-typed body infers string and rejects; use @m<bytes>("hi")', () => {
+      // A bare string literal defaults to `string`; solc would accept it for a bytes param (implicit
+      // string-literal -> bytes conversion). SOUND over-rejection with an explicit-type-arg workaround.
+      expect(codes(`class C { b: bytes; @modifier m<T>(v: T) { this.b = v; _; } @m("hi") constructor() {} get gb(): External<bytes> { return this.b; } }`)).toContain('JETH085');
+    });
+  });
 });

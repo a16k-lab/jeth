@@ -11243,9 +11243,21 @@ export class Analyzer {
       if (!ann || !ts.isTypeReferenceNode(ann) || !ts.isIdentifier(ann.typeName)) continue;
       const tpName = ann.typeName.text;
       if (!gen.typeParams.includes(tpName)) continue;
-      const a = this.checkExpr(app.argNodes[i]!);
-      if (!a) return undefined;
-      const inferred = a.type;
+      // A BARE string literal has no self-type without a target, so checkExpr rejects it (JETH074 "only
+      // valid where a string/bytes value is expected"). solc types a string literal as `string` (its
+      // default literal type), so infer T = string here - closing the over-rejection of `@m("...")` on a
+      // string-typed generic param. The concrete monomorph re-checks the literal against the bound param
+      // type at the inline site (checkExpr(arg, param.type)), and an explicit `@m<bytes>("...")` still
+      // selects bytes via the typeArgs branch above.
+      const argNode = app.argNodes[i]!;
+      let inferred: JethType;
+      if (ts.isStringLiteral(argNode) || ts.isNoSubstitutionTemplateLiteral(argNode)) {
+        inferred = STRING;
+      } else {
+        const a = this.checkExpr(argNode);
+        if (!a) return undefined;
+        inferred = a.type;
+      }
       const prev = binding.get(tpName);
       if (prev && !typesEqual(prev, inferred)) {
         this.diags.error(
@@ -12664,14 +12676,28 @@ export class Analyzer {
     ) {
       const a = this.checkExpr(argNode, f.type);
       if (!a) return undefined;
-      // An array LITERAL ([a, b, c]) is a FIXED array (uint256[N]) in solc, which does NOT implicitly
-      // convert to a dynamic array (uint256[]) as a constructor field - solc rejects it. Only a true
-      // dynamic-array value (a memory/calldata/storage source) is accepted here. A dynamic array of
-      // STRUCT elements (Q[]) is accepted identically: the dynamic-struct ABI encoder re-encodes the
-      // whole [len][...] array tail (offset table for dynamic-struct elements; contiguous abiHeadWords
-      // for static ones), and the source must be a true Q[] value, not a fixed-array literal. A
-      // NESTED-DYNAMIC-LEAF array field (bytes[]/string[]/T[][], Cat C) is the same: its B4 image source
-      // must be a true dynamic-array value (a memory bytes[][] local / new Array), not a literal.
+      // JETH dynamic-array-literal SUPERSET at the struct-constructor-field position. solc rejects a bare
+      // `[a, b, c]` as a dynamic array (uint256[N] does NOT implicitly convert to uint256[]) in EVERY
+      // position; JETH already accepts it as a dynamic-array value in the let / return / storage-assign /
+      // internal-fn-arg positions (documented supersets, byte-identical to solc's `new T[](n)` + fill), so
+      // for consistency accept it here too. The array-literal builder (buildNestedMemArrayLit /
+      // nestedMemImagePtr) produces the SAME [len][...] image the true-value path feeds to the dynamic-
+      // field-struct builder, so it is byte-identical to `D(a, <newArrayValue>)` (verified deploy+run+decode
+      // for u256[]/address[]/bool[]/bytes32[]/bytes[]/string[]/u256[][]/bytes[][]/empty). Admitted ONLY when
+      // every array level from here to the leaf is DYNAMIC and the leaf is a static VALUE type or bytes/string
+      // (admitsDynArrayLiteralStructField). A FIXED-inner value array (Arr<T,N>[] = uint256[2][]) is EXCLUDED:
+      // its memory->storage copy hits a PRE-EXISTING payload-drop bug, so it stays a clean JETH226 reject
+      // rather than a reachable miscompile. A dynamic array of STRUCT elements (Q[]) is excluded too - solc
+      // rejects its whole-value construction here as well (UnimplementedFeatureError in the legacy pipeline).
+      if (a.kind === 'arrayLit' && this.admitsDynArrayLiteralStructField(f.type)) {
+        return a;
+      }
+      // A true dynamic-array value (a memory/calldata/storage source) is accepted here. A dynamic array of
+      // STRUCT elements (Q[]) is accepted identically from a VALUE: the dynamic-struct ABI encoder re-encodes
+      // the whole [len][...] array tail (offset table for dynamic-struct elements; contiguous abiHeadWords
+      // for static ones). A NESTED-DYNAMIC-LEAF array field (bytes[]/string[]/T[][], Cat C) is the same: its
+      // B4 image source may be a true dynamic-array value (a memory bytes[][] local / new Array) OR the
+      // literal admitted above.
       if (a.kind === 'arrayLit' || !(a.type.kind === 'array' && a.type.length === undefined)) {
         this.diags.error(
           argNode,
@@ -12695,6 +12721,20 @@ export class Analyzer {
     const a = this.checkExpr(argNode, f.type);
     if (!a) return undefined;
     return this.coerce(a, f.type, argNode);
+  }
+
+  /** OR1 (dynamic-array-literal struct-field superset): may a bare array LITERAL be admitted as this
+   *  dynamic-array struct-constructor field? Only when every array level from here to the leaf is DYNAMIC
+   *  (length undefined) and the leaf is a static VALUE type or bytes/string - i.e. u256[] / address[] /
+   *  bytes[] / string[] / u256[][] / bytes[][] / u256[][][] / ... The literal builds the SAME [len][...]
+   *  image the true-value path feeds the dynamic-field-struct builder, byte-identical to solc's `new T[](n)`
+   *  + fill. A FIXED-inner value array (Arr<T,N>[] = uint256[2][], any depth) is EXCLUDED - its memory->
+   *  storage copy hits a pre-existing payload-drop bug, so it stays a clean JETH226 reject; and a struct-
+   *  element array (Q[]) is excluded (the leaf is a struct, not a value/bytes). */
+  private admitsDynArrayLiteralStructField(t: JethType): boolean {
+    if (t.kind !== 'array' || t.length !== undefined) return false;
+    const el = t.element;
+    return isStaticValueType(el) || isBytesLike(el) || this.admitsDynArrayLiteralStructField(el);
   }
 
   /** True if reading `node` has no side effects and is repeatable (an identifier, `this`, or a

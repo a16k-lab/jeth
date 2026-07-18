@@ -119,11 +119,18 @@ contract C {
         'type T = { a: u256; ts: string[]; };\nclass C { get f(): External<u256> { let t: string[] = ["x"]; let p: T = T(1n, t); return p.a; } }',
       ),
     ).toEqual([]);
-    // An array LITERAL as a struct-constructor arg still rejects (JETH226), exactly as solc rejects it
-    // (solc requires a typed `new string[](0)`, not a `[]` literal, for a struct array field arg).
+    // An array LITERAL as a struct-constructor arg for a value/nested-leaf dynamic-array field now ACCEPTS
+    // (JETH dynamic-array-literal superset; solc rejects the `[]` spelling and requires a typed
+    // `new string[](0)`, so this is byte-identical to solc's value form, verified elsewhere).
     expect(
       codes(
         'type T = { a: u256; ts: string[]; };\nclass C { get f(): External<u256> { let p: T = T(1n, []); return p.a; } }',
+      ),
+    ).toEqual([]);
+    // A FIXED-inner value array (Arr<T,N>[]) literal STILL rejects (pre-existing mem->storage copy bug).
+    expect(
+      codes(
+        'type U = { a: u256; g: Arr<u256,2>[]; };\nclass C { get f(): External<u256> { let p: U = U(1n, [[u256(1n),2n]]); return p.a; } }',
       ),
     ).toContain('JETH226');
   });

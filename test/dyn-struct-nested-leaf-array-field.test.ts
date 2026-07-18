@@ -172,15 +172,22 @@ describe('Cat C: dyn-struct with a nested-dynamic-leaf-array field - byte-identi
     await diff(J, S, ['setup()', 'cA()', 'cL()', 'cT(uint256)', 'cW()', 'rA()', 'rT()']);
   });
 
-  it('lifted: calldata whole-param local-binding now compiles; literal-ctor stays a clean reject', () => {
-    // building a memory LOCAL from a whole CALLDATA struct PARAM with a nested-leaf field is NOW lifted
-    // (byte-identical calldata->memory deep copy via buildDynStructFromCalldataBase's Edge-F branch, the
-    // same builder the direct p.tags[i] reads use). Full byte-identical coverage (reads / OOB / malformed
-    // flavor / bytes[]/u256[][] leaves / mixed fields / storage + memory sources) lives in
-    // test/calldata-leaf-array-struct-bind.test.ts. Here we only assert it no longer clean-rejects.
+  it('lifted: calldata whole-param local-binding + an array-literal ctor for a nested-leaf field both compile (byte-identical); Arr<T,N>[] literal stays rejected', async () => {
+    // building a memory LOCAL from a whole CALLDATA struct PARAM with a nested-leaf field is lifted
+    // (byte-identical calldata->memory deep copy via buildDynStructFromCalldataBase's Edge-F branch).
     const T = 'type P = { a: u256; tags: bytes[]; };\n';
     expect(codes(T + 'class C { get f(q: P): External<u256> { let p: P = q; return p.a; } }')).toEqual([]);
-    // an array LITERAL as the constructor arg STILL rejects (JETH226), exactly as solc rejects it.
-    expect(codes(T + 'class C { get f(): External<u256> { let p: P = P(1n, [bytes("x")]); return p.a; } }')).toContain('JETH226');
+    // an array LITERAL as the constructor arg NOW ACCEPTS: solc rejects the literal spelling (fixed [N] ->
+    // dynamic), so this is a documented JETH superset, byte-identical to solc's `new T[](n)` + fill.
+    const J =
+      T +
+      'class C { get a(): External<u256> { let p: P = P(1n, [bytes("x"),bytes("yy")]); return p.a; } get bl(): External<u256> { let p: P = P(1n, [bytes("x"),bytes("yy")]); return p.tags[1n].length; } }';
+    const S =
+      'struct P { uint256 a; bytes[] tags; } contract C { function a() external pure returns(uint256){ bytes[] memory t=new bytes[](2); t[0]="x";t[1]="yy"; P memory p=P(1,t); return p.a; } function bl() external pure returns(uint256){ bytes[] memory t=new bytes[](2); t[0]="x";t[1]="yy"; P memory p=P(1,t); return p.tags[1].length; } }';
+    await diff(J, S, ['a()', 'bl()']);
+    // a FIXED-inner value array (Arr<T,N>[]) literal STILL rejects (pre-existing mem->storage copy bug).
+    expect(
+      codes('type D = { a: u256; g: Arr<u256,2>[]; };\nclass C { get f(): External<u256> { let d: D = D(1n, [[u256(1n),2n]]); return d.a; } }'),
+    ).toContain('JETH226');
   });
 });

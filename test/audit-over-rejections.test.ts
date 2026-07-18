@@ -141,31 +141,30 @@ describe('audit over-rejections lifted byte-identical', () => {
     expect(rk.returnHex).toBe('0x1234567800000000000000000000000000000000000000000000000000000000');
   });
 
-  it('OR-c anti-lift: an inline array literal as a dynamic-array struct field stays a clean reject', () => {
-    // solc REJECTS `P(7, ["x","y"])` ("Invalid implicit conversion from string[2] memory to string[]
-    // memory"): a fixed-array literal does NOT implicitly convert to a dynamic-array constructor field.
-    // JETH must keep rejecting - accepting it would be an OVER-ACCEPTANCE (a bar violation).
-    const rej = (s: string) => {
+  it('OR-c LIFTED: an inline array literal for a value / nested-dynamic-leaf dynamic-array struct field now accepts (superset, byte-identical to new+fill); Arr<T,N>[] and Q[] literals stay rejected', () => {
+    // solc REJECTS the literal spelling `P(7, ["x","y"])` (uint256[N] does NOT implicitly convert to
+    // uint256[]) in EVERY position, so this is a DOCUMENTED JETH SUPERSET (like `let a: u256[] = [..]`),
+    // byte-identical to solc's `new T[](n)` + fill value form (verified deploy+run+decode elsewhere).
+    // Admitted for a value-element or nested-dynamic-leaf dynamic-array field; a FIXED-inner value array
+    // (Arr<T,N>[]) and a struct-element array (Q[]) STAY a clean JETH226 reject.
+    const acc = (s: string) => {
       try {
         compile(s, { fileName: 'C.jeth' });
-        return false;
-      } catch {
         return true;
+      } catch {
+        return false;
       }
     };
-    expect(
-      rej('type P = { id: u256; tags: string[]; }; class C { get f(): External<P> { let p: P = P(7n, ["x","y"]); return p; } }'),
-    ).toBe(true);
-    expect(
-      rej('type P = { id: u256; nums: u256[]; }; class C { get f(): External<P> { let p: P = P(7n, [1n,2n]); return p; } }'),
-    ).toBe(true);
-    expect(
-      rej('type P = { id: u256; tags: string[]; }; class C { get f(): External<P> { let p: P = P(7n, []); return p; } }'),
-    ).toBe(true);
-    // the WORKING form (a true dynamic-array value) is still accepted - not regressed.
-    expect(
-      rej('type P = { id: u256; nums: u256[]; }; class C { get f(): External<P> { let a: u256[] = new Array<u256>(2n); a[0n]=1n; a[1n]=2n; let p: P = P(7n, a); return p; } }'),
-    ).toBe(false);
+    // LIFTED (now accept):
+    expect(acc('type P = { id: u256; tags: string[]; }; class C { get f(): External<P> { let p: P = P(7n, ["x","y"]); return p; } }')).toBe(true);
+    expect(acc('type P = { id: u256; nums: u256[]; }; class C { get f(): External<P> { let p: P = P(7n, [1n,2n]); return p; } }')).toBe(true);
+    expect(acc('type P = { id: u256; nums: u256[]; }; class C { get f(): External<P> { let p: P = P(7n, []); return p; } }')).toBe(true);
+    // STILL REJECT (fixed-inner value array hits a pre-existing mem->storage copy bug; struct-element array
+    // solc-unsupported) - kept a clean JETH226 reject:
+    expect(acc('type P = { id: u256; g: Arr<u256,2>[]; }; class C { get f(): External<u256> { let p: P = P(7n, [[u256(1n),2n]]); return p.id; } }')).toBe(false);
+    expect(acc('type Q = { x: u256 }; type P = { id: u256; qs: Q[]; }; class C { get f(): External<u256> { let p: P = P(7n, [Q(1n)]); return p.id; } }')).toBe(false);
+    // the true-dynamic-array-VALUE form is still accepted - not regressed.
+    expect(acc('type P = { id: u256; nums: u256[]; }; class C { get f(): External<P> { let a: u256[] = new Array<u256>(2n); a[0n]=1n; a[1n]=2n; let p: P = P(7n, a); return p; } }')).toBe(true);
   });
 
   it('OR2: @constant address<->uint160 casts fold to solc values', async () => {
