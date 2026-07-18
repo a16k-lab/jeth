@@ -323,3 +323,74 @@ describe('JETH479: a decorator or `declare` on a variable statement rejects loud
     expect(codes(`class C { get f(): External<u256> { let x: u256 = 3n; const y: u256 = 4n; return x + y; } }`)).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------
+// C5 (JETH491): non-ASCII / format whitespace as a token SEPARATOR was an over-acceptance. TypeScript's
+// scanner silently skips a dozen Unicode whitespace / format code points (NBSP, the U+2000-U+200A space
+// family, OGHAM, NNBSP, MMSP, IDEOGRAPHIC, ZWSP, U+2028/2029, VT, FF) and a leading BOM as trivia, so a
+// source using one between tokens compiled BYTE-IDENTICAL to the ASCII-clean mirror while solc's ASCII-only
+// lexer rejects it. A pre-parse scan now rejects the first such separator (literal/comment contents are
+// left untouched; Unicode IDENTIFIER letters still get the more specific JETH478).
+// ---------------------------------------------------------------------------------------------------
+
+describe('JETH491: only ASCII whitespace separates tokens (solc ASCII-only-lexer parity)', () => {
+  const U = (cp: number) => String.fromCodePoint(cp);
+  const NBSP = U(0x00a0);
+  const IDSP = U(0x3000);
+  const BOM = U(0xfeff);
+  const WS: [string, number][] = [
+    ['NBSP U+00A0', 0x00a0], ['OGHAM U+1680', 0x1680], ['EN-QUAD U+2000', 0x2000], ['THIN U+2009', 0x2009],
+    ['NNBSP U+202F', 0x202f], ['MMSP U+205F', 0x205f], ['IDEOGRAPHIC U+3000', 0x3000], ['ZWSP U+200B', 0x200b],
+    ['VT U+000B', 0x000b], ['FF U+000C', 0x000c], ['LS U+2028', 0x2028], ['PS U+2029', 0x2029],
+  ];
+  const base = (ws: string) => `class C {\n  x: u256 = 0n;\n  f(v: u256): External<void>${ws}{ this.x = v; }\n}\n`;
+
+  for (const [name, cp] of WS) {
+    it(`${name} as a separator rejects with JETH491`, () => {
+      const got = codes(base(' ' + U(cp) + ' '));
+      expect(got).toContain('JETH491');
+      expect(got).not.toContain('RAW-THROW');
+    });
+  }
+
+  it('a leading BOM (U+FEFF) rejects with JETH491', () => {
+    expect(codes(BOM + base(' '))).toContain('JETH491');
+  });
+
+  it('a BOM (U+FEFF) in separator position rejects with JETH491', () => {
+    expect(codes(base(' ' + BOM + ' '))).toContain('JETH491');
+  });
+
+  it('the solc mirror rejects a NBSP separator at the lexer (both-reject = parity)', () => {
+    const src = `contract C {\n  function f(uint256${NBSP}v) public pure returns (uint256) { return v; }\n}\n`;
+    expect(solRejects(src)).toBe(true);
+  });
+
+  it('a clean ASCII source stays byte-identical across space/tab/CRLF/newline separators (control)', () => {
+    const ref = compile(base(' '), { fileName: 'C.jeth' }).creationBytecode;
+    for (const ws of [' ', '\t', '\r\n  ', '\n\n  ', '   ']) {
+      expect(compile(base(ws), { fileName: 'C.jeth' }).creationBytecode).toBe(ref);
+    }
+  });
+
+  it('a Unicode whitespace INSIDE a string / template / comment is legal content (control)', () => {
+    expect(codes(`class C { get s(): External<string> { return "a${NBSP}b"; } }`)).toEqual([]);
+    expect(codes(`class C { get s(): External<string> { return \`a${IDSP}b\`; } }`)).toEqual([]);
+    expect(codes(`class C {\n  //${NBSP}note\n  x: u256 = 0n;\n  f(v: u256): External<void> { this.x = v; }\n}\n`)).toEqual([]);
+    expect(codes(`class C {\n  /*${IDSP}block*/\n  x: u256 = 0n;\n  f(v: u256): External<void> { this.x = v; }\n}\n`)).toEqual([]);
+  });
+
+  it('a Unicode IDENTIFIER letter still gets the specific JETH478, not JETH491 (control)', () => {
+    const got = codes(`class Caf${U(0x00e9)} { get f(): External<u256> { return 1n; } }`);
+    expect(got).toContain('JETH478');
+    expect(got).not.toContain('JETH491');
+  });
+
+  it('a non-ASCII separator in a multi-file DEPENDENCY rejects, positioned in that file', () => {
+    const dep = `export type P = {\n  a: u256;${NBSP}b: u256;\n};\n`;
+    const entry = `import { P } from "./dep";\nclass C {\n  get f(): External<u256> { let p: P = { a: 1n, b: 2n }; return p.a; }\n}\n`;
+    const got = mfDiag(entry, { './dep': dep, 'entry.jeth': entry });
+    expect(got.some((g) => g.startsWith('JETH491@./dep'))).toBe(true);
+  });
+});
+

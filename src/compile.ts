@@ -1149,6 +1149,95 @@ function compileUnit(source: string, opts: CompileOptions): CompileResult {
   return first;
 }
 
+/** JETH491 - ASCII-only inter-token whitespace. solc's lexer accepts only ASCII space (0x20), tab (0x09),
+ *  CR (0x0D) and LF (0x0A) between tokens; TypeScript's scanner additionally skips a dozen Unicode
+ *  whitespace / format code points (NBSP U+00A0, the U+2000-U+200A space family, OGHAM U+1680, NNBSP
+ *  U+202F, MMSP U+205F, IDEOGRAPHIC U+3000, ZWSP U+200B, the U+2028/U+2029 line/paragraph separators) as
+ *  well as the C0 controls VT (0x0B) and FF (0x0C), and treats a leading BOM/ZWNBSP (U+FEFF) as
+ *  insignificant. Any of those in SEPARATOR position let a source through that solc rejects (an
+ *  over-acceptance; the bytecode is byte-identical to the ASCII-clean mirror, so never a miscompile).
+ *
+ *  A pre-parse char scan (mirroring the parser's hoistInClassEnums string/comment tracking) rejects the
+ *  FIRST code point outside a string/template literal or comment that is not printable ASCII (0x20-0x7E)
+ *  nor one of tab/CR/LF - UNLESS it is a Unicode identifier-part character (é, 函, a combining mark). Those
+ *  form or continue an identifier, so they reach the analyzer as a non-ASCII identifier and get the more
+ *  specific JETH478 ("identifiers are ASCII-only") - this scan must not steal that diagnostic. Every char
+ *  solc's ASCII-only lexer forbids as a SEPARATOR (a Unicode space/format char, a BOM, VT/FF, U+2028/2029)
+ *  is `isIdentifierPart === false`, so the exemption is exact. A valid JETH program is pure ASCII outside
+ *  literals (keywords, operators and numbers are ASCII; identifiers ASCII per JETH478), so this never
+ *  rejects a program solc accepts. Contents of strings, template literals and comments are left untouched -
+ *  a Unicode char THERE is legal content, and a raw char inside a plain string is solc's own separate
+ *  concern (unicode"..."). */
+function rejectNonAsciiSeparators(text: string, fileName: string): void {
+  const n = text.length;
+  let i = 0;
+  while (i < n) {
+    const c = text[i]!;
+    if (c === '"' || c === "'" || c === '`') {
+      const q = c;
+      i++;
+      while (i < n) {
+        if (text[i] === '\\') {
+          i += 2;
+          continue;
+        }
+        if (text[i] === q) {
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+    if (c === '/' && text[i + 1] === '/') {
+      i += 2;
+      while (i < n && text[i] !== '\n') i++;
+      continue;
+    }
+    if (c === '/' && text[i + 1] === '*') {
+      i += 2;
+      while (i < n && !(text[i] === '*' && text[i + 1] === '/')) i++;
+      i += 2;
+      continue;
+    }
+    const cp = text.codePointAt(i)!;
+    // Allowed outside a literal: tab, LF, CR, a printable ASCII byte, or a Unicode identifier-part char
+    // (deferred to JETH478). Anything else (a Unicode space/format char, a stray C0/C1 control, DEL, or a
+    // BOM) is a character solc's lexer rejects as a separator.
+    const allowed =
+      cp === 0x09 ||
+      cp === 0x0a ||
+      cp === 0x0d ||
+      (cp >= 0x20 && cp <= 0x7e) ||
+      ts.isIdentifierPart(cp, ts.ScriptTarget.Latest);
+    if (!allowed) {
+      let line = 1;
+      let col = 1;
+      for (let k = 0; k < i; k++) {
+        if (text[k] === '\n') {
+          line++;
+          col = 1;
+        } else {
+          col++;
+        }
+      }
+      const hex = cp.toString(16).toUpperCase().padStart(4, '0');
+      throw new CompileError([
+        {
+          severity: 'error',
+          code: 'JETH491',
+          message: `disallowed character U+${hex} outside a string or comment; only ASCII space, tab, CR and LF are valid between tokens (Solidity's lexer is ASCII-only) - a Unicode space, format character or BOM here is not accepted`,
+          file: fileName,
+          line,
+          column: col,
+          length: 1,
+        },
+      ]);
+    }
+    i += cp > 0xffff ? 2 : 1;
+  }
+}
+
 /** Compile ONE deployable contract (`routeIndex`, document order) out of `source`, front-to-back: parse,
  *  the full front-end, analysis of that route only, Yul emission and the backend. Every call re-parses, so
  *  no route can observe another route's in-place AST edits (see compileUnit). */
@@ -1171,6 +1260,17 @@ function compileRoute(source: string, opts: CompileOptions, routeIndex: number):
         length: 1,
       },
     ]);
+  }
+
+  // JETH491: reject any non-ASCII / control code point used as inter-token whitespace (a separator solc's
+  // ASCII-only lexer forbids) BEFORE parse - scanning the raw entry source and every dependency source, so
+  // a Unicode space / BOM in any original file is caught at its own file's position. Literal/comment
+  // contents are skipped, so legal Unicode string/comment text is untouched.
+  rejectNonAsciiSeparators(source, fileName);
+  if (opts.sources) {
+    for (const [depName, depText] of Object.entries(opts.sources)) {
+      if (depName !== fileName) rejectNonAsciiSeparators(depText, depName);
+    }
   }
 
   // Phase 3 (DIAMOND): expand a `@diamond('array')` class into the synthesized `@contract` BEFORE parse
