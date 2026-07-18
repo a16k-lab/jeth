@@ -1829,12 +1829,31 @@ solc legacy UnimplementedFeatureError). Note the diagnostic cascade also improve
 form additionally emitted JETH013 for `let y:T`; the U-typed-local lift removed that, and this fix removes the
 remaining JETH085.
 
-**PRE-EXISTING SAFE over-rejections in the same neighbourhood (NOT introduced by either lift; orthogonal, kept):**
-(1) a struct with a dynamic array field constructed from an INLINE fixed-array literal - `D(7n, [u256(1n),2n,3n])`
-where `D = { a: u256; xs: u256[] }` - rejects JETH226 ("struct field xs expects u256[], got u256[3]"); the same
-literal is rejected identically in a plain body local / function arg (a general fixed-array-literal-to-dynamic-
-array-field coercion gap, not modifier-specific; the helper-built `@m(this.mk())` path is byte-identical). (2) a
-bare string LITERAL as a generic `@modifier` param argument - `@m("hi")` with `v: T` - is over-rejected ("a
-string literal is only valid where a string/bytes value is expected"); it also fires on a FUNCTION application, so
-it is a general generic-modifier string-literal-arg gap (a NON-generic modifier string param accepts). Both are
-safe (never wrong bytes) and independent of the ctor path.
+**Both "same-neighbourhood" ORs above are now CLOSED (`e2c4a3a`).**
+
+**(1) array-literal -> dynamic-array struct field - LIFTED as a USER-AUTHORIZED SUPERSET EXTENSION (`e2c4a3a`).**
+`D(7n, [u256(1n),2n,3n])` for a dynamic-array field `xs: u256[]` was rejected JETH226. CRUCIAL: this is NOT an
+over-rejection vs solc - solc rejects the inline-literal spelling (`uint256[N]` does not implicitly convert to
+`uint256[]`) in EVERY position (struct field, local, return). It was an INCONSISTENCY in JETH's OWN dynamic-array-
+literal superset, already applied in the let / return / storage-assign / internal-fn-arg positions (documented,
+user-ruled keeps, byte-identical to solc's `new T[](n)` + fill). Per an EXPLICIT USER DECISION the superset is
+extended to the struct-constructor-field position for consistency; the built `[len][...]` image is byte-identical
+to the value form (the ctor codegen already handled it, no codegen change). This OVERRIDES a deliberate JETH-team
+parity policy (5 "KEEP-REJECT / anti-lift" tests that held this position to solc parity to minimise
+over-acceptances); those tests are updated to the new boundary. Gated by `admitsDynArrayLiteralStructField` (an
+all-dynamic-spine predicate): admitted only when the field is a dynamic array whose every level is dynamic down to
+a static-VALUE or bytes/string leaf (`u256[]`/`address[]`/`bytes[]`/`string[]`/`u256[][]`/`bytes[][]`/...). A
+FIXED-inner value array (`Arr<T,N>[]` = `uint256[2][]`, any depth) is EXCLUDED - it hits a PRE-EXISTING
+memory->storage copy bug (a 5-lens adversarial workflow caught the initial broader gate turning that into a
+reachable MC), so it stays a clean JETH226 reject; a struct-element array (`Q[]`) is excluded too (solc rejects its
+whole-value construction here). RESIDUAL (separate follow-up): the pre-existing `Arr<T,N>[]`-whole-value-to-storage
+accept-then-revert, reachable via a calldata whole-struct value (JETH should reject it at compile time).
+
+**(2) string literal as a generic `@modifier` argument - LIFTED byte-identical (`e2c4a3a`).** `@m("hi")` with a
+generic param `v: T` was over-rejected JETH074 ("a string literal is only valid where a string/bytes value is
+expected") because `resolveModifierGenericArgs` checked the literal with no expected type; solc accepts it. FIX:
+infer `T = string` for a bare string / no-substitution-template literal (solc's default literal type); the concrete
+monomorph re-checks the literal against the bound param type at the inline site (so a mismatched body still
+rejects), and an explicit `@m<bytes>("...")` still selects bytes. Verified byte-identical (ctor / function /
+template / multi-type-param). RESIDUAL (documented, sound): `@m("hi")` with a `bytes` / `bytesN` body infers
+`string` and rejects (solc would coerce the literal) - fixable with an explicit `@m<bytes>("...")` / `@m<bytes32>(...)`.
