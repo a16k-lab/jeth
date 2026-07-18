@@ -56,7 +56,7 @@ const JETH = `class C {
   reqFalseExact32(): External<void> { require(false, "abcdefghijklmnopqrstuvwxyz012345"); }
   reqFalseExact33(): External<void> { require(false, "abcdefghijklmnopqrstuvwxyz0123456"); }
   reqFalseLong(): External<void> { require(false, "this string is definitely longer than thirty-two bytes for testing"); }
-  reqFalseUtf8(): External<void> { require(false, "héllo 世界"); }
+  reqFalseUtf8(): External<void> { require(false, "h\\u00e9llo \\u4e16\\u754c"); }
   revertShort(): External<void> { revert("hello"); }
   revertEmptyStr(): External<void> { revert(""); }
   revertBare(): External<void> { revert(); }

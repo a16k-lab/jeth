@@ -117,10 +117,12 @@ describe('mode detection + strictness', () => {
 // for the real gaps it surfaced in the native forms.
 describe('native-mode hardening (verification sweep)', () => {
   it('F9: a `type` struct resolves enum / nested-struct / @struct fields identically to @struct', () => {
-    // the native type-struct is collected in the struct pass (after enums + @structs), so a field may
-    // reference an enum, a nested type-struct, or a decorated @struct - byte-identical to the @struct form.
-    expect(bc(`enum E { A, B }; type P = { e: E; a: u256 }; class C { get f(p: P): External<u256> { return p.a; } }`))
-      .toBe(bc(`enum E { A, B } type P = { e: E; a: u256 }; class C { get f(p: P): External<u256> { return p.a; } }`));
+    // the native type-struct is collected in the struct pass (after enums), so a field may reference an
+    // enum or a nested type-struct - and the bytecode is invariant to surface formatting. (A stray `;`
+    // between the enum and the type, `enum E { A, B }; type P ...`, is NOT tolerated: solc rejects a
+    // trailing semicolon after a declaration, and so does JETH now (JETH501); both forms below are valid.)
+    expect(bc(`enum E { A, B } type P = { e: E; a: u256 }; class C { get f(p: P): External<u256> { return p.a; } }`))
+      .toBe(bc(`enum E { A, B }\ntype P = { e: E; a: u256 };\nclass C { get f(p: P): External<u256> { return p.a; } }`));
     expect(bc(`type I = { x: u256 }; type O = { i: I; y: u256 }; class C { get f(o: O): External<u256> { return o.i.x + o.y; } }`))
       .toBe(bc(`type I = { x: u256 }; type O = { i: I; y: u256 }; class C { get f(o: O): External<u256> { return o.i.x + o.y; } }`));
   });

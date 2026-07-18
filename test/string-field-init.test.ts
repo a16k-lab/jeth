@@ -94,8 +94,8 @@ describe('STRING-FIELD-INIT: string/bytes state-field initializers (JETH048 lift
     const ret = await eqRun(F, `contract C { string public s = "vis5"; }`, ['s()']);
     expect(decStr(ret)).toBe('vis5');
 
-    const FU = `class C {\n  s: string = "héllo⚡";\n  get out(): External<string> { return this.s; }\n}`;
-    expect(bc(FU)).toBe(bc(`class C {\n  s: string;\n  constructor() { this.s = "héllo⚡"; }\n  get out(): External<string> { return this.s; }\n}`));
+    const FU = `class C {\n  s: string = "h\\u00e9llo\\u26a1";\n  get out(): External<string> { return this.s; }\n}`;
+    expect(bc(FU)).toBe(bc(`class C {\n  s: string;\n  constructor() { this.s = "h\\u00e9llo\\u26a1"; }\n  get out(): External<string> { return this.s; }\n}`));
     const retU = await eqRun(FU, `contract C { string s = unicode"héllo⚡"; function out() public view returns (string memory) { return s; } }`, ['out()']);
     expect(decStr(retU)).toBe('héllo⚡');
 

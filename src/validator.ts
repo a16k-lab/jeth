@@ -92,7 +92,79 @@ function checkStrayClassBodyKeywords(node: ts.Node, diags: DiagnosticBag): void 
   }
 }
 
+/** JETH501: solc's top level admits ONLY declarations (pragma / import / contract / interface / library /
+ *  struct / enum / error / event / using / constant / function / type). TypeScript, by contrast, parses a
+ *  bare ExpressionStatement, stray identifier, literal, control-flow statement, block, or a non-const
+ *  variable at the SOURCE-FILE top level, and the analyzer used to process only the declarations and
+ *  SILENTLY IGNORE the junk - a trailing `z`, `z;`, `5n;`, `if (...) {}`, `for(;;){}`, `{}`, a bare `;`,
+ *  a top-level `throw this.E({})`, or a file-level `let x = 5n` all compiled - while solc rejects the whole
+ *  file ("Expected pragma or contract/interface/library/... but got ..."). That silent acceptance is an
+ *  over-acceptance: this pass rejects EVERY top-level statement that is not one of JETH's supported
+ *  declaration kinds (class / interface / type alias / enum / file-level const), closing the full axis.
+ *
+ *  Runs on the DIRECT children of the source file only - a nested ExpressionStatement / if / for / block
+ *  inside a method body is ordinary control flow and stays untouched (the recursive `visit` below validates
+ *  those). Kinds that the recursive walk already rejects with a MORE SPECIFIC diagnostic (a free
+ *  FunctionDeclaration -> JETH024; an import / `import =` / `export {..}` / `export default` statement ->
+ *  JETH035) are skipped here so we do not double-report; a non-const file-level VariableStatement (`let` /
+ *  `var`, previously silently ignored) is rejected here to match solc's "only constant variables are
+ *  allowed at file level". Multi-file safe: the bundler blanks import lines and concatenates every file's
+ *  declarations into one unit, so a stray statement in ANY original file surfaces here and remapDiagnostics
+ *  attributes it to its source file. */
+function checkTopLevelStatements(sourceFile: ts.SourceFile, diags: DiagnosticBag): void {
+  for (const s of sourceFile.statements) {
+    switch (s.kind) {
+      // Supported top-level declarations. (A `type X = { ... }` struct, a `type X = Brand<T>` newtype, and a
+      // `type X = error<{...}>` / `event<{...}>` are all TypeAliasDeclaration; a native `interface I {..}`,
+      // a `class` contract/library/abstract base, and a `@interface`/`@struct` class are Class/Interface
+      // declarations. The `export` modifier used by the multi-file import mechanism sits ON these nodes, so
+      // `export class` / `export type` / `export const` stay recognized.)
+      case ts.SyntaxKind.ClassDeclaration:
+      case ts.SyntaxKind.InterfaceDeclaration:
+      case ts.SyntaxKind.TypeAliasDeclaration:
+      case ts.SyntaxKind.EnumDeclaration:
+        continue;
+      // Already rejected by the recursive subset walk with a more specific code - leave them to it so a
+      // top-level occurrence is not reported twice.
+      case ts.SyntaxKind.FunctionDeclaration: // JETH024 (free functions)
+      case ts.SyntaxKind.ImportDeclaration: // JETH035 (single-file; blanked in a multi-file bundle)
+      case ts.SyntaxKind.ImportEqualsDeclaration: // JETH035
+      case ts.SyntaxKind.ExportDeclaration: // JETH035 (`export { x }` / `export * from ...`)
+      case ts.SyntaxKind.ExportAssignment: // JETH035 (`export = x` / `export default ...`)
+        continue;
+      case ts.SyntaxKind.VariableStatement: {
+        const vs = s as ts.VariableStatement;
+        // A file-level `const` is the array-length / constant declaration form (collectFileLevelIntConsts);
+        // keep it. A non-const `let` / `var` at file level has no on-chain meaning and solc rejects it.
+        if ((vs.declarationList.flags & ts.NodeFlags.Const) !== 0) continue;
+        const first = vs.declarationList.declarations[0];
+        const nm = first && ts.isIdentifier(first.name) ? first.name.text : undefined;
+        diags.error(
+          s,
+          'JETH501',
+          nm
+            ? `file-level variable '${nm}' must be declared 'const'; only constant variables are allowed at file level`
+            : `file-level variables must be declared 'const'; only constant variables are allowed at file level`,
+        );
+        continue;
+      }
+      default:
+        diags.error(
+          s,
+          'JETH501',
+          'unexpected top-level statement; a source file may contain only declarations (contract / library classes, interfaces, structs, enums, type aliases, file-level constants, and imports), not a statement or expression',
+        );
+    }
+  }
+}
+
 export function validateSubset(sourceFile: ts.SourceFile, diags: DiagnosticBag): void {
+  // Top-level grammar boundary: reject any non-declaration statement / non-const variable that TS parsed at
+  // the source-file top level but the analyzer would silently ignore (JETH501). Kept OUT of the recursive
+  // `visit` (that closure runs once per node; this needs the DIRECT children only, and keeping visit's stack
+  // frame small preserves the JETH477 usable-depth threshold).
+  checkTopLevelStatements(sourceFile, diags);
+
   const visit = (node: ts.Node): void => {
     // Solidity reserves `_` (the @modifier placeholder), so it cannot be a DECLARED identifier name
     // anywhere (local, parameter, field, enum member, method, contract/struct, type alias). The

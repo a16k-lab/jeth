@@ -98,7 +98,7 @@ describe('@external @constant auto-getter (solc public constant), byte-identical
          static S31: Visible<string> = "0123456789012345678901234567890";
          static S32: Visible<string> = "01234567890123456789012345678901";
          static SL: Visible<string> = "the quick brown fox jumps over the lazy dog and then some extra!";
-         static SU: Visible<string> = "héllo ✓"; }`,
+         static SU: Visible<string> = "h\\u00e9llo \\u2713"; }`,
       `contract C {
          string public constant S0 = "";
          string public constant S1 = "hi";

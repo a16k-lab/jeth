@@ -15,8 +15,16 @@
 //              this is a documented SAFE over-rejection - but the reject must be clean, never a throw.
 //  C3 JETH478  a non-ASCII identifier (`café`, `函数`) sailed through to codegen and ICEd as JETH901
 //              ("backend rejected generated Yul: Illegal token"). solc rejects unicode identifiers at
-//              the lexer (ParserError), so a targeted early reject is PARITY. String content is
-//              untouched: raw unicode STRINGS stay byte-identical.
+//              the lexer (ParserError), so a targeted early reject is PARITY. REGULAR-string content is
+//              now gated too (C5/JETH499); TEMPLATE literals stay byte-identical, `\u`/`\x` escapes are
+//              the portable form.
+//  C5 JETH499  a RAW non-printable-ASCII / non-ASCII code point inside a REGULAR "..." / '...' string was
+//              silently accepted (mapped to solc unicode"..." bytes) while solc's regular-string lexer
+//              rejects it (only printable ASCII 0x20-0x7E + escapes; arbitrary Unicode needs unicode"...").
+//              An over-acceptance; now a clean JETH499 reject. Escapes and TEMPLATE literals stay accepted.
+//  H1 JETH501  a top-level statement that is not a supported declaration (a stray identifier / expression /
+//              `if`/`for`/`return`/`;` / non-const file `let`) was SILENTLY IGNORED while solc rejects the
+//              file. Now a clean JETH501 reject; every valid top-level declaration form still accepts.
 //  C4 JETH479  a decorator on a `let` VariableStatement (`@only(this.boom()) let x = 7n;`) was SILENTLY
 //              DROPPED with its argument's side effects (a lost state write): TS stores the decorator in
 //              node.modifiers with only a GRAMMAR-phase error (TS1206, not a parse diagnostic), so both
@@ -202,7 +210,7 @@ describe('JETH477: a too-deeply-nested source rejects CLEANLY instead of a raw R
 // C3 (JETH478): non-ASCII identifiers reject early and targeted (solc parity), strings untouched
 // ---------------------------------------------------------------------------------------------------
 
-describe('JETH478: unicode identifiers reject cleanly (no more JETH901 ICE); string content untouched', () => {
+describe('JETH478: unicode identifiers reject cleanly (no more JETH901 ICE); template strings untouched', () => {
   it('unicode LOCAL rejects with JETH478 (previously JETH901)', () => {
     const got = codes(`class C { get f(): External<u256> { let café: u256 = 41n; return café + 1n; } }`);
     expect(got).toContain('JETH478');
@@ -231,9 +239,12 @@ describe('JETH478: unicode identifiers reject cleanly (no more JETH901 ICE); str
     expect(solRejects(`contract C { function f() external pure returns (uint256) { uint256 café = 41; return café + 1; } }`)).toBe(true);
   });
 
-  it('raw unicode STRING content stays byte-identical (return form)', async () => {
+  it('an ESCAPED unicode regular string is byte-identical to solc unicode"..." (return form)', async () => {
     const h = await Harness.create();
-    const aj = await h.deploy(compile(`class C { get f(): External<string> { return "café \u{1F600}"; } }`, { fileName: 'C.jeth' }).creationBytecode);
+    // c-a-f-(U+00E9) + space + U+1F600 written with \u / \x escapes (the portable form both compilers accept as a
+    // REGULAR string); byte-identical to solc's unicode"..." literal. A RAW non-ASCII char here now rejects
+    // (JETH499, C5 below) - matching solc's regular-string lexer.
+    const aj = await h.deploy(compile('class C { get f(): External<string> { return "caf\\u00e9 \\xf0\\x9f\\x98\\x80"; } }', { fileName: 'C.jeth' }).creationBytecode);
     const as = await h.deploy(compileSolidity(SPDX + `contract C { function f() external pure returns (string memory) { return unicode"café \u{1F600}"; } }`, 'C').creation);
     const rj = await h.call(aj, sel('f()'));
     const rs = await h.call(as, sel('f()'));
@@ -373,8 +384,10 @@ describe('JETH491: only ASCII whitespace separates tokens (solc ASCII-only-lexer
     }
   });
 
-  it('a Unicode whitespace INSIDE a string / template / comment is legal content (control)', () => {
-    expect(codes(`class C { get s(): External<string> { return "a${NBSP}b"; } }`)).toEqual([]);
+  it('a Unicode whitespace INSIDE a template / comment is legal content; a REGULAR string is now JETH499 (H2)', () => {
+    // A RAW non-ASCII char inside a REGULAR string is now a clean reject (JETH499) - solc's regular-string
+    // lexer rejects it too. TEMPLATE literals (JETH sugar for string.concat) and COMMENTS stay legal content.
+    expect(codes(`class C { get s(): External<string> { return "a${NBSP}b"; } }`)).toContain('JETH499');
     expect(codes(`class C { get s(): External<string> { return \`a${IDSP}b\`; } }`)).toEqual([]);
     expect(codes(`class C {\n  //${NBSP}note\n  x: u256 = 0n;\n  f(v: u256): External<void> { this.x = v; }\n}\n`)).toEqual([]);
     expect(codes(`class C {\n  /*${IDSP}block*/\n  x: u256 = 0n;\n  f(v: u256): External<void> { this.x = v; }\n}\n`)).toEqual([]);
@@ -509,3 +522,212 @@ describe('JETH491 (OA8b): a Unicode/control line-break inside a // comment ends 
   });
 });
 
+// C5 (JETH499): a RAW non-printable-ASCII / non-ASCII code point inside a REGULAR "..." / '...' string
+// literal rejects (solc parity). solc's regular-string lexer accepts ONLY printable ASCII 0x20-0x7E or
+// escape sequences; a raw control char, DEL, C1 control, or any code point >= 0x80 is a TokenError, and
+// arbitrary Unicode requires solc's unicode"..." literal (which JETH has no spelling for). The same char
+// via a \n / \xNN / \uNNNN escape, and raw Unicode inside a TEMPLATE literal (JETH sugar for
+// string.concat, whose solc mirror can spell each cooked part unicode"..."), STAY accepted + byte-identical.
+// All non-ASCII test bytes are built with String.fromCodePoint (the source file stays ASCII-clean).
+// ---------------------------------------------------------------------------------------------------
+
+describe('JETH499: raw non-printable/non-ASCII content in a regular string literal rejects (solc parity)', () => {
+  const BS = String.fromCharCode(92); // a single backslash
+  const ch = (cp: number) => String.fromCodePoint(cp);
+  const jethRaw = (cp: number) => `class C { get f(): External<string> { return "a${ch(cp)}b"; } }`;
+  const solRaw = (cp: number) => `contract C { function f() external pure returns (string memory) { return "a${ch(cp)}b"; } }`;
+
+  // The full raw-content axis: every code point solc lex-rejects in a regular string. 0x0A/0x0D are omitted
+  // (a raw LF/CR terminates the string line in the TS lexer first, so they never reach the content gate -
+  // both compilers already reject them as an unterminated string).
+  const AXIS = [
+    0x00, 0x01, 0x07, 0x08, 0x09, 0x0b, 0x0c, 0x1b, 0x1f, // C0 controls (NUL / BEL / BS / TAB / VT / FF / ESC / US)
+    0x7f, // DEL
+    0x80, 0x85, 0x9f, // C1 controls (incl. NEL U+0085)
+    0xa0, // NBSP
+    0xe9, // accented letter (U+00E9)
+    0x2028, 0x2029, // LINE / PARAGRAPH SEPARATOR
+    0x200b, // ZERO WIDTH SPACE
+    0x3000, // IDEOGRAPHIC SPACE
+    0x1f600, // emoji (astral plane, > 0xffff)
+  ];
+
+  it('every raw non-printable/non-ASCII code point in a "..." string is JETH499 (solc rejects the mirror too)', () => {
+    for (const cp of AXIS) {
+      expect(codes(jethRaw(cp)), `jeth U+${cp.toString(16)}`).toContain('JETH499');
+      expect(solRejects(solRaw(cp)), `solc U+${cp.toString(16)}`).toBe(true);
+    }
+  });
+
+  it('the same axis inside a SINGLE-quoted string is JETH499 too', () => {
+    for (const cp of AXIS) {
+      expect(codes(`class C { get f(): External<string> { return 'a${ch(cp)}b'; } }`), `U+${cp.toString(16)}`).toContain('JETH499');
+    }
+  });
+
+  it('the same axis in NON-return positions (require msg, event arg, state init, bytesN) still rejects', () => {
+    const X = ch(0xe9);
+    expect(codes(`class C { fn(): void { require(false, "a${X}b"); } }`)).toContain('JETH499');
+    expect(codes(`class C { fn(): void { revert("a${X}b"); } }`)).toContain('JETH499');
+    expect(codes(`class C { s: string = "a${X}b"; }`)).toContain('JETH499');
+    expect(codes(`class C { get f(): External<bytes32> { let b: bytes32 = "a${X}b"; return b; } }`)).toContain('JETH499');
+    expect(codes(`class C { get f(): External<bytes> { return bytes("a${X}b"); } }`)).toContain('JETH499');
+    expect(codes(`class C { get f(): External<bytes32> { return keccak256(bytes("a${X}b")); } }`)).toContain('JETH499');
+  });
+
+  it('a raw non-ASCII char in a DEPENDENCY-file regular string also rejects (JETH499)', () => {
+    const entry = `import { L } from "./dep.jeth";\nclass C { get f(): External<string> { return L.g(); } }`;
+    const dep = `export static class L { g(): string { return "a${ch(0xe9)}b"; } }`;
+    expect(mfDiag(entry, { 'dep.jeth': dep }).map((c) => c.split('@')[0])).toContain('JETH499');
+  });
+
+  // ---- accept controls: valid regular strings stay accepted + byte-identical ----
+
+  it('empty, printable-ASCII, and escaped regular strings all still ACCEPT (control)', () => {
+    expect(codes(`class C { get f(): External<string> { return ""; } }`)).toEqual([]);
+    expect(codes(`class C { get f(): External<string> { return "hello world!"; } }`)).toEqual([]);
+    // every printable ASCII 0x20..0x7E raw, with " and \ escaped
+    let printable = '';
+    for (let c = 0x20; c <= 0x7e; c++) { const s = String.fromCharCode(c); printable += s === '"' ? BS + '"' : s === BS ? BS + BS : s; }
+    expect(codes(`class C { get f(): External<string> { return "${printable}"; } }`)).toEqual([]);
+    // \n \t \" \\ \xNN \uNNNN escapes are all valid regular-string content
+    expect(codes(`class C { get f(): External<string> { return "x${BS}n${BS}t${BS}"${BS}${BS}${BS}x41${BS}u00e9"; } }`)).toEqual([]);
+  });
+
+  it('an ESCAPED control/non-ASCII char is byte-identical to solc (raw is rejected, the escape is portable)', async () => {
+    const h = await Harness.create();
+    // VT, NBSP, and U+4E16 written as escapes -> a valid regular string on BOTH sides.
+    const src = 'a' + BS + 'x0b' + BS + 'u00a0' + BS + 'u4e16' + 'b';
+    const aj = await h.deploy(compile(`class C { get f(): External<bytes> { return bytes("${src}"); } }`, { fileName: 'C.jeth' }).creationBytecode);
+    const as = await h.deploy(compileSolidity(SPDX + `contract C { function f() external pure returns (bytes memory) { return bytes("${src}"); } }`, 'C').creation);
+    const rj = await h.call(aj, sel('f()'));
+    const rs = await h.call(as, sel('f()'));
+    expect(rj.success).toBe(true);
+    expect(rj.returnHex).toBe(rs.returnHex);
+  });
+
+  it('raw Unicode in a TEMPLATE literal STAYS accepted + byte-identical (JETH sugar for string.concat)', async () => {
+    const h = await Harness.create();
+    const seed = ch(0x4e16) + ch(0x754c); // U+4E16 U+754C
+    const aj = await h.deploy(compile(`class C { get f(s: string): External<string> { return \`${seed}\${s}\`; } }`, { fileName: 'C.jeth' }).creationBytecode);
+    const as = await h.deploy(compileSolidity(SPDX + `contract C { function f(string calldata s) external pure returns (string memory) { return string.concat(unicode"${seed}", s); } }`, 'C').creation);
+    const arg = pad32(0x20n) + pad32(2n) + Buffer.from('hi', 'utf8').toString('hex').padEnd(64, '0');
+    const rj = await h.call(aj, sel('f(string)') + arg);
+    const rs = await h.call(as, sel('f(string)') + arg);
+    expect(rj.success).toBe(true);
+    expect(rj.returnHex).toBe(rs.returnHex);
+  });
+});
+
+// H1 (JETH501): a TOP-LEVEL statement that is not a supported declaration was SILENTLY ACCEPTED. solc's
+// top level admits only declarations (pragma / import / contract / interface / library / struct / enum /
+// error / event / using / constant / function / type); TS instead parses a bare ExpressionStatement,
+// stray identifier, literal, control-flow statement, block, a trailing `;` after a declaration, or a
+// non-const file-level variable at the source-file top level, and the analyzer used to process only the
+// declarations and ignore the junk while solc rejects the whole file. Now every non-declaration top-level
+// statement rejects loudly (JETH501), matching solc across the full axis (position x kind). The check is
+// TOP-LEVEL ONLY: the same shapes nested in a method body are ordinary control flow and stay legal.
+// ---------------------------------------------------------------------------------------------------
+
+describe('JETH501: a non-declaration top-level statement rejects (solc top-level-grammar parity)', () => {
+  const JBASE = `class C { get f(): External<u256> { return 1n; } }`;
+  const SBASE = `contract C { function f() external pure returns (uint256){ return 1; } }`;
+  const JD = `class D { get g(): External<u256> { return 2n; } }`;
+  const SD = `contract D { function g() external pure returns (uint256){ return 2; } }`;
+  // [label, JETH stray, Solidity stray]
+  const STRAYS: [string, string, string][] = [
+    ['bare identifier', 'z', 'z'],
+    ['expression statement', 'z;', 'z;'],
+    ['integer literal', '5n;', '5;'],
+    ['string literal', '"hi";', '"hi";'],
+    ['binary expression', '1n + 2n;', '1 + 2;'],
+    ['call expression', 'foo();', 'foo();'],
+    ['if statement', 'if (true) {}', 'if (true) {}'],
+    ['for statement', 'for (;;) {}', 'for (;;) {}'],
+    ['while statement', 'while (false) {}', 'while (false) {}'],
+    ['return statement', 'return 1n;', 'return 1;'],
+    ['stray block', '{}', '{}'],
+    ['empty statement', ';', ';'],
+    ['labeled statement', 'lbl: z;', 'lbl: z;'],
+    ['switch statement', 'switch (1n) {}', 'switch (1) {}'],
+    ['try statement', 'try { z; } catch {}', 'try {} catch {}'],
+    ['semicolon after enum decl', 'enum E { A }\n;', 'enum E { A }\n;'],
+    ['multiple stray tokens', 'a; b; c;', 'a; b; c;'],
+  ];
+  // position each stray relative to the contract(s): trailing, leading, and between two contracts.
+  const POSITIONS: [string, (j: string, s: string) => [string, string]][] = [
+    ['trailing', (j, s) => [`${JBASE}\n${j}\n`, `${SBASE}\n${s}\n`]],
+    ['leading', (j, s) => [`${j}\n${JBASE}\n`, `${s}\n${SBASE}\n`]],
+    ['between', (j, s) => [`${JBASE}\n${j}\n${JD}\n`, `${SBASE}\n${s}\n${SD}\n`]],
+  ];
+  for (const [label, jstray, sstray] of STRAYS) {
+    for (const [pname, mk] of POSITIONS) {
+      it(`${label} (${pname}) rejects with JETH501, and solc rejects the mirror (parity)`, () => {
+        const [jf, sf] = mk(jstray, sstray);
+        const got = codes(jf);
+        expect(got).toContain('JETH501');
+        expect(got).not.toContain('RAW-THROW');
+        expect(solRejects(sf)).toBe(true); // non-vacuous: solc rejects the equivalent
+      });
+    }
+  }
+
+  it('a non-const file-level variable (`let` / `var`) rejects with JETH501 (solc rejects too)', () => {
+    expect(codes(`let x = 5n;\n${JBASE}`)).toContain('JETH501');
+    expect(codes(`var x = 5n;\n${JBASE}`)).toContain('JETH501');
+    expect(solRejects(`uint x = 5;\n${SBASE}`)).toBe(true);
+  });
+
+  it('a top-level `throw this.<error>()` (the one allowed raise shape in a body) rejects at file level', () => {
+    // silently accepted before: the recursive validator whitelists `throw this.X({...})`, so at file
+    // level nothing caught it. solc has no top-level throw at all.
+    expect(codes(`type E = error<{}>;\n${JBASE}\nthrow this.E({});`)).toContain('JETH501');
+  });
+
+  // ---- CONTROLS: every valid top-level form must STILL compile (no new over-rejection) ----
+  it('a single contract, two contracts, and a contract + struct / enum / interface / const all still accept', () => {
+    expect(codes(JBASE)).toEqual([]);
+    expect(codes(`${JBASE}\n${JD}`)).toEqual([]);
+    expect(codes(`type P = { a: u256 };\n${JBASE}`)).toEqual([]);
+    expect(codes(`enum E { A, B }\n${JBASE}`)).toEqual([]);
+    expect(codes(`interface I { m(): View<u256> }\n${JBASE}`)).toEqual([]);
+    expect(codes(`type T = Brand<u256>;\n${JBASE}`)).toEqual([]);
+    expect(codes(`const N = 2n;\nclass C { xs: Arr<u256, N>; get f(): External<u256> { return this.xs[0n]; } }`)).toEqual([]);
+    expect(codes(`abstract class A { get f(): External<u256> { return 1n; } }`)).toEqual([]);
+  });
+
+  it('export-modifier declaration forms (export class / type / const) still accept', () => {
+    expect(codes(`export ${JBASE}`)).toEqual([]);
+    expect(codes(`export type P = { a: u256 };\n${JBASE}`)).toEqual([]);
+    expect(codes(`export const N = 2n;\nclass C { xs: Arr<u256, N>; get f(): External<u256> { return this.xs[0n]; } }`)).toEqual([]);
+  });
+
+  it('the SAME statement shapes nested in a method body stay legal (the gate is top-level only)', () => {
+    expect(codes(`class C { get f(): External<u256> { let x: u256 = 0n; if (x == 0n) { x = 1n; } for (let i: u256 = 0n; i < 3n; i = i + 1n) { x = x + i; } { x = x + 1n; } return x; } }`)).toEqual([]);
+  });
+
+  it('a file-level const string / array-length const stays legal (const is the allowed variable form)', () => {
+    expect(codes(`const N = 3n;\nclass C { xs: Arr<u256, N>; get f(): External<u256> { return this.xs[2n]; } }`)).toEqual([]);
+  });
+
+  // ---- multi-file: a stray statement in ANY original file rejects, positioned in that file ----
+  it('a stray top-level statement in a multi-file DEPENDENCY rejects, positioned in that file', () => {
+    const dep = `export abstract class A { ka(): u256 { return 5n; } }\nzzz;\n`;
+    const entry = `import { A } from "./a.jeth";\nclass C extends A { get f(): External<u256> { return this.ka(); } }`;
+    const got = mfDiag(entry, { './a.jeth': dep, 'entry.jeth': entry });
+    expect(got.some((g) => g.startsWith('JETH501@a.jeth'))).toBe(true);
+  });
+
+  it('a stray top-level statement in the ENTRY of a multi-file program rejects, positioned in the entry', () => {
+    const dep = `export abstract class A { ka(): u256 { return 5n; } }`;
+    const entry = `import { A } from "./a.jeth";\nclass C extends A { get f(): External<u256> { return this.ka(); } }\nzzz;`;
+    const got = mfDiag(entry, { './a.jeth': dep, 'entry.jeth': entry });
+    expect(got.some((g) => g.startsWith('JETH501@entry.jeth'))).toBe(true);
+  });
+
+  it('a valid multi-file import program still compiles (control)', () => {
+    const dep = `export abstract class A { ka(): u256 { return 5n; } }`;
+    const entry = `import { A } from "./a.jeth";\nclass C extends A { get f(): External<u256> { return this.ka(); } }`;
+    expect(mfDiag(entry, { './a.jeth': dep, 'entry.jeth': entry })).toEqual([]);
+  });
+});

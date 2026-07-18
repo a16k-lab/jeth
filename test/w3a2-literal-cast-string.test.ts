@@ -101,7 +101,7 @@ describe('W3-A2: P1-1 string literal -> fixed bytesN', () => {
     );
     // unicode bytes counted raw
     await eq(
-      'class C { get f(): External<bytes32> { return "é"; } }',
+      'class C { get f(): External<bytes32> { return "\\u00e9"; } }',
       'contract C { function f() external pure returns (bytes32) { return unicode"é"; } }',
       [['f()', '']],
     );

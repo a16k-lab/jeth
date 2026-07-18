@@ -28690,10 +28690,25 @@ export class Analyzer {
     let i = 0;
     while (i < s.length) {
       if (s[i] !== '\\') {
-        // A LITERAL non-ASCII character (cp >= 0x80) is DELIBERATELY accepted: JETH has no `unicode"..."`
-        // form, so a plain string with unicode chars maps to (and is byte-identical to) solc's unicode
-        // string literal (see test/_vf_errorsevents.test.ts, which pins `"héllo 世界"` == solc unicode"...").
+        // CONTENT gate (JETH499): a REGULAR double/single-quoted string literal (backtickCtx === false) may
+        // contain ONLY printable ASCII (0x20-0x7E) as a raw character; every other raw code point - a control
+        // char (< 0x20, incl. NUL / VT 0x0B / FF 0x0C / ESC), DEL (0x7F), a C1 control (0x80-0x9F), or any
+        // non-ASCII code point (>= 0x80, NBSP / LS U+2028 / PS U+2029 / ZWSP / an accented letter / an emoji)
+        // must be written with an escape (\n \t \xNN \uNNNN). solc 0.8.35 lex-rejects a raw such byte in a
+        // regular string literal ("Invalid character in string literal" / a TokenError); arbitrary Unicode
+        // requires solc's `unicode"..."` literal. JETH has no `unicode"..."` form, so a REGULAR string is held
+        // to solc's regular-string rule, and a raw non-printable/non-ASCII char is a clean reject (was a silent
+        // over-acceptance). A TEMPLATE literal (backtickCtx === true) is JETH sugar for `string.concat(...)`,
+        // whose solc mirror can spell each cooked part `unicode"..."`, so raw Unicode STAYS accepted there.
+        // (A raw LF/CR never reaches here in a quoted string: TS lex-terminates the line first.)
         const cp = s.codePointAt(i)!;
+        if (!backtickCtx && (cp < 0x20 || cp > 0x7e)) {
+          this.diags.error(
+            node,
+            'JETH499',
+            'a regular string literal may contain only printable ASCII (0x20-0x7E) as raw text; write a control or non-ASCII character with an escape (\\n \\t \\xNN \\uNNNN) or use a template literal',
+          );
+        }
         pushCp(cp);
         i += cp > 0xffff ? 2 : 1;
         continue;
