@@ -4351,6 +4351,28 @@ export class Analyzer {
         if (rm) unappliedLibMods.push({ mod: rm, lib });
       }
     }
+    // L15 (ctor twin): a generic @modifier APPLIED to a CONSTRUCTOR is monomorphized + body-checked at the
+    // ctor inline site (buildCtorLevelStmts -> instantiateGenericModifier), exactly like a function
+    // application marks appliedGenericModifierNames - but constructor lowering runs LATER than this pass, so
+    // that set does not yet list a ctor-only-applied template. Pre-scan the route's constructor chain and mark
+    // each applied generic template as applied, so it is EXCLUDED from the standalone unapplied-generic pass
+    // below. Without this, the pass probes the ctor-applied body under a finite type set that excludes the
+    // real instantiation type (e.g. a user struct), so a body valid ONLY at that type - `this.sp = v` where
+    // sp is a struct - errors under every probe and is wrongly rejected as uninstantiable (JETH085). The real
+    // monomorph is still checked at the ctor inline site, so a genuinely broken ctor-applied body is caught
+    // there (no over-acceptance). Pure read of decorator names (no diagnostics; those fire at the ctor site).
+    for (const { node } of this.ctorChain) {
+      if (!node) continue;
+      for (const dec of ts.getDecorators(node as unknown as ts.HasDecorators) ?? []) {
+        const e = dec.expression;
+        const nm = ts.isIdentifier(e)
+          ? e.text
+          : ts.isCallExpression(e) && ts.isIdentifier(e.expression)
+            ? e.expression.text
+            : undefined;
+        if (nm !== undefined && this.genericModifiersByName.has(nm)) this.appliedGenericModifierNames.add(nm);
+      }
+    }
     // UNUSED-MODIFIER-BODY (generic twin): a DECLARED-but-NEVER-APPLIED GENERIC @modifier template. An
     // APPLIED generic is monomorphized + its body checked at the inline site (appliedGenericModifierNames);
     // an UNAPPLIED one is never specialized, so its body reaches no checker (an over-acceptance for a type-

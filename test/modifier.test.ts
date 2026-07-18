@@ -1192,4 +1192,90 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
       expect(BigInt(rj.returnHex)).toBe(14n);
     });
   });
+
+  // OR LIFT: a generic @modifier applied to a CONSTRUCTOR using a POINTER-HEADED aggregate type argument
+  // (struct / dynamic-field struct / fixed array Arr<T,N>) as a WHOLE VALUE (`this.sp = v`, a body local
+  // `let y: T = v; this.sp = y`, an internal-fn arg, an emit arg) was over-rejected JETH085 "cannot assign
+  // u256 to P". ROOT CAUSE (an analysis-ordering bug, NOT codegen): the standalone unapplied-generic-body
+  // pass probes a generic modifier body under a FINITE type set (u256/i256/bool/.../synthesized-struct); a
+  // CONSTRUCTOR-applied generic was not marked applied before that pass ran (ctor lowering runs later than
+  // function lowering), so a body valid ONLY at the real non-probe instantiation type - a user struct P -
+  // errored under every probe and was wrongly rejected as uninstantiable. FIX: pre-scan the route's ctor
+  // chain and mark ctor-applied generic templates applied before the pass, excluding them from it (mirroring
+  // how a function application already suppresses it). The real monomorph is still checked at the ctor inline
+  // site, so a broken ctor-applied body is still caught. Codegen-neutral; verified byte-identical deploy+run+
+  // decode across aggregate shapes/consumers/inheritance, zero MC/OA/new-over-rejection.
+  describe('generic @modifier on a CONSTRUCTOR with an aggregate whole-value use (OR lift, solc parity)', () => {
+    it('OR CLOSED: ctor generic modifier whole-assigns a struct type arg (byte-identical, reads a AND b)', async () => {
+      const J = `type P = { a: u256; b: u256 }; class C { sp: P; @modifier m<T>(v: T) { this.sp = v; _; } @m(P(8n,3n)) constructor() {} get pa(): External<u256> { return this.sp.a; } get pb(): External<u256> { return this.sp.b; } }`;
+      const S = `struct P { uint256 a; uint256 b; } contract C { P sp; modifier m(P memory v){ sp = v; _; } constructor() m(P(8,3)) {} function pa() external view returns(uint256){ return sp.a; } function pb() external view returns(uint256){ return sp.b; } }`;
+      expect(codes(J)).toEqual([]);
+      expect(solcRejects(S)).toBe(false);
+      const j = await depJ(J),
+        s = await depS(S);
+      for (const g of ['pa()', 'pb()']) {
+        const rj = await j.h.call(j.a, '0x' + sel(g));
+        const rs = await s.h.call(s.a, '0x' + sel(g));
+        expect(rj.returnHex).toBe(rs.returnHex);
+      }
+      expect(BigInt((await j.h.call(j.a, '0x' + sel('pa()'))).returnHex)).toBe(8n);
+      expect(BigInt((await j.h.call(j.a, '0x' + sel('pb()'))).returnHex)).toBe(3n);
+    });
+    it('accept: ctor generic modifier at fixed-array / dyn-field-struct / body-local / internal-arg / emit shapes', () => {
+      expect(codes(`class C { fx: Arr<u256,3>; @modifier m<T>(v: T) { this.fx = v; _; } @m<Arr<u256,3>>([u256(4n),5n,6n]) constructor() {} get f0(): External<u256> { return this.fx[0n]; } }`)).toEqual([]);
+      expect(codes(`type D = { a: u256; b: bytes }; class C { sd: D; @modifier m<T>(v: T) { this.sd = v; _; } @m(D(7n, bytes("qz"))) constructor() {} get da(): External<u256> { return this.sd.a; } }`)).toEqual([]);
+      expect(codes(`type P = { a: u256; b: u256 }; class C { sp: P; @modifier m<T>(v: T) { let y: T = v; this.sp = y; _; } @m(P(8n,3n)) constructor() {} get pa(): External<u256> { return this.sp.a; } }`)).toEqual([]);
+      expect(codes(`type P = { a: u256; b: u256 }; class C { n: u256; sum(p: P): u256 { return p.a + p.b; } @modifier m<T>(v: T) { let y: T = v; this.n = this.sum(y); _; } @m(P(8n,3n)) constructor() {} get gn(): External<u256> { return this.n; } }`)).toEqual([]);
+      expect(codes(`type P = { a: u256; b: u256 }; class C { Ev: event<{ p: P }>; n: u256 = 0n; @modifier m<T>(v: T) { emit(this.Ev(v)); _; } @m(P(8n,3n)) constructor() { this.n = 1n; } get gn(): External<u256> { return this.n; } }`)).toEqual([]);
+    });
+    it('byte-identical run: ctor generic modifier whole-assigns a fixed array (reads all 3 elements)', async () => {
+      const J = `class C { fx: Arr<u256,3>; @modifier m<T>(v: T) { this.fx = v; _; } @m<Arr<u256,3>>([u256(4n),5n,6n]) constructor() {} get f0(): External<u256> { return this.fx[0n]; } get f1(): External<u256> { return this.fx[1n]; } get f2(): External<u256> { return this.fx[2n]; } }`;
+      const S = `contract C { uint256[3] fx; modifier m(uint256[3] memory v){ fx = v; _; } constructor() m([uint256(4),5,6]) {} function f0() external view returns(uint256){ return fx[0]; } function f1() external view returns(uint256){ return fx[1]; } function f2() external view returns(uint256){ return fx[2]; } }`;
+      const j = await depJ(J),
+        s = await depS(S);
+      for (const [g, want] of [['f0()', 4n], ['f1()', 5n], ['f2()', 6n]] as [string, bigint][]) {
+        const rj = await j.h.call(j.a, '0x' + sel(g));
+        const rs = await s.h.call(s.a, '0x' + sel(g));
+        expect(rj.returnHex).toBe(rs.returnHex);
+        expect(BigInt(rj.returnHex)).toBe(want);
+      }
+    });
+    it('byte-identical run: ctor generic modifier passes the aggregate to an internal function', async () => {
+      const J = `type P = { a: u256; b: u256 }; class C { n: u256; sum(p: P): u256 { return p.a + p.b; } @modifier m<T>(v: T) { let y: T = v; this.n = this.sum(y); _; } @m(P(8n,3n)) constructor() {} get gn(): External<u256> { return this.n; } }`;
+      const S = `struct P { uint256 a; uint256 b; } contract C { uint256 n; function sum(P memory p) internal pure returns(uint256){ return p.a+p.b; } modifier m(P memory v){ P memory y = v; n = sum(y); _; } constructor() m(P(8,3)) {} function gn() external view returns(uint256){ return n; } }`;
+      const j = await depJ(J),
+        s = await depS(S);
+      const rj = await j.h.call(j.a, '0x' + sel('gn()'));
+      const rs = await s.h.call(s.a, '0x' + sel('gn()'));
+      expect(rj.returnHex).toBe(rs.returnHex);
+      expect(BigInt(rj.returnHex)).toBe(11n);
+    });
+    it('byte-identical run: a BASE constructor applies the generic modifier, the DERIVED contract deploys', async () => {
+      const J = `type P = { a: u256; b: u256 }; abstract class B { sp: P; @modifier m<T>(v: T) { this.sp = v; _; } @m(P(8n,3n)) constructor() {} } class C extends B { get pa(): External<u256> { return this.sp.a; } get pb(): External<u256> { return this.sp.b; } }`;
+      const S = `struct P { uint256 a; uint256 b; } abstract contract B { P sp; modifier m(P memory v){ sp = v; _; } constructor() m(P(8,3)) {} } contract C is B { function pa() external view returns(uint256){ return sp.a; } function pb() external view returns(uint256){ return sp.b; } }`;
+      expect(codes(J)).toEqual([]);
+      const j = await depJ(J),
+        s = await depS(S);
+      expect((await j.h.call(j.a, '0x' + sel('pa()'))).returnHex).toBe((await s.h.call(s.a, '0x' + sel('pa()'))).returnHex);
+      expect(BigInt((await j.h.call(j.a, '0x' + sel('pb()'))).returnHex)).toBe(3n);
+    });
+    // ---- no over-acceptance: a broken ctor-applied generic body is still caught at the ctor inline site ----
+    it('OA guard: a broken ctor-applied generic body still rejects on both sides', () => {
+      const bad: [string, string][] = [
+        [`type P = { a: u256; b: u256 }; class C { sp: P; @modifier m<T>(v: T) { nope; this.sp = v; _; } @m(P(8n,3n)) constructor() {} get pa(): External<u256> { return this.sp.a; } }`,
+         `struct P { uint256 a; uint256 b; } contract C { P sp; modifier m(P memory v){ nope; sp = v; _; } constructor() m(P(8,3)) {} function pa() external view returns(uint256){ return sp.a; } }`],
+        [`type P = { a: u256; b: u256 }; class C { sp: P; flag: bool; @modifier m<T>(v: T) { this.flag = v; this.sp = v; _; } @m(P(8n,3n)) constructor() {} get pa(): External<u256> { return this.sp.a; } }`,
+         `struct P { uint256 a; uint256 b; } contract C { P sp; bool flag; modifier m(P memory v){ flag = v; sp = v; _; } constructor() m(P(8,3)) {} function pa() external view returns(uint256){ return sp.a; } }`],
+      ];
+      for (const [J, S] of bad) {
+        expect(codes(J).length).toBeGreaterThan(0);
+        expect(solcRejects(S)).toBe(true);
+      }
+    });
+    it('no over-suppression: a SIBLING never-applied broken generic modifier is still checked and rejects', () => {
+      // The pre-scan marks ONLY the ctor-applied name (good), not the unrelated unapplied `bad`.
+      const J = `type P = { a: u256; b: u256 }; class C { sp: P; @modifier good<T>(v: T) { this.sp = v; _; } @modifier bad<U>() { undefinedThing; _; } @good(P(8n,3n)) constructor() {} get pa(): External<u256> { return this.sp.a; } }`;
+      expect(codes(J)).toContain('JETH072');
+    });
+  });
 });
