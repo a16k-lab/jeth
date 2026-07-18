@@ -4,13 +4,16 @@
 //     applied via `@nonReentrant f()` was SILENTLY treated as the built-in transient-storage guard,
 //     dropping the user modifier body. Proven a real miscompile below (setLock(1); bump() -> JETH
 //     succeeds while solc reverts). RULING: a @modifier declared with a KEPT built-in decorator name
-//     (nonReentrant / override; virtual / using are also reserved identifiers, JETH500) is a hard
-//     error - a clean over-rejection that beats the silent-drop miscompile.
+//     is a hard error. `nonReentrant` is a legal solc identifier yet collides, so it is JETH499;
+//     `virtual` / `using` / `override` are ALSO reserved keywords, so a @modifier declared with one of
+//     those names is caught by the JETH500 gate instead (a single, precise diagnostic).
 //
 // (B) JETH500 - RESERVED-WORD identifiers: JETH's TS-based parser accepts `virtual` / `using` /
-//     `anonymous` as declared identifier names (var / field / param / function / modifier / member)
-//     that solc PARSE-REJECTS as reserved keywords. RULING: reject exactly this minimal set as a
-//     declaration name.
+//     `override` / `anonymous` as declared identifier names that solc PARSE-REJECTS as reserved
+//     keywords. RULING: reject exactly this minimal 4-word set at EVERY declaration name - the
+//     value/member positions (var / field / param / function / get / modifier / struct-or-interface
+//     member) AND the type/namespace positions (contract / abstract / library / interface / enum /
+//     enum-member / struct-or-type-alias name).
 import { describe, it, expect, beforeAll } from 'vitest';
 import { compile } from '../src/compile.js';
 import { CompileError } from '../src/diagnostics.js';
@@ -30,8 +33,10 @@ const accepts = (src: string): boolean => codes(src).length === 0;
 const sel = (s: string) => functionSelector(s);
 const pad = (v: bigint) => v.toString(16).padStart(64, '0');
 
-describe('JETH499: @modifier named like a kept built-in decorator', () => {
-  it('a @modifier named nonReentrant rejects (the silent-drop miscompile)', () => {
+const RESERVED = ['virtual', 'using', 'override', 'anonymous'];
+
+describe('JETH499/JETH500: @modifier named like a kept built-in decorator', () => {
+  it('a @modifier named nonReentrant rejects with JETH499 (the silent-drop miscompile)', () => {
     const src = `class C {
       lock: u256;
       @modifier nonReentrant() { require(this.lock == 0n, "u"); _; }
@@ -40,20 +45,17 @@ describe('JETH499: @modifier named like a kept built-in decorator', () => {
     expect(codes(src)).toContain('JETH499');
   });
 
-  it('a @modifier named override rejects with JETH499', () => {
-    const src = `class C {
-      s: u256;
-      @modifier override() { _; }
-      f(): External<void> { this.s = 1n; }
-    }`;
-    expect(codes(src)).toContain('JETH499');
-  });
-
-  it('a @modifier named virtual / using rejects (via the JETH500 reserved-word gate)', () => {
-    for (const nm of ['virtual', 'using']) {
-      const src = `class C { s: u256; @modifier ${nm}() { _; } f(): External<void> { this.s = 1n; } }`;
+  it('a @modifier named virtual / using / override rejects via the JETH500 reserved-word gate', () => {
+    for (const nm of ['virtual', 'using', 'override']) {
+      const src = `class C { @modifier ${nm}() { _; } get f(): External<u256> { return 1n; } }`;
       expect(codes(src)).toContain('JETH500');
     }
+  });
+
+  it('DOUBLE-REPORT GUARD: a @modifier named override gives exactly ONE code (JETH500, never JETH499+JETH500)', () => {
+    const c = codes(`class C { @modifier override() { _; } get f(): External<u256> { return 1n; } }`);
+    expect(c).toEqual(['JETH500']);
+    expect(c).not.toContain('JETH499');
   });
 
   it('a NON-colliding user modifier still accepts (no over-rejection)', () => {
@@ -75,38 +77,78 @@ describe('JETH499: @modifier named like a kept built-in decorator', () => {
   });
 });
 
-describe('JETH500: reserved-word identifiers (virtual / using / anonymous)', () => {
+describe('JETH500 axis (A): every reserved word at each VALUE/MEMBER declaration position', () => {
   it('reserved words reject as a local var name', () => {
-    for (const nm of ['virtual', 'using', 'anonymous']) {
-      expect(codes(`class C { s: u256; f(): External<void> { let ${nm}: u256 = 1n; this.s = ${nm}; } }`)).toContain(
-        'JETH500',
-      );
+    for (const nm of RESERVED) {
+      expect(codes(`class C { get f(): External<u256> { let ${nm}: u256 = 1n; return ${nm}; } }`)).toContain('JETH500');
     }
   });
   it('reserved words reject as a parameter name', () => {
-    for (const nm of ['virtual', 'using', 'anonymous']) {
-      expect(codes(`class C { s: u256; f(${nm}: u256): External<void> { this.s = ${nm}; } }`)).toContain('JETH500');
+    for (const nm of RESERVED) {
+      expect(codes(`class C { get f(${nm}: u256): External<u256> { return ${nm}; } }`)).toContain('JETH500');
     }
   });
-  it('reserved words reject as a state field name', () => {
-    for (const nm of ['virtual', 'using', 'anonymous']) {
-      expect(codes(`class C { ${nm}: u256; get f(): External<u256> { return this.${nm}; } }`)).toContain('JETH500');
+  it('reserved words reject as a state field name (plain + Visible)', () => {
+    for (const nm of RESERVED) {
+      expect(codes(`class C { ${nm}: u256 = 0n; get f(): External<u256> { return 1n; } }`)).toContain('JETH500');
+      expect(codes(`class C { ${nm}: Visible<u256>; constructor() { this.${nm} = 5n; } }`)).toContain('JETH500');
     }
   });
-  it('reserved words reject as a function name', () => {
-    for (const nm of ['virtual', 'using', 'anonymous']) {
-      expect(codes(`class C { s: u256; ${nm}(): External<void> { this.s = 1n; } }`)).toContain('JETH500');
+  it('reserved words reject as a method name and a get-accessor name', () => {
+    for (const nm of RESERVED) {
+      expect(codes(`class C { x: u256 = 0n; ${nm}(): External<u256> { this.x = 1n; return this.x; } }`)).toContain('JETH500');
+      expect(codes(`class C { get ${nm}(): External<u256> { return 1n; } }`)).toContain('JETH500');
     }
   });
   it('reserved words reject as a struct member name', () => {
-    for (const nm of ['virtual', 'using', 'anonymous']) {
-      expect(codes(`type P = { ${nm}: u256 }; class C { s: u256; f(p: P): External<void> { this.s = p.${nm}; } }`)).toContain(
-        'JETH500',
-      );
+    for (const nm of RESERVED) {
+      expect(codes(`type P = { ${nm}: u256 }; class C { get f(): External<u256> { return 1n; } }`)).toContain('JETH500');
     }
   });
+  it('reserved words reject as an interface method name and interface method param', () => {
+    for (const nm of RESERVED) {
+      expect(codes(`interface I { ${nm}(): View<u256>; } class C { get f(): External<u256> { return 1n; } }`)).toContain('JETH500');
+      expect(codes(`interface I { m(${nm}: u256): View<u256>; } class C { get f(): External<u256> { return 1n; } }`)).toContain('JETH500');
+    }
+  });
+});
 
-  it('CONTROLS: normal identifiers still accept', () => {
+describe('JETH500 axis (B): every reserved word at each TYPE/NAMESPACE declaration name', () => {
+  it('reserved words reject as a contract (class) name', () => {
+    for (const nm of RESERVED) {
+      expect(codes(`class ${nm} { get f(): External<u256> { return 42n; } }`)).toContain('JETH500');
+    }
+  });
+  it('reserved words reject as an abstract-class name', () => {
+    for (const nm of RESERVED) {
+      expect(codes(`abstract class ${nm} { get f(): External<u256> { return 1n; } } class C extends ${nm} { }`)).toContain('JETH500');
+    }
+  });
+  it('reserved words reject as a library (static class) name', () => {
+    for (const nm of RESERVED) {
+      expect(codes(`static class ${nm} { m(): u256 { return 1n; } } class C { get f(): External<u256> { return ${nm}.m(); } }`)).toContain('JETH500');
+    }
+  });
+  it('reserved words reject as an interface name', () => {
+    for (const nm of RESERVED) {
+      expect(codes(`interface ${nm} { m(): View<u256>; } class C { get f(): External<u256> { return 1n; } }`)).toContain('JETH500');
+    }
+  });
+  it('reserved words reject as an enum name and an enum member', () => {
+    for (const nm of RESERVED) {
+      expect(codes(`enum ${nm} { A, B } class C { get f(): External<u256> { return 1n; } }`)).toContain('JETH500');
+      expect(codes(`enum E { A, ${nm}, B } class C { get f(): External<u256> { return 3n; } }`)).toContain('JETH500');
+    }
+  });
+  it('reserved words reject as a struct / type-alias name', () => {
+    for (const nm of RESERVED) {
+      expect(codes(`type ${nm} = { a: u256; b: u256 }; class C { get f(): External<u256> { return 1n; } }`)).toContain('JETH500');
+    }
+  });
+});
+
+describe('JETH500 CONTROLS: no new over-rejection on valid programs', () => {
+  it('normal identifiers still accept in every value position', () => {
     expect(
       accepts(`class C {
         count: u256;
@@ -115,17 +157,33 @@ describe('JETH500: reserved-word identifiers (virtual / using / anonymous)', () 
     ).toBe(true);
   });
 
-  it('CONTROLS: lookalike names (virtualX / usingList / anonymousUser) still accept', () => {
+  it('legit Solidity-ish names data / value / from still accept as field / param / local', () => {
     expect(
-      accepts(`class C {
-        virtualX: u256; usingList: u256; anonymousUser: u256;
-        f(): External<void> { this.virtualX = 1n; this.usingList = 2n; this.anonymousUser = 3n; }
-      }`),
+      accepts(`class C { data: u256 = 0n;
+        store(value: u256): External<u256> { this.data = value; return value; }
+        transfer(from: u256): External<u256> { let value: u256 = from + this.data; this.data = value; return value; } }`),
     ).toBe(true);
   });
 
-  it('CONTROLS: the @virtual / @override / @using / @anonymous DECORATOR applications still accept', () => {
-    // decorator applications name none of these as an identifier DECLARATION, so they are untouched.
+  it('lookalikes virtualX / usingList / _anonymous / overrideThing / myOverride accept in value positions', () => {
+    expect(
+      accepts(`class C {
+        virtualX: u256 = 0n;
+        usingList(overrideThing: u256): External<u256> { let _anonymous: u256 = overrideThing + 1n; this.virtualX = _anonymous; return this.virtualX; }
+        get myOverride(): External<u256> { return this.virtualX; } }`),
+    ).toBe(true);
+  });
+
+  it('lookalikes accept as contract / abstract / library / interface / enum / enum-member / type names', () => {
+    expect(accepts(`class virtualX { get f(): External<u256> { return 1n; } }`)).toBe(true);
+    expect(accepts(`abstract class usingList { get f(): External<u256> { return 1n; } } class C extends usingList { }`)).toBe(true);
+    expect(accepts(`static class overrideThing { m(): u256 { return 1n; } } class C { get f(): External<u256> { return overrideThing.m(); } }`)).toBe(true);
+    expect(accepts(`interface _anonymous { m(): View<u256>; } class C { get f(): External<u256> { return 1n; } }`)).toBe(true);
+    expect(accepts(`enum myOverride { A, virtualX, B } class C { get f(): External<u256> { return 1n; } }`)).toBe(true);
+    expect(accepts(`type usingList = { a: u256; b: u256 }; class C { get f(): External<u256> { return 1n; } }`)).toBe(true);
+  });
+
+  it('the @virtual / @override / @using / @anonymous DECORATOR applications still accept (not declaration names)', () => {
     expect(
       accepts(`abstract class B { s: u256; @virtual f(): External<void> { this.s = 1n; } }
         class C extends B { @override f(): External<void> { this.s = 2n; } }`),
@@ -137,6 +195,22 @@ describe('JETH500: reserved-word identifiers (virtual / using / anonymous)', () 
     expect(
       accepts(`class C { @anonymous E: event<{ a: indexed<u256>; b: u256 }>; f(): External<void> { emit(E(7n, 9n)); } }`),
     ).toBe(true);
+  });
+});
+
+describe('@virtual / @override override pair runs byte-identically to solc (decorators untouched)', () => {
+  const JETH = `abstract class Base { @virtual area(): u256 { return 1n; } }
+    class C extends Base { @override area(): u256 { return 42n; } get f(): External<u256> { return this.area(); } }`;
+  let h: Harness;
+  let addr: import('@ethereumjs/util').Address;
+  beforeAll(async () => {
+    h = await Harness.create();
+    addr = await h.deploy('0x' + compile(JETH, { fileName: 'C.jeth' }).creationBytecode);
+  });
+  it('the derived @override body wins (returns 42)', async () => {
+    const r = await h.call(addr, '0x' + sel('f()'));
+    expect(r.success).toBe(true);
+    expect(r.returnHex).toBe('0x' + pad(42n));
   });
 });
 

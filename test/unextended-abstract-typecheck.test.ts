@@ -124,6 +124,81 @@ describe('an unextended abstract class is type-checked (solc parity)', () => {
     expect(solcAccepts(`abstract contract B { modifier only(uint256 x) { _; } } ${SOL_DEPLOYABLE}`)).toBe(true);
   });
 
+  it('an UNDEFINED type in a BARE/positional event/error field rejects (JETH013), like solc', () => {
+    // OA4b - the SECOND hole in the event/error field surface: the first pass walked only the
+    // OBJECT-LITERAL form `event<{ x: T }>` and silently accepted the BARE/positional form (a single type,
+    // an array, an `indexed<T>`, or a comma list) with an undefined leaf. solc rejects the positional twin
+    // `event E(Nope)` / `error Bad(Nope)` just as it does the named one, so JETH accepting was an
+    // over-acceptance. Every bare position - single, array, indexed, indexed-array, and each slot of a
+    // comma list, on BOTH event and error - now resolves its leaf and reports JETH013.
+    expect(codes(`abstract class B { E: event<Nope>; }\n${DEPLOYABLE}`)).toContain('JETH013'); // bare single
+    expect(codes(`abstract class B { Bad: error<Nope>; }\n${DEPLOYABLE}`)).toContain('JETH013'); // bare single error
+    expect(codes(`abstract class B { E: event<Nope[]>; }\n${DEPLOYABLE}`)).toContain('JETH013'); // bare array
+    expect(codes(`abstract class B { E: event<indexed<Nope>>; }\n${DEPLOYABLE}`)).toContain('JETH013'); // bare indexed
+    expect(codes(`abstract class B { E: event<indexed<Nope[]>>; }\n${DEPLOYABLE}`)).toContain('JETH013'); // bare indexed array
+    expect(codes(`abstract class B { E: event<Nope, u256>; }\n${DEPLOYABLE}`)).toContain('JETH013'); // multi, first slot
+    expect(codes(`abstract class B { E: event<u256, Nope>; }\n${DEPLOYABLE}`)).toContain('JETH013'); // multi, second slot
+    expect(codes(`abstract class B { Bad: error<Nope[]>; }\n${DEPLOYABLE}`)).toContain('JETH013'); // bare array error
+    expect(codes(`abstract class B { Bad: error<u256, Nope>; }\n${DEPLOYABLE}`)).toContain('JETH013'); // multi error
+
+    // THE CONTROLS: the identical bare shapes with a DEFINED type accept on BOTH JETH and solc (so the
+    // reject is driven by the undefined leaf, not by the bare form itself). A defined struct / contract type
+    // in the bare position resolves too.
+    expect(accepts(`abstract class B { E: event<u256>; }\n${DEPLOYABLE}`)).toBe(true);
+    expect(accepts(`abstract class B { Bad: error<u256>; }\n${DEPLOYABLE}`)).toBe(true);
+    expect(accepts(`abstract class B { E: event<u256[]>; }\n${DEPLOYABLE}`)).toBe(true);
+    expect(accepts(`abstract class B { E: event<indexed<u256>>; }\n${DEPLOYABLE}`)).toBe(true);
+    expect(accepts(`abstract class B { E: event<indexed<u256[]>>; }\n${DEPLOYABLE}`)).toBe(true);
+    expect(accepts(`abstract class B { E: event<u256, address>; }\n${DEPLOYABLE}`)).toBe(true);
+    expect(accepts(`abstract class B { Bad: error<u256, address>; }\n${DEPLOYABLE}`)).toBe(true);
+    expect(accepts(`type P = { x: u256 };\nabstract class B { E: event<P>; }\n${DEPLOYABLE}`)).toBe(true);
+    expect(accepts(`abstract class B { E: event<C>; }\n${DEPLOYABLE}`)).toBe(true); // contract-typed param brands to address
+
+    // THE SOLC WITNESSES: each undefined bare form is an error; its defined twin accepts.
+    expect(solcAccepts(`abstract contract B { event E(Nope); } ${SOL_DEPLOYABLE}`)).toBe(false);
+    expect(solcAccepts(`abstract contract B { event E(uint256); } ${SOL_DEPLOYABLE}`)).toBe(true);
+    expect(solcAccepts(`abstract contract B { error Bad(Nope); } ${SOL_DEPLOYABLE}`)).toBe(false);
+    expect(solcAccepts(`abstract contract B { error Bad(uint256); } ${SOL_DEPLOYABLE}`)).toBe(true);
+    expect(solcAccepts(`abstract contract B { event E(Nope[]); } ${SOL_DEPLOYABLE}`)).toBe(false);
+    expect(solcAccepts(`abstract contract B { event E(uint256[]); } ${SOL_DEPLOYABLE}`)).toBe(true);
+    expect(solcAccepts(`abstract contract B { event E(Nope indexed); } ${SOL_DEPLOYABLE}`)).toBe(false);
+    expect(solcAccepts(`abstract contract B { event E(uint256 indexed); } ${SOL_DEPLOYABLE}`)).toBe(true);
+    expect(solcAccepts(`abstract contract B { event E(Nope, uint256); } ${SOL_DEPLOYABLE}`)).toBe(false);
+    expect(solcAccepts(`abstract contract B { event E(uint256, address); } ${SOL_DEPLOYABLE}`)).toBe(true);
+  });
+
+  it('an `indexed` parameter on an ERROR field rejects (JETH129) on a stray base too, like solc', () => {
+    // `indexed` is an event-only marker: solc rejects `error Bad(uint256 indexed)` whether the base is
+    // deployed or stray. The bare-form fix routes `indexed<T>` through the deployed path's own gate, so an
+    // `indexed<T>` on a stray error field is JETH129 in BOTH spellings (this also closes the same OA the
+    // object-literal form had). A valid `indexed<T>` on an EVENT still accepts.
+    expect(codes(`abstract class B { Bad: error<indexed<u256>>; }\n${DEPLOYABLE}`)).toContain('JETH129'); // bare
+    expect(codes(`abstract class B { Bad: error<{ n: indexed<u256> }>; }\n${DEPLOYABLE}`)).toContain('JETH129'); // object-literal
+    expect(accepts(`abstract class B { E: event<indexed<u256>>; }\n${DEPLOYABLE}`)).toBe(true); // event control still accepts
+    // solc witnesses: indexed-on-error rejects, indexed-on-event accepts.
+    expect(solcAccepts(`abstract contract B { error Bad(uint256 indexed); } ${SOL_DEPLOYABLE}`)).toBe(false);
+    expect(solcAccepts(`abstract contract B { event E(uint256 indexed); } ${SOL_DEPLOYABLE}`)).toBe(true);
+  });
+
+  it('BYTE-IDENTITY: a valid BARE event/error stray base does not change the deployable bytecode', () => {
+    // The pass is diagnostics-only, so the deployable's creation bytecode must be UNCHANGED by prepending
+    // any valid bare-form stray base (the same load-bearing guarantee the object-literal forms carry).
+    const baseline = creation(DEPLOYABLE);
+    const validBareBases = [
+      `abstract class B { E: event<u256>; }`,
+      `abstract class B { Bad: error<u256>; }`,
+      `abstract class B { E: event<u256[]>; }`,
+      `abstract class B { E: event<indexed<address>>; }`,
+      `abstract class B { E: event<indexed<u256[]>>; }`,
+      `abstract class B { E: event<u256, address>; }`,
+      `abstract class B { E: event<C>; }`,
+    ];
+    for (const base of validBareBases) {
+      expect(accepts(`${base}\n${DEPLOYABLE}`)).toBe(true);
+      expect(creation(`${base}\n${DEPLOYABLE}`)).toBe(baseline);
+    }
+  });
+
   // ---- THE OVER-REJECTION GUARD (the #1 risk of this change) --------------------------------------
   // An unextended abstract base may legitimately contain anything a deriving contract would use. Each
   // shape below must still COMPILE, and the emitted creation bytecode must be UNCHANGED by the added

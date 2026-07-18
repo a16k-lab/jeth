@@ -274,4 +274,94 @@ describe('L2-MOBILE lift - mixed cast/bare array literals self-type byte-identic
       ],
     );
   });
+
+  // OA#7b (the two axes the base storage-conv check missed): the element convertibility must hold at a
+  // NON-INTEGER target leaf (bytesN / address / bool) and a DYNAMIC-outer target too, and recurse through
+  // nested fixed/dynamic arrays. Each spelling below is a solc TypeError JETH previously over-accepted (an
+  // unsigned literal filling a signed / bytesN storage array, at a fixed or dynamic outer, direct or
+  // field-initialized). The widening / negative-seeded / partial-fill twins still ACCEPT byte-identically.
+
+  // (A) NON-INTEGER target leaf: an int literal does not implicitly convert to bytesN (fixed OR dynamic).
+  it('rejects an int-literal array into a bytesN storage array - fixed + dynamic (solc parity)', () => {
+    for (const [J, S] of [
+      ['class C { s: Arr<bytes32,2>; f(): External<void> { this.s = [0n,0n]; } }', 'contract C { bytes32[2] s; function f() external { s = [0,0]; } }'],
+      ['class C { s: bytes32[]; f(): External<void> { this.s = [0n,0n]; } }', 'contract C { bytes32[] s; function f() external { s = [0,0]; } }'],
+      ['class C { s: Arr<bytes1,2>; f(): External<void> { this.s = [0n,0n]; } }', 'contract C { bytes1[2] s; function f() external { s = [0,0]; } }'],
+    ] as const) {
+      expect(solRejects(S), S).toBe(true);
+      expect(rejects(J), J).toBe(true);
+    }
+  });
+
+  // (B) DYNAMIC-outer target: the free outer length must not skip the element check.
+  it('rejects an unsigned literal array into a SIGNED dynamic storage array - width variants (solc parity)', () => {
+    for (const [w, sw] of [['i8', 'int8'], ['i16', 'int16'], ['i256', 'int256']] as const) {
+      const J = `class C { s: ${w}[]; f(): External<void> { this.s = [1n,2n]; } }`;
+      const S = `contract C { ${sw}[] s; function f() external { s = [1,2]; } }`;
+      expect(solRejects(S), S).toBe(true);
+      expect(rejects(J), J).toBe(true);
+    }
+  });
+
+  it('rejects all-bare no-common-type [1,-1] into a signed DYNAMIC storage array (solc parity)', () => {
+    for (const [w, sw] of [['i8', 'int8'], ['i256', 'int256']] as const) {
+      const J = `class C { s: ${w}[]; f(): External<void> { this.s = [1n,-1n]; } }`;
+      const S = `contract C { ${sw}[] s; function f() external { s = [1,-1]; } }`;
+      expect(solRejects(S), S).toBe(true);
+      expect(rejects(J), J).toBe(true);
+    }
+  });
+
+  it('rejects nested signed storage array copies (dynamic inner / dynamic outer) - solc parity', () => {
+    for (const [J, S] of [
+      ['class C { s: Arr<i8[],2>; f(): External<void> { this.s = [[1n],[2n]]; } }', 'contract C { int8[][2] s; function f() external { s = [[1],[2]]; } }'],
+      ['class C { s: Arr<i8,2>[]; f(): External<void> { this.s = [[1n,2n],[3n,4n]]; } }', 'contract C { int8[2][] s; function f() external { s = [[1,2],[3,4]]; } }'],
+    ] as const) {
+      expect(solRejects(S), S).toBe(true);
+      expect(rejects(J), J).toBe(true);
+    }
+  });
+
+  it('accepts an unsigned literal widening into a DYNAMIC unsigned storage array, byte-identical', async () => {
+    await diff(
+      'class C { s: u256[]; set(): External<void> { this.s = [7n,9n]; } get g(i: u256): External<u256> { return this.s[i]; } get n(): External<u256> { return this.s.length; } }',
+      'contract C { uint256[] s; function set() external { s = [7,9]; } function g(uint256 i) external view returns (uint256){ return s[i]; } function n() external view returns (uint256){ return s.length; } }',
+      [['set()', ''], ['g(uint256)', pad32(0n)], ['g(uint256)', pad32(1n)], ['n()', '']],
+    );
+  });
+
+  it('accepts a negative-seeded literal into a signed DYNAMIC storage array, byte-identical', async () => {
+    await diff(
+      'class C { s: i256[]; set(): External<void> { this.s = [-5n,9n]; } get g(i: u256): External<i256> { return this.s[i]; } }',
+      'contract C { int256[] s; function set() external { s = [-5,9]; } function g(uint256 i) external view returns (int256){ return s[i]; } }',
+      [['set()', ''], ['g(uint256)', pad32(0n)], ['g(uint256)', pad32(1n)]],
+    );
+  });
+
+  // FIELD-INITIALIZER position (the constant-fold landing): the SAME element-convertibility rule, including
+  // the PARTIAL fill (`Arr<T,3> = [a,b]`), where the free outer length must not skip the element check.
+  it('rejects a mismatched fixed-array FIELD initializer - signed / bytesN / partial / no-common (solc parity)', () => {
+    for (const [J, S] of [
+      ['class C { s: Arr<i8,2> = [1n,2n]; get x(): External<i8> { return this.s[0]; } }', 'contract C { int8[2] s = [1,2]; function x() external view returns(int8){return s[0];} }'],
+      ['class C { s: Arr<bytes32,2> = [0n,0n]; get x(): External<bytes32> { return this.s[0]; } }', 'contract C { bytes32[2] s = [0,0]; function x() external view returns(bytes32){return s[0];} }'],
+      ['class C { s: Arr<i8,3> = [1n,2n]; get x(): External<i8> { return this.s[0]; } }', 'contract C { int8[3] s = [1,2]; function x() external view returns(int8){return s[0];} }'],
+      ['class C { s: Arr<i8,2> = [1n,-1n]; get x(): External<i8> { return this.s[0]; } }', 'contract C { int8[2] s = [1,-1]; function x() external view returns(int8){return s[0];} }'],
+    ] as const) {
+      expect(solRejects(S), S).toBe(true);
+      expect(rejects(J), J).toBe(true);
+    }
+  });
+
+  it('accepts a widening / negative-seeded / partial fixed-array FIELD initializer, byte-identical', async () => {
+    await diff(
+      'class C { s: Arr<u256,3> = [7n,9n]; get g(i: u256): External<u256> { return this.s[i]; } }',
+      'contract C { uint256[3] s = [7,9]; function g(uint256 i) external view returns (uint256){ return s[i]; } }',
+      [['g(uint256)', pad32(0n)], ['g(uint256)', pad32(1n)], ['g(uint256)', pad32(2n)]],
+    );
+    await diff(
+      'class C { s: Arr<i256,2> = [-5n,9n]; get g(i: u256): External<i256> { return this.s[i]; } }',
+      'contract C { int256[2] s = [-5,9]; function g(uint256 i) external view returns (int256){ return s[i]; } }',
+      [['g(uint256)', pad32(0n)], ['g(uint256)', pad32(1n)]],
+    );
+  });
 });

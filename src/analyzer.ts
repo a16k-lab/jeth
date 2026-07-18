@@ -113,7 +113,12 @@ const KEPT_BUILTIN_DECORATOR_NAMES = new Set(['nonReentrant', 'virtual', 'overri
 // PARSE-REJECTS everywhere an identifier is declared (a var / field / parameter / function / modifier /
 // struct-or-event member name). Accepting them is an over-acceptance; checkReservedIdentifierNames rejects
 // exactly this minimal set (JETH500). `using` and `virtual` are also kept decorator names above.
-const RESERVED_SOLIDITY_IDENTIFIERS = new Set(['virtual', 'using', 'anonymous']);
+// PARSE-REJECTS at EVERY identifier DECLARATION name: a var / field / parameter / function / modifier /
+// struct-or-event member name AND a contract-or-library-or-abstract (class) / interface / enum / enum-member /
+// struct-or-type-alias name. All four are reserved keywords in solc 0.8.35 (verified: solc emits a ParserError
+// for a declaration named any of them, e.g. `uint256 override = 9;`). `virtual` / `using` / `override` are also
+// kept decorator names, so a @modifier declared with one is caught here (a single JETH500) rather than JETH499.
+const RESERVED_SOLIDITY_IDENTIFIERS = new Set(['virtual', 'using', 'override', 'anonymous']);
 
 // CONTRACT-TYPE-PARAM: the brand prefix a contract/interface reference TYPE carries when modeled as a
 // branded address. `__ctref:<Name>` - the leading `__` and colon cannot appear in a source identifier,
@@ -2265,8 +2270,8 @@ export class Analyzer {
       // Declaration NAME positions only (identifier declarations solc reserves the keyword against):
       // parameter, class field (PropertyDeclaration), method / get / set accessor (a @modifier is a
       // MethodDeclaration too), local `let`/`const` (VariableDeclaration), and a struct/event/error member
-      // (PropertySignature inside a `type` literal). A property ACCESS / reference is never a declaration
-      // node here, so it is untouched.
+      // (PropertySignature inside a `type` literal). A property ACCESS / reference / decorator application
+      // (`@virtual` / `@override` / `@using(L)`) is never a declaration NAME node here, so it is untouched.
       if (
         (ts.isParameter(n) ||
           ts.isPropertyDeclaration(n) ||
@@ -2275,7 +2280,14 @@ export class Analyzer {
           ts.isSetAccessorDeclaration(n) ||
           ts.isVariableDeclaration(n) ||
           ts.isPropertySignature(n) ||
-          ts.isMethodSignature(n)) &&
+          ts.isMethodSignature(n) ||
+          // TYPE / NAMESPACE declaration names solc reserves the keyword against too: a contract / abstract /
+          // library (all ClassDeclaration), an interface, an enum + each enum member, and a struct / type-alias.
+          ts.isClassDeclaration(n) ||
+          ts.isInterfaceDeclaration(n) ||
+          ts.isEnumDeclaration(n) ||
+          ts.isEnumMember(n) ||
+          ts.isTypeAliasDeclaration(n)) &&
         n.name &&
         ts.isIdentifier(n.name)
       ) {
@@ -2502,21 +2514,28 @@ export class Analyzer {
     }
   }
 
-  /** Resolve the parameter TYPES of a native error/event FIELD declaration on a stray class (`E: event<{ x:
-   *  indexed<T> }>` / `Bad: error<{ n: T }>`). The `indexed<T>` wrapper is unwrapped to T first - the
-   *  deployed synthesizeErrorEventDecl unwraps it too, and resolving `indexed` itself would spuriously
-   *  reject a valid `indexed<u256>`. Only the payload TYPE is resolved: the structural error/event gates
-   *  (JETH353/JETH129) belong to the deployed path and are deliberately not re-run for a signature-only
-   *  stray base. A malformed field (no type argument, not an object type, no field type) is skipped - its
-   *  own gate fires on the deployed path, and a stray base is checked for undefined types only. */
+  /** Resolve the parameter TYPES of a native error/event FIELD declaration on a stray class, covering BOTH
+   *  the object-literal form (`E: event<{ x: indexed<T>; y: U }>`) AND the bare/positional form
+   *  (`E: event<T>`, `E: event<T[]>`, `E: event<indexed<T>>`, `E: event<A, B>`, and the same on `error<>`).
+   *  Every parameter type is routed through the same JETH013 resolution the deployed path uses, so an
+   *  undefined type in ANY of those positions rejects exactly as solc does (the earlier pass walked only the
+   *  object-literal form and silently accepted the bare form - an over-acceptance). An `indexed<T>` wrapper
+   *  is unwrapped to T for an EVENT (resolving `indexed` itself would spuriously reject a valid
+   *  `indexed<u256>`) and is JETH129 on an ERROR (an error parameter cannot be indexed - exactly the gate
+   *  synthesizeErrorEventDecl applies on the deployed path, and solc rejects `error Bad(uint256 indexed)`
+   *  too, so this is a sound reject, not an over-rejection). The remaining STRUCTURAL gates (JETH353 shape,
+   *  JETH049 name) belong to the deployed path and are deliberately not re-run for a signature-only stray
+   *  base: only undefined types (JETH013) and indexed-on-error (JETH129) are checked here. A field with no
+   *  type argument is skipped - its own JETH353 fires on the deployed path. */
   private resolveErrorEventFieldTypes(member: ts.PropertyDeclaration, resolve: (t: ts.TypeNode | undefined) => void): void {
     const t = member.type;
-    if (!t || !ts.isTypeReferenceNode(t) || !t.typeArguments || t.typeArguments.length !== 1) return;
-    const lit = t.typeArguments[0]!;
-    if (!ts.isTypeLiteralNode(lit)) return;
-    for (const fm of lit.members) {
-      if (!ts.isPropertySignature(fm) || !fm.type) continue;
-      let pType: ts.TypeNode = fm.type;
+    if (!t || !ts.isTypeReferenceNode(t) || !t.typeArguments || t.typeArguments.length === 0) return;
+    const kind = ts.isIdentifier(t.typeName) ? t.typeName.text : ''; // 'error' | 'event' (isErrorEventFieldDecl gated the caller)
+    const resolveParam = (pType: ts.TypeNode): void => {
+      // `indexed<T>` is an event-only marker: unwrap to T for an event; reject it on an error (JETH129),
+      // then still resolve the leaf so an undefined `indexed<Nope>` reports JETH013 too. A malformed
+      // `indexed<...>` (wrong arity) is left as-is and resolves the leaf `indexed` -> JETH013 (a reject,
+      // matching solc, which has no bare `indexed` type either).
       if (
         ts.isTypeReferenceNode(pType) &&
         ts.isIdentifier(pType.typeName) &&
@@ -2524,9 +2543,24 @@ export class Analyzer {
         pType.typeArguments &&
         pType.typeArguments.length === 1
       ) {
-        pType = pType.typeArguments[0]!;
+        if (kind === 'error') {
+          this.diags.error(pType, 'JETH129', `error parameter cannot be indexed (only event parameters are indexed)`);
+        }
+        resolve(pType.typeArguments[0]!);
+        return;
       }
       resolve(pType);
+    };
+    for (const arg of t.typeArguments) {
+      if (ts.isTypeLiteralNode(arg)) {
+        // object-literal form: each `name: Type` field signature is one parameter.
+        for (const fm of arg.members) {
+          if (ts.isPropertySignature(fm) && fm.type) resolveParam(fm.type);
+        }
+      } else {
+        // bare/positional form: each type argument is one parameter's type.
+        resolveParam(arg);
+      }
     }
   }
 
@@ -8357,6 +8391,34 @@ export class Analyzer {
             member.initializer,
             'JETH211',
             `array literal has ${member.initializer.elements.length} elements but ${displayName(type)} holds ${type.length}`,
+          );
+          return;
+        }
+        // SOUNDNESS (OA7b): solc types an inline array from its ELEMENTS ONLY and then element-wise-copies
+        // it into the storage array, so the element type it INFERS must IMPLICITLY convert to the DECLARED
+        // element - exactly the `this.s = [...]` storage-copy rule (arrLitStorageConvError), applied at the
+        // FIELD-INITIALIZER position too. foldConstant below TARGET-DRIVES each bare literal into the
+        // declared element and would OVER-ACCEPT a mismatch: `int8[2] s = [1,2]` (uint8-mobile does not
+        // convert to int8), `bytes32[2] s = [0,0]` (uint8-mobile does not convert to bytes32), and the
+        // no-common-type `int8[2] s = [1,-1]` (solc: "Unable to deduce common type") - all solc TypeErrors.
+        // Integer WIDENING of the same signedness (`uint256[2] s = [1,2]`), a negative-seeded signed
+        // literal (`int256[2] s = [-1,2]`), a mixed L2-MOBILE literal, and the PARTIAL fill (`uint256[3] s
+        // = [1,2]`, whose free outer length is unaffected) all still ACCEPT. A literal solc cannot self-type
+        // (the mixed bytesN-zero quirk `[bytes32(0), 0]`) leaves selfT undefined and falls through unchanged.
+        if (this.arrLitIntElementsHaveNoCommonType(member.initializer)) {
+          this.diags.error(
+            member.initializer,
+            'JETH497',
+            'array-literal elements have no common type: solc types an inline array from its ELEMENTS ONLY and a non-negative int literal (uintN-mobile) does not unify with a negative int literal (intN-mobile) - "Unable to deduce common type for array elements"; reorder so a negative literal seeds the type, or cast the first element',
+          );
+          return;
+        }
+        const selfElemT = this.selfTypeArrayLit(member.initializer);
+        if (selfElemT && selfElemT.element.kind !== 'array' && !this.litElemConvertibleTo({ type: selfElemT.element }, type.element)) {
+          this.diags.error(
+            member.initializer,
+            'JETH497',
+            `type ${displayName(selfElemT)} is not implicitly convertible to storage type ${displayName(type)}: a storage array copy converts each element IMPLICITLY (widening a value or an int of the same signedness), but the element type solc infers for this literal does not implicitly convert to the target element type (e.g. an unsigned literal array cannot fill a signed or bytesN array); cast the first element (e.g. [${displayName(type.element)}(...), ...])`,
           );
           return;
         }
@@ -23995,42 +24057,55 @@ export class Analyzer {
    *  the literal's SELF-TYPED element to be merely IMPLICITLY CONVERTIBLE (not identical) to the target -
    *  `uint256[2] s; s = [1,2];` ACCEPTS (uint8 -> uint256). But the conversion must still be one solc
    *  performs IMPLICITLY: a uintN-mobile literal ([1,2] -> uint8[2]) does NOT convert to a SIGNED array
-   *  (`int8[2] s; s = [1,2];` is a TypeError - uint8 is not implicitly convertible to int8), and the same
-   *  for any width. JETH's expected-push target-drove each bare literal into the signed element and
-   *  OVER-ACCEPTED; this closes it. Recurses through nested fixed arrays exactly like solc's storage copy
-   *  (`int8[2][2] s; s = [[1,2],[3,4]];` rejects, `uint256[2][2] s; s = [[1,2],[3,4]];` accepts). Returns
-   *  undefined (leave to existing behavior) when the literal is not self-typeable (bytesN-zero quirk, an
-   *  un-typable element) or the target outer is dynamic (JETH sugar, no solc literal spelling). */
+   *  (`int8[2] s; s = [1,2];` is a TypeError - uint8 is not implicitly convertible to int8), nor to a
+   *  NON-INTEGER leaf (`bytes32[2] s; s = [0,0];` rejects - uint8 is not implicitly convertible to
+   *  bytes32), and the same for any width. JETH's expected-push target-drove each bare literal into the
+   *  declared element and OVER-ACCEPTED; this closes it. The check applies to BOTH a fixed outer target
+   *  (`bytes32[2]`) and a DYNAMIC outer one (`int8[] s; s = [1,2];` rejects - the outer length is free for
+   *  a fixed literal copied into a dynamic storage array, but the ELEMENT must still convert, so a dynamic
+   *  outer no longer bails). Recurses through nested fixed arrays and a dynamic inner exactly like solc's
+   *  storage copy (`int8[2][2] s; s = [[1,2],[3,4]];`, `int8[][2] s; s = [[1],[2]];` and `int8[2][] s; s =
+   *  [[1,2],[3,4]];` all reject; the uint256 twins accept). Returns undefined (leave to existing behavior)
+   *  only when the literal is not self-typeable (the bytesN-zero quirk of a MIXED literal, an un-typable
+   *  element). */
   private arrLitStorageConvError(
     lit: ts.ArrayLiteralExpression,
     expected: JethType & { kind: 'array' },
   ): string | undefined {
-    if (expected.length === undefined) return undefined;
     const selfT = this.selfTypeArrayLit(lit);
     if (!selfT) return undefined;
     if (this.arrTypeStorageConvertible(selfT, expected)) return undefined;
-    return `type ${displayName(selfT)} is not implicitly convertible to storage type ${displayName(expected)}: a storage array copy converts each element IMPLICITLY (widening a value or an int of the same signedness), but the element type solc infers for this literal does not implicitly convert to the target element type (e.g. an unsigned literal array cannot fill a signed array); cast the first element (e.g. [${displayName(expected.element)}(...), ...])`;
+    return `type ${displayName(selfT)} is not implicitly convertible to storage type ${displayName(expected)}: a storage array copy converts each element IMPLICITLY (widening a value or an int of the same signedness), but the element type solc infers for this literal does not implicitly convert to the target element type (e.g. an unsigned literal array cannot fill a signed or bytesN array); cast the first element (e.g. [${displayName(expected.element)}(...), ...])`;
   }
 
-  /** L2-MOBILE (OA#7): does solc's storage element-wise array copy accept `from` into `to`? This check
-   *  only ever ADDS a reject it is CERTAIN about (an unsigned literal array into a signed storage array
-   *  and the like), so it returns `true` (convertible - do NOT reject) for every shape it does not
-   *  confidently judge. It descends only through equal-length FIXED arrays and judges a value LEAF: a
-   *  plain (unbranded, non-enum) INTEGER leaf must be IMPLICITLY convertible to the target integer leaf
-   *  (uint8 -> uint256 yes, uint8 -> int8 no, int8 -> int256 yes), using litElemConvertibleTo as solc's
-   *  implicit-conversion oracle. Any DYNAMIC array (length undefined - e.g. the inner `u256[]` of a
-   *  `u256[][2]`), an unequal-length or array/non-array shape mix, or a non-integer leaf (bytesN /
-   *  bool / address / enum / brand / struct) is LEFT ALONE (returns true), preserving the prior behavior
-   *  for every shape outside this over-acceptance family. */
+  /** L2-MOBILE (OA#7): does solc's storage element-wise array copy accept `from` (the literal's SELF type,
+   *  always a FIXED `T[n]`) into `to` (the declared storage type, whose outer/inner levels may be DYNAMIC)?
+   *  Solc's copy converts each element IMPLICITLY, so this mirrors that convertibility LEVEL BY LEVEL:
+   *    - OUTER length: a fixed literal copies into a same-length fixed array OR into a DYNAMIC storage array
+   *      (length free), so a dynamic target level does NOT block. A fixed<->fixed LENGTH MISMATCH is a size
+   *      error already reported by JETH226 in the element loop, so it is left alone here (returns true).
+   *    - ARRAY element: recurse (`uint256[2][2]`, `uint256[][2]`, `uint256[2][]` all descend), so a nested
+   *      dynamic inner is judged too. An array/non-array shape mix is not this family (returns true).
+   *    - VALUE LEAF: the leaf solc infers for the literal must be IMPLICITLY convertible to the target leaf,
+   *      via litElemConvertibleTo (solc's implicit-conversion oracle over concrete types) for EVERY leaf
+   *      kind: integer widening of the same signedness (uint8 -> uint256 yes, uint8 -> int8 no), bytesN
+   *      widening (bytes4 -> bytes8 yes, bytes8 -> bytes4 no), and exact equality for bytesN/address/bool/
+   *      enum/brand/struct. This is what closes the over-acceptance of an unsigned literal into a SIGNED or
+   *      a bytesN / address / bool storage array. A same-type leaf (bytes32 -> bytes32, address -> address)
+   *      still converts, so no valid copy is newly rejected.
+   *  It only ever ADDS a reject solc is certain about; a shape it cannot self-type never reaches here
+   *  (arrLitStorageConvError bails on an undefined selfT). */
   private arrTypeStorageConvertible(from: JethType & { kind: 'array' }, to: JethType & { kind: 'array' }): boolean {
-    if (from.length === undefined || to.length === undefined || from.length !== to.length) return true;
+    // A self-typed literal is always fixed; a fixed<->fixed length mismatch is a JETH226 size error
+    // handled in the element loop. A dynamic target level (to.length === undefined) leaves the outer
+    // length free and MUST still descend to the element.
+    if (from.length === undefined) return true;
+    if (to.length !== undefined && from.length !== to.length) return true;
     const fe = from.element;
     const te = to.element;
     if (fe.kind === 'array' && te.kind === 'array') return this.arrTypeStorageConvertible(fe, te);
     if (fe.kind === 'array' || te.kind === 'array') return true; // shape mix - not this family
-    // Only a plain-integer leaf mismatch is a certain solc reject; leave every other leaf alone.
-    if (!isInteger(fe) || !isInteger(te) || isEnum(fe) || isEnum(te) || (fe as { brand?: string }).brand || (te as { brand?: string }).brand)
-      return true;
+    // Every value leaf: the inferred leaf must implicitly convert to the target leaf (solc's oracle).
     return this.litElemConvertibleTo({ type: fe }, te);
   }
 
@@ -25134,9 +25209,12 @@ export class Analyzer {
       // TypeError, raised while typing the LITERAL ITSELF - at EVERY landing (a storage element-wise
       // copy included) and BEFORE any target conversion. Without this the expected-push loop below would
       // target-drive each element into the declared element type and OVER-ACCEPT `[1n, -1n]` into
-      // `Arr<i8,2>` (solc rejects; the reversed `[-1n, 1n]` still ACCEPTS - see the helper). Runs
-      // unconditionally so it also fires for a nested inner literal and a storage assignment.
-      if (expected.length !== undefined && this.arrLitIntElementsHaveNoCommonType(node)) {
+      // `Arr<i8,2>` (solc rejects; the reversed `[-1n, 1n]` still ACCEPTS - see the helper). Fires for a
+      // FIXED outer (a nested inner literal and a fixed storage assignment) AND for a DYNAMIC-outer STORAGE
+      // element-wise copy (`int8[] s; s = [1n, -1n];` - solc rejects the literal typing regardless of the
+      // free outer length); the DYNAMIC-outer MEMORY literal is JETH sugar (JETH216) with no such landing
+      // and keeps its accept, so the storage permission (elemWiseCopy) scopes the dynamic case exactly.
+      if ((expected.length !== undefined || arrLitCtx.elemWiseCopy) && this.arrLitIntElementsHaveNoCommonType(node)) {
         this.diags.error(
           node,
           'JETH497',

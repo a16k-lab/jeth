@@ -394,3 +394,118 @@ describe('JETH491: only ASCII whitespace separates tokens (solc ASCII-only-lexer
   });
 });
 
+// ---------------------------------------------------------------------------------------------------
+// OA8b (JETH491, comment-terminator axis): the pre-parse separator scan tracked a `//` line comment by
+// stopping ONLY at '\n', so a Unicode/control line-break inside a `//` comment - and any separator that
+// followed a CR-terminated comment - was swallowed as "comment content" and never rejected, while solc
+// ends the comment at that break and rejects the break char (or the next separator) as an "Invalid
+// token". solc's `//` comment terminates at the FULL Unicode mandatory-break set: LF (U+000A), VT
+// (U+000B), FF (U+000C), CR (U+000D), NEL (U+0085), LS (U+2028), PS (U+2029). The scan now stops at all
+// seven, so the break char (or a post-CR separator) reaches the outer scan and gets JETH491 - parity
+// with solc. NBSP / OGHAM / ZWSP / BOM / every other Unicode space and control stays legal comment
+// CONTENT (does NOT terminate), and LF/CR remain benign terminators, so no valid program is newly
+// rejected.
+// ---------------------------------------------------------------------------------------------------
+
+describe('JETH491 (OA8b): a Unicode/control line-break inside a // comment ends it, matching solc', () => {
+  const U = (cp: number) => String.fromCodePoint(cp);
+  // The five break chars that solc ends a `//` comment on AND then rejects as an invalid token
+  // (LF and CR also terminate but are benign separators, tested as accept-controls below).
+  const BAD_TERMS: [string, number][] = [
+    ['VT U+000B', 0x000b], ['FF U+000C', 0x000c], ['NEL U+0085', 0x0085],
+    ['LS U+2028', 0x2028], ['PS U+2029', 0x2029],
+  ];
+  // chars solc treats as ordinary comment CONTENT (never terminate a // comment)
+  const CONTENT: [string, number][] = [
+    ['NBSP U+00A0', 0x00a0], ['OGHAM U+1680', 0x1680], ['IDEOGRAPHIC U+3000', 0x3000],
+    ['NNBSP U+202F', 0x202f], ['ZWSP U+200B', 0x200b], ['BOM U+FEFF', 0xfeff], ['NUL U+0000', 0x0000],
+  ];
+  const jGet = (body: string) => `class C { get v(): External<u256> {\n${body}\n} }`;
+  const sGet = (body: string) => `contract C { function v() external pure returns (uint256) {\n${body}\n} }`;
+
+  // (1) each terminator DIRECTLY inside a // comment rejects (JETH491) and solc rejects too (parity).
+  for (const [name, cp] of BAD_TERMS) {
+    it(`${name} directly after a // comment rejects with JETH491 (solc rejects too)`, () => {
+      const jsrc = jGet(`  //x${U(cp)}return 7n;`);
+      const got = codes(jsrc);
+      expect(got).toContain('JETH491');
+      expect(got).not.toContain('RAW-THROW');
+      expect(solRejects(sGet(`  //x${U(cp)}return 7;`))).toBe(true);
+    });
+  }
+
+  // (2) a CR ends the comment, then a non-ASCII SEPARATOR on the same physical line is exposed + rejected
+  // (the char-after-terminator axis: the old scan swallowed it as comment content). solc rejects too.
+  for (const [name, cp] of CONTENT) {
+    if (cp === 0x0000) continue; // NUL is not a separator solc flags; the others are
+    it(`a ${name} after a CR-terminated // comment rejects with JETH491 (solc rejects too)`, () => {
+      const jsrc = jGet(`  //x\r${U(cp)}return 7n;`);
+      const got = codes(jsrc);
+      expect(got).toContain('JETH491');
+      expect(solRejects(sGet(`  //x\r${U(cp)}return 7;`))).toBe(true);
+    });
+  }
+
+  // (3) a terminator inside a // comment that is the LAST thing before EOF still rejects.
+  it('a terminator in a // comment at end-of-file rejects with JETH491', () => {
+    for (const [, cp] of BAD_TERMS) {
+      const src = `class C { get v(): External<u256> { return 7n; } }\n//tail${U(cp)}`;
+      expect(codes(src)).toContain('JETH491');
+    }
+  });
+
+  // (4) the hole in a multi-file DEPENDENCY rejects, positioned in that file.
+  it('a comment terminator in a DEPENDENCY source rejects, positioned in that file', () => {
+    const dep = `export type P = { a: u256 }; //x${U(0x2028)}z\n`;
+    const entry = `import { P } from "./dep";\nclass C { get f(): External<u256> { let p: P = { a: 1n }; return p.a; } }\n`;
+    const got = mfDiag(entry, { './dep': dep, 'entry.jeth': entry });
+    expect(got.some((g) => g.startsWith('JETH491@./dep'))).toBe(true);
+  });
+
+  // (5) CONTROL: every content char inside a // comment stays ACCEPTED (comment content, no diagnostics).
+  for (const [name, cp] of CONTENT) {
+    it(`${name} INSIDE a // comment is legal content and still compiles (control)`, () => {
+      expect(codes(jGet(`  //h${U(cp)}i\n  return 7n;`))).toEqual([]);
+    });
+  }
+
+  // (6) CONTROL: the break chars are legal inside a BLOCK comment (only `//` terminates on them).
+  it('the break chars are legal content inside a /* block */ comment (control)', () => {
+    for (const [, cp] of BAD_TERMS) {
+      expect(codes(jGet(`  /* a${U(cp)}b */ return 7n;`))).toEqual([]);
+    }
+  });
+
+  // (7) CONTROL: normal / CRLF / bare-CR comment terminators still ACCEPT and are byte-identical to the
+  // no-comment baseline (the scan is validation-only, so an accepted comment cannot change codegen).
+  it('LF / CRLF / bare-CR terminated // comments accept and are byte-identical to the baseline (control)', () => {
+    const ref = compile(jGet(`  return 7n;`), { fileName: 'C.jeth' }).creationBytecode;
+    for (const body of [`  //c\n  return 7n;`, `  //c\r\n  return 7n;`, `  //c\r  return 7n;`]) {
+      const got = codes(jGet(body));
+      expect(got).toEqual([]);
+      expect(compile(jGet(body), { fileName: 'C.jeth' }).creationBytecode).toBe(ref);
+    }
+  });
+
+  // (8) byte-identity vs solc: deploy+run a CRLF-commented and a bare-CR-commented getter, both return 7.
+  it('a CRLF and a bare-CR // comment are behaviorally byte-identical to solc (deploy+run+decode)', async () => {
+    for (const [jbody, sbody] of [
+      [`  //c\r\n  return 7n;`, `  //c\r\n  return 7;`],
+      [`  //c\r  return 7n;`, `  //c\r  return 7;`],
+    ] as [string, string][]) {
+      const jb = compile(jGet(jbody), { fileName: 'C.jeth' }).creationBytecode;
+      const sb = compileSolidity(SPDX + sGet(sbody), 'C').creation;
+      const hj = await Harness.create();
+      const hs = await Harness.create();
+      const aj = await hj.deploy(jb);
+      const as = await hs.deploy(sb);
+      const rj = await hj.call(aj, sel('v()'));
+      const rs = await hs.call(as, sel('v()'));
+      expect(rj.success).toBe(true);
+      expect(rj.success).toBe(rs.success);
+      expect(rj.returnHex).toBe(rs.returnHex);
+      expect(BigInt(rj.returnHex)).toBe(7n);
+    }
+  });
+});
+

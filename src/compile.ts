@@ -1191,7 +1191,22 @@ function rejectNonAsciiSeparators(text: string, fileName: string): void {
     }
     if (c === '/' && text[i + 1] === '/') {
       i += 2;
-      while (i < n && text[i] !== '\n') i++;
+      // A `//` line comment ends at the FIRST Unicode line break. solc's scanner terminates it on the
+      // full seven-character mandatory-break set - LF (U+000A), VT (U+000B), FF (U+000C), CR (U+000D),
+      // NEL (U+0085), LS (U+2028) and PS (U+2029) - NOT just LF (verified against solc 0.8.35: each of
+      // those seven inside a `//` comment ends it, whereas NBSP / OGHAM / ZWSP / BOM / every other
+      // Unicode space and control is ordinary comment CONTENT that does NOT terminate it and stays
+      // accepted). Break WITHOUT consuming the terminator so the outer scan then evaluates it: LF/CR
+      // are allowed separators and skipped; VT/FF/NEL/LS/PS (and any disallowed char that follows a
+      // CR-terminated comment) fall through to the JETH491 rejection, exactly matching solc, which
+      // ends the comment and then rejects the break char as an "Invalid token". Tracking only '\n'
+      // here (the old behaviour) let a VT/FF/NEL/LS/PS, or any separator after one of those, be
+      // swallowed as comment content and slip past (the OA8b hole).
+      while (i < n) {
+        const cc = text.charCodeAt(i);
+        if (cc === 0x0a || cc === 0x0b || cc === 0x0c || cc === 0x0d || cc === 0x85 || cc === 0x2028 || cc === 0x2029) break;
+        i++;
+      }
       continue;
     }
     if (c === '/' && text[i + 1] === '*') {
