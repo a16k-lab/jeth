@@ -3130,6 +3130,27 @@ export class Analyzer {
           );
           continue;
         }
+        // LIB-MODIFIER: a library modifier body runs INLINED in the caller and has NO contract instance or
+        // state, exactly like a library FUNCTION body (which rejects `this.<member>` via the identical scan
+        // below at the function path). A modifier body is collected HERE, not through that function path, so
+        // `this.<field>` / `this.<method>()` escaped the scan and was silently ACCEPTED while solc rejects it
+        // (a library has no contract state) - an over-acceptance in BOTH the applied (inlined) and unapplied
+        // paths. Apply the SAME scan here. Bare `this` (e.g. `address(this)`, the caller's own address) is a
+        // ThisKeyword ARGUMENT, not a PropertyAccessExpression, so it is untouched and stays legal - exactly
+        // as for a library function.
+        if (member.body) {
+          const scanThis = (n: ts.Node): void => {
+            if (ts.isPropertyAccessExpression(n) && n.expression.kind === ts.SyntaxKind.ThisKeyword) {
+              this.diags.error(
+                n,
+                'JETH394',
+                `@library '${name}' @modifier '${mname}' cannot access 'this.${n.name.text}' (a library has no contract state or instance; pass values as parameters)`,
+              );
+            }
+            ts.forEachChild(n, scanThis);
+          };
+          ts.forEachChild(member.body, scanThis);
+        }
         // Collect with the library name as the "declaring contract" so collectModifier's same-scope
         // duplicate check (JETH046) is per-library. The entry is qualified + de-lib'd after the loop.
         this.collectModifier(member, name, libMods);
@@ -4298,7 +4319,24 @@ export class Analyzer {
     // NOTHING - so the pass snapshots and RESTORES the emission-affecting collections (mirroring the
     // getter-var base pass), keeping a valid unused modifier byte-identical while still surfacing its
     // type diagnostics.
-    if (collectedMods.length > 0) {
+    // LIB-MODIFIER unapplied bodies: a DECLARED-but-NEVER-APPLIED @modifier of a `@library` is registered
+    // in modifiersByName under its qualified `L.name` key (definingContract cleared) but, being unapplied,
+    // is never INLINED at any site - so its body, like an unapplied contract modifier's, escaped the checker
+    // entirely (solc type-checks every library modifier body regardless of use: an undeclared identifier /
+    // bad-type / missing function in an unused library modifier was silently ACCEPTED = an over-acceptance).
+    // Gather the unapplied ones here (appliedModifierKeys is complete by now; an APPLIED library modifier is
+    // keyed `L.name` too and is checked when inlined). Library modifiers cannot be @virtual/@override
+    // (JETH390) so there is no winner/loser subtlety - each is registered exactly once under its qualified key.
+    const unappliedLibMods: { mod: RawModifier; lib: string }[] = [];
+    for (const [lib, bareNames] of this.libraryModifierNames) {
+      for (const bare of bareNames) {
+        const key = `${lib}.${bare}`;
+        if (this.appliedModifierKeys.has(key)) continue; // applied -> checked at its inline site
+        const rm = this.modifiersByName.get(key);
+        if (rm) unappliedLibMods.push({ mod: rm, lib });
+      }
+    }
+    if (collectedMods.length > 0 || unappliedLibMods.length > 0) {
       const snapAddressTaken = new Set(this.addressTaken);
       const snapInternallyCalled = new Set(this.internallyCalled);
       const snapSpecQueue = [...this.specializationQueue];
@@ -4316,6 +4354,9 @@ export class Analyzer {
         if (isWinner && this.appliedModifierKeys.has(cm.name)) continue; // winner checked when applied
         this.checkUnappliedModifierBody(cm);
       }
+      // LIB-MODIFIER: type-check each unapplied library modifier body in its LIBRARY's scope (currentLibrary=L,
+      // no contract owner) - see checkUnappliedModifierBody's libraryName arm.
+      for (const { mod, lib } of unappliedLibMods) this.checkUnappliedModifierBody(mod, lib);
       // Drop every emission-affecting registration the unused bodies made (they emit no code): byte-identical
       // to the baseline where an unapplied modifier is never analyzed. The DIAGNOSTICS are kept (the point).
       this.addressTaken = snapAddressTaken;
@@ -10643,7 +10684,7 @@ export class Analyzer {
    *  payability/mutability requirement), NOT ctor-modifier code. Only DIAGNOSTICS matter here; the lowered
    *  statements are thrown away and the caller has snapshotted/restored the emission-affecting state, so a
    *  valid unused modifier stays byte-identical. */
-  private checkUnappliedModifierBody(mod: RawModifier): void {
+  private checkUnappliedModifierBody(mod: RawModifier, libraryName?: string): void {
     if (!mod.node.body) return; // a bodyless modifier is rejected at collect time (JETH328)
     const savedScopes = this.scopes;
     const savedLoopDepth = this.loopDepth;
@@ -10666,7 +10707,15 @@ export class Analyzer {
     this.currentMutability = 'nonpayable';
     this.currentExternallyReachable = false;
     this.currentIsGetter = false;
-    this.currentLibrary = undefined;
+    // LIB-MODIFIER: a LIBRARY modifier body resolves names in the LIBRARY's scope (its own params /
+    // constants / functions / `_;`) and has NO contract instance or state - exactly like a library
+    // FUNCTION body (checkFunction: currentDefiningContract=undefined, bodyOwnerContract=undefined,
+    // currentLibrary=L). A library modifier's mod.definingContract is already undefined (cleared at
+    // registration), so currentDefiningContract/bodyOwnerContract above are correctly undefined; the
+    // one remaining piece is currentLibrary=L so a bare `K`/`revert(Bad())`/`emit(E())`/`L.f()` in the
+    // body resolves against THIS library's tables. A CONTRACT modifier passes libraryName=undefined
+    // (unchanged behaviour).
+    this.currentLibrary = libraryName;
     this.currentInCtorModifierCode = false;
     this.placeholderInner = []; // `_;` accepted and lowered to nothing (the whole body is discarded)
     this.memArrayLocals = new Set();

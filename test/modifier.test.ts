@@ -734,4 +734,103 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
       expect(codes(`class C { x: u256; g(v: u256): External<void> { this.x = v; } get f(): External<u256> { return this.x; } }`)).toEqual([]);
     });
   });
+
+  // LIB-MODIFIER unapplied-body OA close: a @modifier declared in a `static class L` (library) is registered
+  // under a qualified `L.name` key in a SEPARATE list from contract modifiers, so the contract-modifier
+  // unapplied-body pass never reached it - a DECLARED-but-UNAPPLIED library modifier body escaped the
+  // checker entirely (solc type-checks every library modifier body regardless of use). The pass now also
+  // type-checks each unapplied library modifier body once, standalone, in the LIBRARY's scope (currentLibrary=L,
+  // no contract state/instance - its own params / constants / functions / `_;` only). These pins lock the
+  // close (a broken unused library modifier now rejects, matching solc) and the no-over-rejection controls.
+  describe('an unapplied library @modifier body is still type-checked (LIB-MODIFIER OA close vs solc)', () => {
+    it('EXACT OA: undeclared identifier in an UNAPPLIED library modifier -> JETH072 (solc also rejects)', () => {
+      const J = `static class L { @modifier only() { require(q, "x"); _; } add(a: u256, b: u256): u256 { return a + b; } } class C { get z(): External<u256> { return L.add(1n, 2n); } }`;
+      const S = `library L { modifier only() { require(q,"x"); _; } function add(uint256 a, uint256 b) internal pure returns(uint256){ return a+b; } } contract C { function z() external pure returns(uint256){ return L.add(1,2); } }`;
+      expect(codes(J)).toContain('JETH072');
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('bad-type assignment (string literal into a u256 local) in an UNAPPLIED library modifier rejects', () => {
+      const J = `static class L { @modifier m(v: u256) { let s: u256 = "hello"; _; } add(a: u256): u256 { return a; } } class C { get z(): External<u256> { return L.add(1n); } }`;
+      const S = `library L { modifier m(uint256 v) { uint256 s = "hello"; _; } function add(uint256 a) internal pure returns(uint256){ return a; } } contract C { function z() external pure returns(uint256){ return L.add(1); } }`;
+      expect(codes(J).length).toBeGreaterThan(0);
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('a call to a non-existent library function in an UNAPPLIED library modifier rejects', () => {
+      const J = `static class L { @modifier m(v: u256) { require(L.missing(v) > 0n, "x"); _; } add(a: u256): u256 { return a; } } class C { get z(): External<u256> { return L.add(1n); } }`;
+      const S = `library L { modifier m(uint256 v) { require(L.missing(v) > 0, "x"); _; } function add(uint256 a) internal pure returns(uint256){ return a; } } contract C { function z() external pure returns(uint256){ return L.add(1); } }`;
+      expect(codes(J).length).toBeGreaterThan(0);
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('a type error in require (non-bool condition) in an UNAPPLIED library modifier rejects', () => {
+      const J = `static class L { @modifier m(v: u256) { require(v + 1n, "x"); _; } add(a: u256): u256 { return a; } } class C { get z(): External<u256> { return L.add(1n); } }`;
+      const S = `library L { modifier m(uint256 v) { require(v + 1, "x"); _; } function add(uint256 a) internal pure returns(uint256){ return a; } } contract C { function z() external pure returns(uint256){ return L.add(1); } }`;
+      expect(codes(J).length).toBeGreaterThan(0);
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('a broken expression using the params (u256 > bool) in an UNAPPLIED library modifier rejects', () => {
+      const J = `static class L { @modifier m(v: u256) { require(v > true, "x"); _; } add(a: u256): u256 { return a; } } class C { get z(): External<u256> { return L.add(1n); } }`;
+      const S = `library L { modifier m(uint256 v) { require(v > true, "x"); _; } function add(uint256 a) internal pure returns(uint256){ return a; } } contract C { function z() external pure returns(uint256){ return L.add(1); } }`;
+      expect(codes(J).length).toBeGreaterThan(0);
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('MIXED: one APPLIED valid + one UNAPPLIED broken library modifier - the file rejects (solc also rejects)', () => {
+      const J = `static class L { @modifier ok(v: u256) { require(v > 0n, "ok"); _; } @modifier bad(v: u256) { require(ghost, "b"); _; } @ok(v) inc(v: u256): u256 { return v + 1n; } } class C { get z(v: u256): External<u256> { return L.inc(v); } }`;
+      const S = `library L { modifier ok(uint256 v) { require(v > 0, "ok"); _; } modifier bad(uint256 v) { require(ghost, "b"); _; } function inc(uint256 v) internal pure ok(v) returns(uint256){ return v + 1; } } contract C { function z(uint256 v) external pure returns(uint256){ return L.inc(v); } }`;
+      expect(codes(J)).toContain('JETH072');
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('a generic library modifier with a broken body stays rejected at collect time (JETH390, pre-existing)', () => {
+      const J = `static class L { @modifier lim<T>(v: T) { require(ghostXYZ, "e"); _; } add(a: u256): u256 { return a; } } class C { get z(): External<u256> { return L.add(1n); } }`;
+      expect(codes(J)).toContain('JETH390');
+    });
+    it('a library modifier reading contract state `this.<field>` rejects - UNAPPLIED (JETH394; solc rejects)', () => {
+      // A library has no contract instance/state; `this.x` is meaningless (exactly like a library function).
+      const J = `static class L { @modifier m() { require(this.x > 0n, "x"); _; } add(a: u256): u256 { return a; } } class C { x: u256; get z(): External<u256> { return L.add(1n); } }`;
+      const S = `library L { modifier m() { require(x > 0, "x"); _; } function add(uint256 a) internal pure returns(uint256){ return a; } } contract C { uint256 x; function z() external view returns(uint256){ return L.add(1); } }`;
+      expect(codes(J)).toContain('JETH394');
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('a library modifier reading contract state `this.<field>` rejects - APPLIED too (JETH394; solc rejects)', () => {
+      const J = `static class L { @modifier m() { require(this.x > 0n, "x"); _; } @m inc(a: u256): u256 { return a; } } class C { x: u256; get z(): External<u256> { return L.inc(1n); } }`;
+      const S = `library L { modifier m() { require(x > 0, "x"); _; } function inc(uint256 a) internal view m returns(uint256){ return a; } } contract C { uint256 x; function z() external view returns(uint256){ return L.inc(1); } }`;
+      expect(codes(J)).toContain('JETH394');
+      expect(solcRejects(S)).toBe(true);
+    });
+
+    // --- NO NEW OVER-REJECTION: a VALID unused library modifier still accepts + is byte-identical ---
+    it('a VALID unused library modifier reading the caller ENV (msg.*, address(this)) still accepts (both)', () => {
+      // These read the CALLER's message/context (legal in a library body), not contract state - must accept.
+      expect(codes(`static class L { @modifier m(v: u256) { require(msg.value >= 0n, "x"); _; } add(a: u256): u256 { return a; } } class C { get z(): External<u256> { return L.add(1n); } }`)).toEqual([]);
+      expect(codes(`static class L { @modifier m() { require(msg.sender != address(0), "x"); _; } add(a: u256): u256 { return a; } } class C { get z(): External<u256> { return L.add(1n); } }`)).toEqual([]);
+      expect(codes(`static class L { @modifier m() { require(address(this) != address(0), "x"); _; } add(a: u256): u256 { return a; } } class C { get z(): External<u256> { return L.add(1n); } }`)).toEqual([]);
+    });
+    it('a VALID unused library modifier referencing its params still accepts (solc accepts)', () => {
+      const J = `static class L { @modifier okv(v: u256) { require(v >= 0n, "x"); _; } add(a: u256): u256 { return a; } } class C { get z(): External<u256> { return L.add(1n); } }`;
+      const S = `library L { modifier okv(uint256 v) { require(v >= 0, "x"); _; } function add(uint256 a) internal pure returns(uint256){ return a; } } contract C { function z() external pure returns(uint256){ return L.add(1); } }`;
+      expect(codes(J)).toEqual([]);
+      expect(solcRejects(S)).toBe(false);
+    });
+    it('a VALID unused library modifier referencing a library CONSTANT still accepts', () => {
+      const J = `static class L { static MIN: u256 = 10n; @modifier okc(v: u256) { require(v >= MIN, "x"); _; } add(a: u256): u256 { return a; } } class C { get z(): External<u256> { return L.add(1n); } }`;
+      const S = `library L { uint256 constant MIN = 10; modifier okc(uint256 v) { require(v >= MIN, "x"); _; } function add(uint256 a) internal pure returns(uint256){ return a; } } contract C { function z() external pure returns(uint256){ return L.add(1); } }`;
+      expect(codes(J)).toEqual([]);
+      expect(solcRejects(S)).toBe(false);
+    });
+    it('a VALID unused library modifier calling another library FUNCTION still accepts', () => {
+      const J = `static class L { helper(x: u256): u256 { return x + 1n; } @modifier okf(v: u256) { require(L.helper(v) > 0n, "x"); _; } add(a: u256): u256 { return a; } } class C { get z(): External<u256> { return L.add(1n); } }`;
+      const S = `library L { function helper(uint256 x) internal pure returns(uint256){ return x + 1; } modifier okf(uint256 v) { require(L.helper(v) > 0, "x"); _; } function add(uint256 a) internal pure returns(uint256){ return a; } } contract C { function z() external pure returns(uint256){ return L.add(1); } }`;
+      expect(codes(J)).toEqual([]);
+      expect(solcRejects(S)).toBe(false);
+    });
+    it('an APPLIED library modifier is unchanged (still both-accept)', () =>
+      expect(codes(`static class L { @modifier onlyPos(v: u256) { require(v > 0n, "np"); _; } @onlyPos(v) inc(v: u256): u256 { return v + 1n; } } class C { get g(v: u256): External<u256> { return L.inc(v); } }`)).toEqual([]));
+    it('adding a VALID unused library modifier does NOT change the consuming contract creation or runtime bytecode', () => {
+      const base = `static class L { add(a: u256, b: u256): u256 { return a + b; } } class C { get z(): External<u256> { return L.add(1n, 2n); } }`;
+      const plus = `static class L { @modifier onlyValid(v: u256) { require(v >= 0n, "x"); _; } add(a: u256, b: u256): u256 { return a + b; } } class C { get z(): External<u256> { return L.add(1n, 2n); } }`;
+      const b = compile(base, { fileName: 'C.jeth' });
+      const p = compile(plus, { fileName: 'C.jeth' });
+      expect(p.creationBytecode).toBe(b.creationBytecode);
+      expect(p.runtimeBytecode).toBe(b.runtimeBytecode);
+    });
+  });
 });
