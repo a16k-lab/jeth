@@ -10838,6 +10838,12 @@ export class Analyzer {
     }
     const keyOf = (d: Diagnostic): string => `${d.code}|${d.line}|${d.column}|${d.length}`;
     let intersection: Map<string, Diagnostic> | undefined;
+    // The FIRST broken probe's diagnostics, kept as a concrete representative for the multi-site case below.
+    let firstErrors: Map<string, Diagnostic> | undefined;
+    // True while EVERY probe so far produced at least one error. If any probe type-checks cleanly the body is
+    // valid at that type (solc's matching monomorphization accepts), so JETH must accept - we stop and emit
+    // nothing. If every probe errors, the body type-checks for NO instantiation and must be rejected.
+    let allErrored = true;
     for (const probe of probes) {
       const binding = new Map<string, JethType>();
       for (const tp of gen.typeParams) binding.set(tp, probe);
@@ -10852,7 +10858,7 @@ export class Analyzer {
         if (rm) this.checkUnappliedModifierBody(rm);
       });
       // Capture this probe's errors keyed by (code + span), then truncate them out of the bag so a probe's
-      // diagnostics never surface directly - only the surviving intersection is re-emitted below.
+      // diagnostics never surface directly - only a surviving reject is re-emitted below.
       const produced = new Map<string, Diagnostic>();
       for (let i = mark; i < this.diags.items.length; i++) {
         const d = this.diags.items[i];
@@ -10861,11 +10867,27 @@ export class Analyzer {
         if (!produced.has(k)) produced.set(k, d);
       }
       this.diags.items.length = mark;
-      if (intersection === undefined) intersection = produced;
+      if (produced.size === 0) {
+        // This instantiation type-checks: the body is valid at this type. Accept (emit nothing).
+        allErrored = false;
+        break;
+      }
+      if (firstErrors === undefined) firstErrors = produced;
+      if (intersection === undefined) intersection = new Map(produced);
       else for (const k of [...intersection.keys()]) if (!produced.has(k)) intersection.delete(k);
-      if (intersection.size === 0) break; // the intersection only shrinks; nothing survives
+      // NB: do NOT break when the span-key intersection empties - the body may still be broken under EVERY
+      // probe at DIFFERENT spans (a multi-site type-parameter-INDEPENDENT conflict, e.g. `let p: bool = v;
+      // let q: u256 = v` - no T is assignable to both), which must still reject. Keep probing to confirm.
     }
-    if (intersection) for (const d of intersection.values()) this.diags.items.push(d);
+    if (!allErrored) return; // some instantiation accepted -> the body is valid at that type -> accept
+    // Every probe was broken: the body does not type-check for ANY instantiation. Prefer the shared
+    // (type-parameter-INDEPENDENT) diagnostics that survived the span intersection - a precise, real error
+    // location. When none survived (a multi-site conflict, empty intersection), emit the first broken probe's
+    // concrete diagnostics: a genuine reject at a genuine location, closing the empty-intersection
+    // over-acceptance. (A body valid ONLY at a type outside this finite probe set - e.g. a deeply nested
+    // struct field or a specific enum - is a safe clean reject, never a miscompile.)
+    const toEmit = intersection && intersection.size > 0 ? intersection : firstErrors;
+    if (toEmit) for (const d of toEmit.values()) this.diags.items.push(d);
   }
 
   /** Phase 5: collect a user-defined @modifier. Increment 1 supports a PRE-ONLY modifier: a single

@@ -856,6 +856,27 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
       expect(codes(J)).toContain('JETH085');
       expect(solcRejects(S)).toBe(true);
     });
+    // MULTI-SITE conflict: broken for EVERY type param but at DIFFERENT source spans per probe, so the
+    // span-key intersection was empty and the body slipped. Now rejected: every probe errors -> no
+    // instantiation type-checks. solc rejects the monomorphized mirror at every concrete type.
+    it('OA close: multi-site type-param-independent conflict (bool vs u256 sinks)', () => {
+      const J = `class C { x: u256; @modifier m<T>(v: T) { let p: bool = v; let q: u256 = v; _; } get z(): External<u256> { return this.x; } }`;
+      const S = `contract C { uint256 x; modifier m(uint256 v) { bool p = v; uint256 q = v; _; } function z() external view returns(uint256){ return x; } }`;
+      expect(codes(J)).toContain('JETH085');
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('OA close: multi-site conflict, address vs u256 sinks', () => {
+      const J = `class C { x: u256; @modifier m<T>(v: T) { let p: address = v; let q: u256 = v; _; } get z(): External<u256> { return this.x; } }`;
+      const S = `contract C { uint256 x; modifier m(uint256 v) { address p = v; uint256 q = v; _; } function z() external view returns(uint256){ return x; } }`;
+      expect(codes(J).length).toBeGreaterThan(0);
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('no over-rejection: a body valid at SOME type param stays accepted despite the multi-site guard', () => {
+      // `let y: T = v` is valid at every T (a probe accepts) -> not "all probes errored" -> accept.
+      expect(codes(`class C { x: u256; @modifier m<T>(v: T) { let y: T = v; _; } get z(): External<u256> { return this.x; } }`)).toEqual([]);
+      // v.length is valid at bytes (the bytes probe accepts).
+      expect(codes(`class C { x: u256; @modifier m<T>(v: T) { require(v.length > 0n, "x"); _; } get z(): External<u256> { return this.x; } }`)).toEqual([]);
+    });
     it('OA close: call to a non-existent function', () => {
       const J = `class C { @modifier m<U>() { nope(); _; } get z(): External<u256> { return 7n; } }`;
       const S = `contract C { modifier m() { nope(); _; } function z() external pure returns(uint256){ return 7; } }`;
