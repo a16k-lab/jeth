@@ -1725,9 +1725,18 @@ ZERO new over-rejection of a valid program. HEAD `053b718`, suite 499 files / 51
   illegal @override, view-mutation, return-arity) in a never-extended abstract was accepted; now re-parsed and
   fully analyzed. Also made stray event/error fields consistent with the deployed path (bare positional
   `event<u256>` rejects JETH353; the object-literal `event<{x:T}>` is the canonical form).
-- unused-@modifier body type-checking (`053b718`) - a declared-but-never-applied modifier's broken body was
-  accepted (a modifier body is otherwise only checked when inlined at an application site); now checked
-  standalone (contract modifiers, all body positions, and the override-loser base declaration).
+- unused-@modifier body type-checking - a declared-but-never-applied modifier's broken body was accepted (a
+  modifier body is otherwise only checked when inlined at an application site); now checked standalone across
+  the WHOLE modifier family: contract modifiers + the override-loser base declaration (`053b718`); LIBRARY
+  modifiers (`5d813fc`, which also closed a bonus pre-existing OA: `this.<field>` contract-state access in a
+  library modifier body); and unapplied SELF-GENERIC modifier templates (`9702e8f`, via a diverse-probe-set
+  intersection that catches only type-parameter-independent errors so a body valid at some type is not
+  over-rejected).
+- integer-vs-address arithmetic/bitwise operator on the address-literal operand path (`c3d60dd`, JETH083) -
+  `u256var + address(0)` (and `-`/`*`/`&`/..., both orders, plus the `address(0) == intVar` comparison
+  mismatch) was accepted; root cause was `retypeLiteral` declining an address-typed literal SILENTLY so
+  `unifyOperands` returned undefined with no diagnostic. The address-variable path already rejected via
+  JETH083; now the literal path emits the same. Found incidentally by the library-modifier verification.
 
 **NEW SAFE OVER-REJECTION (the only genuine new OR from this audit):** a user `@modifier` named `nonReentrant`
 is rejected (JETH499) where solc accepts `modifier nonReentrant()` - a deliberate reject to prevent the MC1
@@ -1749,6 +1758,14 @@ all BOTH-REJECT PARITY with solc, NOT over-rejections.
 **RARE PRE-EXISTING RESIDUAL OVER-ACCEPTANCES (documented, out of scope; sound bytes, never a miscompile):**
 - an `abstract` used as a plain local/field identifier (TS parses `abstract` as a modifier keyword, so the
   JETH500 walker sees no identifier node; it fires for `abstract` in the positions TS does yield a node).
-- a broken body inside an UNUSED LIBRARY `@modifier` (library modifiers are collected under the library name,
-  never body-checked; a library-scope-aware standalone check is higher-risk and was left for a future round -
-  the contract-modifier and abstract-body cases ARE closed).
+- a broken body inside an unapplied SELF-GENERIC modifier that reaches a NESTED-aggregate struct field or an
+  enum member through the bare type param (valid only at a type outside the finite probe set) stays a clean
+  reject - never instantiated, never a miscompile (the concrete / library / depth-1-struct generic cases ARE
+  closed).
+
+The whole unused-@modifier-body family (contract / abstract / library / self-generic) is now closed; the
+library-modifier residual noted in earlier revisions is CLOSED (`5d813fc`). Separately, a PRE-EXISTING SAFE
+over-rejection was confirmed (not introduced, not a bar violation - over-rejections never miscompile): an
+APPLIED generic `@modifier` whose body declares a local typed with the type parameter (`let y: U = v`) is
+rejected JETH013 "unknown type U" at the specialization site (the new UNAPPLIED generic pass correctly accepts
+the same body form); left for a follow-up.
