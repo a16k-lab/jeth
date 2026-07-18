@@ -1684,3 +1684,71 @@ LESSON: the env-read-first ordering in the diags-restore witness is load-bearing
 unlowerable construct the later storage read is lost, so an env read placed BEFORE it keeps VIEW inference robust
 (otherwise the base misinfers pure and JETH433 wrongly fires). A base-effects pass that computes effects for
 NON-DEPLOYED code must isolate BOTH its emission side effects AND its diagnostics from the deployed compilation.
+
+### 2026-07-18 FULL-AUDIT RESUME: 14 soundness fixes (2 MC + ~12 OA families) + 4 documented keeps
+
+The 2026-07-18 100% differential audit (resumed from its weekly-limit stop at `3a169c2`) verified all 10
+original MC/OA candidates deploy+run+DECODE, then ran FOUR adversarial rounds - fix -> merged-tree
+cross-verify -> close holes -> loop-until-dry re-sweep - each round finding holes the prior one left. Every
+confirmed miscompile / over-acceptance is now closed; the tightenings were proven (re-sweep, 12 agents) to add
+ZERO new over-rejection of a valid program. HEAD `053b718`, suite 499 files / 5102 tests, tsc clean, flake gate
+(`--sequence.shuffle.files`) green.
+
+**MISCOMPILES CLOSED (2):**
+- **MC1 @nonReentrant name-collision** (`5ab9463`, JETH499): a user `@modifier nonReentrant() {...}` was
+  silently treated as the built-in transient-storage guard, DROPPING the user body (a run-diff miscompile).
+  USER RULING: reject the collision.
+- **MC3 @diamond diamondCut Remove-underflow** (`df09ce6`): the packed/solidstate synthesized Remove loops used
+  a raw `sub` for the selector count; a remove-from-empty returned the not-found Error/SelectorNotFound instead
+  of solc's Panic(0x11). Routed through the checked-sub helper (USER RULING: match mudgen).
+
+**OVER-ACCEPTANCES CLOSED (~12 families):**
+- OA5 interface+class same-sig ambiguity bypassed JETH430 (`4d717b7`) - extended the diamond check to
+  single-version (interface-competing) groups.
+- OA4 / OA4b stray-abstract member types (`3646208` + `ef921de`) - undefined types in an event/error field
+  (object-literal AND bare/positional), ctor param, or @modifier param now JETH013; indexed-on-error JETH129.
+- OA6 / OA6b / EXPANDED reserved-word identifiers (`5ab9463` + `ef921de` + `2fc530d`, JETH500) - the FULL
+  solc-0.8.35 reserved-word list (69 words), at every declaration-name position. `receive`/`fallback` (JETH
+  special-entry method names) and `error` (a legal solc identifier) are EXCLUDED. USER RULING: expand to the
+  full list. Residual: `abstract` as a plain local/field name still accepts (TS parses it as a modifier
+  keyword, so the walker sees no identifier node) - a rare safe over-acceptance, documented.
+- OA7 / OA7b signed + bytesN + address/bool + dynamic-outer storage array-literal convertibility (`6b5021f` +
+  `ef921de`, JETH497) - the element-only common-type fold + storage element-wise-copy convertibility now match
+  solc; valid widening/same-type dynamic assigns stay byte-identical.
+- OA8 / OA8b unicode/BOM/format whitespace as token separators + the full `//` comment line-terminator set
+  (`80a85d2` + `ef921de`, JETH491).
+- H1 stray top-level non-declaration statement (`7637c96`, JETH501) - a bare identifier / expression / `if` /
+  `for` / `return` / `;` / non-const file-level `let` was silently ignored; now rejected.
+- H2 non-printable/non-ASCII content in a REGULAR `"..."`/`'...'` string literal (`7637c96`, JETH499) - solc
+  requires printable-ASCII-or-escape; escapes and TEMPLATE literals stay accepted + byte-identical.
+- unextended-abstract-class member BODY type-checking (`6836006`) - a broken body (undeclared id, bad type,
+  illegal @override, view-mutation, return-arity) in a never-extended abstract was accepted; now re-parsed and
+  fully analyzed. Also made stray event/error fields consistent with the deployed path (bare positional
+  `event<u256>` rejects JETH353; the object-literal `event<{x:T}>` is the canonical form).
+- unused-@modifier body type-checking (`053b718`) - a declared-but-never-applied modifier's broken body was
+  accepted (a modifier body is otherwise only checked when inlined at an application site); now checked
+  standalone (contract modifiers, all body positions, and the override-loser base declaration).
+
+**NEW SAFE OVER-REJECTION (the only genuine new OR from this audit):** a user `@modifier` named `nonReentrant`
+is rejected (JETH499) where solc accepts `modifier nonReentrant()` - a deliberate reject to prevent the MC1
+silent-drop miscompile (USER RULING). The reserved-word / string-content / top-level / whitespace rejects are
+all BOTH-REJECT PARITY with solc, NOT over-rejections.
+
+**DOCUMENTED KEEPS (not bar violations - sound bytes or unmatchable):**
+- **MC2 internal-funcref `==` with identical bodies**: solc's optimizer dedups two byte-identical function
+  bodies to one code offset so the funcref pointers compare EQUAL; JETH gives distinct dispatch ordinals so
+  UNEQUAL (same ordinal-vs-code-offset root as LT5). USER RULING: keep, documented. NB: a SILENT divergence vs
+  the optimizer-on test reference - a loud reject would be strictly bar-consistent if ever desired.
+- **Ragged / nested dynamic array literal** `[[1n,2n],[3n]]`: JETH accepts and builds a correct jagged array;
+  solc rejects ("Unable to deduce common type"). USER RULING: keep as a native-mode superset, same family as
+  the shipped `let a: T[] = [1n,2n,3n]` dynamic-array-literal feature (solc rejects that too; JETH's bytes are
+  byte-identical to solc's `new+assign`).
+- **deep-nesting** (~200+ levels): solc stack-overflows / crashes; JETH accepts with correct bytecode.
+  Genuinely unmatchable (like `gasleft`).
+
+**RARE PRE-EXISTING RESIDUAL OVER-ACCEPTANCES (documented, out of scope; sound bytes, never a miscompile):**
+- an `abstract` used as a plain local/field identifier (TS parses `abstract` as a modifier keyword, so the
+  JETH500 walker sees no identifier node; it fires for `abstract` in the positions TS does yield a node).
+- a broken body inside an UNUSED LIBRARY `@modifier` (library modifiers are collected under the library name,
+  never body-checked; a library-scope-aware standalone check is higher-risk and was left for a future round -
+  the contract-modifier and abstract-body cases ARE closed).
