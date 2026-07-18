@@ -1729,9 +1729,11 @@ ZERO new over-rejection of a valid program. HEAD `053b718`, suite 499 files / 51
   modifier body is otherwise only checked when inlined at an application site); now checked standalone across
   the WHOLE modifier family: contract modifiers + the override-loser base declaration (`053b718`); LIBRARY
   modifiers (`5d813fc`, which also closed a bonus pre-existing OA: `this.<field>` contract-state access in a
-  library modifier body); and unapplied SELF-GENERIC modifier templates (`9702e8f`, via a diverse-probe-set
-  intersection that catches only type-parameter-independent errors so a body valid at some type is not
-  over-rejected).
+  library modifier body); and unapplied SELF-GENERIC modifier templates (`9702e8f`, via a probe set of concrete
+  type-parameter bindings so a body valid at some type is not over-rejected + only type-parameter-independent
+  errors are reported; extended by `f9801a6` to also reject a MULTI-SITE conflict broken under every probe at
+  different spans, and by `80f6295` to use the CROSS-PRODUCT of probes over the type params so a valid
+  heterogeneous MULTI-type-param body `m<A,B>(a: A, b: B)` is not over-rejected).
 - integer-vs-address arithmetic/bitwise operator on the address-literal operand path (`c3d60dd`, JETH083) -
   `u256var + address(0)` (and `-`/`*`/`&`/..., both orders, plus the `address(0) == intVar` comparison
   mismatch) was accepted; root cause was `retypeLiteral` declining an address-typed literal SILENTLY so
@@ -1762,6 +1764,13 @@ all BOTH-REJECT PARITY with solc, NOT over-rejections.
   enum member through the bare type param (valid only at a type outside the finite probe set) stays a clean
   reject - never instantiated, never a miscompile (the concrete / library / depth-1-struct generic cases ARE
   closed).
+- an UNAPPLIED @modifier body whose array param is used in a DATA-LOCATION CHIMERA - `v.push(1n); v =
+  new Array<u256>(3n)` - is accepted though solc rejects every monomorphization (push needs a storage array,
+  the memory-array reassign needs a memory array; no single location permits both). The standalone
+  unapplied-modifier-body check does not pin the param's data location, so both ops pass; a normal function
+  correctly rejects `push` on a memory local (JETH043). Astronomically contrived, HARMLESS (unapplied = dead
+  code = no bytecode emitted), and shared with the non-generic unapplied path. Closing it needs data-location
+  modeling of modifier params (over-rejection risk), so it is documented rather than force-fixed.
 
 The whole unused-@modifier-body family (contract / abstract / library / self-generic) is now closed; the
 library-modifier residual noted in earlier revisions is CLOSED (`5d813fc`). Separately, a PRE-EXISTING SAFE
