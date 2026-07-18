@@ -23859,6 +23859,46 @@ export class Analyzer {
     return { kind: 'array', element: acc, length: lit.elements.length };
   }
 
+  /** L2-MOBILE (OA#7): true iff EVERY element of `lit` is an integer (a BARE int literal, or a
+   *  concrete unbranded non-enum uintN/intN) AND solc's order-sensitive element-driven common-type
+   *  fold finds NO common type. This is solc's hard "Unable to deduce common type for array elements"
+   *  TypeError, which fires during the LITERAL's own typing - at EVERY landing (a storage element-wise
+   *  copy included), BEFORE any target conversion. The expected-push path would otherwise TARGET-DRIVE
+   *  each element into the declared element type and OVER-ACCEPT `[1n, -1n]` into `Arr<i8,2>` (solc's
+   *  seed-then-fold is uint8 then int8: -1 does not fit uint8 and uint8 does not fit int8, so no common
+   *  type), while the byte-identically-typed `[-1n, 1n]` (seed int8, 1 fits int8) rightly ACCEPTS.
+   *
+   *  Deliberately restricted to ALL-integer elements. The fold's other undefined origins are left to
+   *  the existing expected-push / arrLitMemoryConvError paths unchanged: a bytesN element keeps the
+   *  unmodelled literal->bytesN zero quirk (`[bytes32(0), 0]` still ACCEPTS - solc converts the zero
+   *  literal to bytes32), and an un-typable / value-too-big element (litMobileType undefined) stays a
+   *  fall-through rather than a new reject on a shape whose solc type this fold does not certainly know. */
+  private arrLitIntElementsHaveNoCommonType(lit: ts.ArrayLiteralExpression): boolean {
+    if (lit.elements.length === 0) return false;
+    const descs: { lit?: bigint; type?: JethType }[] = [];
+    for (const el of lit.elements) {
+      const v = this.bareIntLiteralValue(el);
+      if (v !== undefined) {
+        descs.push({ lit: v });
+        continue;
+      }
+      // A concrete element only participates when solc types it as a plain (unbranded, non-enum)
+      // integer; anything else (bytesN / address / bool / enum / brand / struct / array / a non-quiet
+      // expression) is NOT this reject family and falls through to the existing paths.
+      const t = this.litElemIntrinsicType(el);
+      if (!t || !isInteger(t) || isEnum(t) || (t as { brand?: string }).brand) return false;
+      descs.push({ type: t });
+    }
+    let acc = descs[0]!.type ?? this.litMobileType(descs[0]!.lit!);
+    if (!acc) return false; // element 0's value fits no int type: solc rejects too, but not via THIS path
+    for (let i = 1; i < descs.length; i++) {
+      const c = this.solcCommonElemType(acc, descs[i]!);
+      if (!c) return true; // no common element type -> solc's "Unable to deduce common type" reject
+      acc = c;
+    }
+    return false; // a common integer type exists (the fold succeeds) - not this reject
+  }
+
   /** ARRLIT-CONV: is the array literal currently being checked landing in a STORAGE NON-POINTER target,
    *  i.e. a target solc fills with an ELEMENT-WISE COPY? Solc's ArrayType::isImplicitlyConvertibleTo has
    *  exactly two branches, and this flag selects between them (all probed at 0.8.35):
@@ -23948,6 +23988,50 @@ export class Analyzer {
     const selfT = this.selfTypeArrayLit(lit);
     if (!selfT || typesEqual(selfT.element, expected.element)) return undefined;
     return `type ${displayName(selfT)} is not implicitly convertible to expected type ${displayName(expected)}: an inline array literal is typed from its ELEMENTS ONLY (the expected type is not pushed into it), and a memory array conversion requires an IDENTICAL element type (only a copy into storage converts element-wise); cast the first element (e.g. [${displayName(expected.element)}(...), ...])`;
+  }
+
+  /** ARRLIT-CONV (L2-MOBILE OA#7, storage half): solc's array-literal convertibility check at a STORAGE
+   *  NON-POINTER landing (the element-wise-copy branch). Unlike the memory branch, the storage copy allows
+   *  the literal's SELF-TYPED element to be merely IMPLICITLY CONVERTIBLE (not identical) to the target -
+   *  `uint256[2] s; s = [1,2];` ACCEPTS (uint8 -> uint256). But the conversion must still be one solc
+   *  performs IMPLICITLY: a uintN-mobile literal ([1,2] -> uint8[2]) does NOT convert to a SIGNED array
+   *  (`int8[2] s; s = [1,2];` is a TypeError - uint8 is not implicitly convertible to int8), and the same
+   *  for any width. JETH's expected-push target-drove each bare literal into the signed element and
+   *  OVER-ACCEPTED; this closes it. Recurses through nested fixed arrays exactly like solc's storage copy
+   *  (`int8[2][2] s; s = [[1,2],[3,4]];` rejects, `uint256[2][2] s; s = [[1,2],[3,4]];` accepts). Returns
+   *  undefined (leave to existing behavior) when the literal is not self-typeable (bytesN-zero quirk, an
+   *  un-typable element) or the target outer is dynamic (JETH sugar, no solc literal spelling). */
+  private arrLitStorageConvError(
+    lit: ts.ArrayLiteralExpression,
+    expected: JethType & { kind: 'array' },
+  ): string | undefined {
+    if (expected.length === undefined) return undefined;
+    const selfT = this.selfTypeArrayLit(lit);
+    if (!selfT) return undefined;
+    if (this.arrTypeStorageConvertible(selfT, expected)) return undefined;
+    return `type ${displayName(selfT)} is not implicitly convertible to storage type ${displayName(expected)}: a storage array copy converts each element IMPLICITLY (widening a value or an int of the same signedness), but the element type solc infers for this literal does not implicitly convert to the target element type (e.g. an unsigned literal array cannot fill a signed array); cast the first element (e.g. [${displayName(expected.element)}(...), ...])`;
+  }
+
+  /** L2-MOBILE (OA#7): does solc's storage element-wise array copy accept `from` into `to`? This check
+   *  only ever ADDS a reject it is CERTAIN about (an unsigned literal array into a signed storage array
+   *  and the like), so it returns `true` (convertible - do NOT reject) for every shape it does not
+   *  confidently judge. It descends only through equal-length FIXED arrays and judges a value LEAF: a
+   *  plain (unbranded, non-enum) INTEGER leaf must be IMPLICITLY convertible to the target integer leaf
+   *  (uint8 -> uint256 yes, uint8 -> int8 no, int8 -> int256 yes), using litElemConvertibleTo as solc's
+   *  implicit-conversion oracle. Any DYNAMIC array (length undefined - e.g. the inner `u256[]` of a
+   *  `u256[][2]`), an unequal-length or array/non-array shape mix, or a non-integer leaf (bytesN /
+   *  bool / address / enum / brand / struct) is LEFT ALONE (returns true), preserving the prior behavior
+   *  for every shape outside this over-acceptance family. */
+  private arrTypeStorageConvertible(from: JethType & { kind: 'array' }, to: JethType & { kind: 'array' }): boolean {
+    if (from.length === undefined || to.length === undefined || from.length !== to.length) return true;
+    const fe = from.element;
+    const te = to.element;
+    if (fe.kind === 'array' && te.kind === 'array') return this.arrTypeStorageConvertible(fe, te);
+    if (fe.kind === 'array' || te.kind === 'array') return true; // shape mix - not this family
+    // Only a plain-integer leaf mismatch is a certain solc reject; leave every other leaf alone.
+    if (!isInteger(fe) || !isInteger(te) || isEnum(fe) || isEnum(te) || (fe as { brand?: string }).brand || (te as { brand?: string }).brand)
+      return true;
+    return this.litElemConvertibleTo({ type: fe }, te);
   }
 
   private checkExpr(node: ts.Expression, expected?: JethType): Expr | undefined {
@@ -25045,6 +25129,21 @@ export class Analyzer {
         );
         return undefined;
       }
+      // L2-MOBILE (OA#7 SOUNDNESS): a fixed array literal whose elements are ALL integers but have NO
+      // deducible common element type is solc's hard "Unable to deduce common type for array elements"
+      // TypeError, raised while typing the LITERAL ITSELF - at EVERY landing (a storage element-wise
+      // copy included) and BEFORE any target conversion. Without this the expected-push loop below would
+      // target-drive each element into the declared element type and OVER-ACCEPT `[1n, -1n]` into
+      // `Arr<i8,2>` (solc rejects; the reversed `[-1n, 1n]` still ACCEPTS - see the helper). Runs
+      // unconditionally so it also fires for a nested inner literal and a storage assignment.
+      if (expected.length !== undefined && this.arrLitIntElementsHaveNoCommonType(node)) {
+        this.diags.error(
+          node,
+          'JETH497',
+          'array-literal elements have no common type: solc types an inline array from its ELEMENTS ONLY and a non-negative int literal (uintN-mobile) does not unify with a negative int literal (intN-mobile) - "Unable to deduce common type for array elements"; reorder so a negative literal seeds the type, or cast the first element',
+        );
+        return undefined;
+      }
       // ARRLIT-CONV (SOUNDNESS): at a MEMORY / calldata / storage-pointer landing solc requires the
       // literal's SELF-TYPED element type to be IDENTICAL to the expected element type; only a copy INTO
       // STORAGE converts element-wise (arrLitCtx.elemWiseCopy carries that permission). JETH pushed `expected`
@@ -25054,8 +25153,15 @@ export class Analyzer {
       // same in the assign / return / call-arg / struct-constructor-field positions. An OVER-ACCEPTANCE.
       // The check runs at the OUTERMOST literal of a landing only (see withArrLitCtx for why a nested
       // element never runs it), and never under the storage element-wise-copy permission.
-      if (!arrLitCtx.elemWiseCopy && !arrLitCtx.nestedElem) {
-        const convErr = this.arrLitMemoryConvError(node, expected);
+      if (!arrLitCtx.nestedElem) {
+        // MEMORY / calldata / storage-pointer landing: element type must be IDENTICAL. STORAGE
+        // element-wise-copy landing (elemWiseCopy): element type must be IMPLICITLY CONVERTIBLE
+        // (widening / same-signedness), which the prior lift skipped entirely - a hole that let an
+        // unsigned literal array fill a signed storage array. Both run at the OUTERMOST literal only
+        // (a nested element's conversion is covered by its parent's recursive check).
+        const convErr = arrLitCtx.elemWiseCopy
+          ? this.arrLitStorageConvError(node, expected)
+          : this.arrLitMemoryConvError(node, expected);
         if (convErr) {
           this.diags.error(node, 'JETH497', convErr);
           return undefined;

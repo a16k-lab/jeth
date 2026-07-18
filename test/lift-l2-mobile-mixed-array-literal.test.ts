@@ -217,4 +217,61 @@ describe('L2-MOBILE lift - mixed cast/bare array literals self-type byte-identic
     expect(solRejects(S), 'solc accepts this (the quirk)').toBe(false);
     expect(rejects(J), 'JETH deliberately rejects it (safe over-rejection)').toBe(true);
   });
+
+  // OA#7: the ALL-BARE signed common-type hole. With a DECLARED target the fold must still be run over
+  // the ELEMENTS (never target-driven): a non-negative int literal (uintN-mobile) does not unify with a
+  // negative int literal (intN-mobile), so `[1, -1]` is a solc "Unable to deduce common type" TypeError
+  // at EVERY landing (memory local, storage assign, struct-ctor field, call arg), while the reversed
+  // `[-1, 1]` (int8-seeded) ACCEPTS. Previously JETH target-drove each bare literal into the signed
+  // element and OVER-ACCEPTED `[1n,-1n]`.
+  it('rejects all-bare [1,-1] into a signed target at every landing (solc: no common type)', () => {
+    for (const w of ['i8', 'i16', 'i256']) {
+      const sw = w === 'i8' ? 'int8' : w === 'i16' ? 'int16' : 'int256';
+      const rows: [string, string][] = [
+        [
+          `class C { f(): External<void> { let a: Arr<${w},2> = [1n,-1n]; } }`,
+          `contract C { function f() external { ${sw}[2] memory a = [1,-1]; } }`,
+        ],
+        [
+          `class C { s: Arr<${w},2>; f(): External<void> { this.s = [1n,-1n]; } }`,
+          `contract C { ${sw}[2] s; function f() external { s = [1,-1]; } }`,
+        ],
+      ];
+      for (const [J, S] of rows) {
+        expect(solRejects(S), `solc rejects ${sw} [1,-1]`).toBe(true);
+        expect(rejects(J), `JETH rejects ${w} [1,-1]`).toBe(true);
+      }
+    }
+  });
+
+  it('accepts the reversed all-bare [-1,1] into a signed target, byte-identical (int8-seeded)', async () => {
+    await diff(
+      'class C { get f(): External<Arr<i8,2>> { let a: Arr<i8,2> = [-1n,1n]; return a; } }',
+      'contract C { function f() external pure returns (int8[2] memory) { int8[2] memory a = [-1,1]; return a; } }',
+      [['f()', '']],
+    );
+  });
+
+  // OA#7 (storage half): a storage element-wise copy converts each element IMPLICITLY, so an UNSIGNED
+  // literal array ([1,2] -> uint8[2]) does NOT fill a SIGNED storage array (uint8 is not implicitly
+  // convertible to int8) - a solc TypeError JETH previously over-accepted. Same-signedness widening
+  // (uint8 -> uint256) still ACCEPTS.
+  it('rejects an unsigned literal array into a signed storage array (solc parity)', () => {
+    const J = 'class C { s: Arr<i8,2>; f(): External<void> { this.s = [1n,2n]; } }';
+    const S = 'contract C { int8[2] s; function f() external { s = [1,2]; } }';
+    expect(solRejects(S)).toBe(true);
+    expect(rejects(J)).toBe(true);
+  });
+
+  it('accepts an unsigned literal array widening into a wider unsigned storage array, byte-identical', async () => {
+    await diff(
+      'class C { s: Arr<u256,2>; set(): External<void> { this.s = [1n,2n]; } get g(i: u256): External<u256> { return this.s[i]; } }',
+      'contract C { uint256[2] s; function set() external { s = [1,2]; } function g(uint256 i) external view returns (uint256){ return s[i]; } }',
+      [
+        ['set()', ''],
+        ['g(uint256)', pad32(0n)],
+        ['g(uint256)', pad32(1n)],
+      ],
+    );
+  });
 });

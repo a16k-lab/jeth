@@ -100,9 +100,12 @@ describe('whole fixed-value-word-array field of a memory struct as an aggregate 
       'struct Q { bytes32[2] nums; } contract C { function f(bytes32 x, bytes32 y) external pure returns(bytes memory){ Q memory q=Q([x,y]); return abi.encode(q.nums); } }',
       [['f(bytes32,bytes32)', 'aa'.padStart(64, '0') + 'bb'.padStart(64, '0')]],
     );
-    // int256[3] with a negative element
+    // int256[3] with a negative element. The first element is CAST to seed the array type to int256,
+    // matching the solc mirror (which likewise casts int256(1)). A BARE [1n,-2n,3n] is a solc TypeError
+    // ("Unable to deduce common type": seed uint8 from 1, then int8 from -2, which do not unify) - JETH
+    // rejects it identically (L2-MOBILE OA#7); the cast makes both sides the same accepting program.
     const [ret] = await eqDecode(
-      'type Q = { nums: Arr<i256,3> }; class C { get f(): External<bytes> { let q: Q = Q([1n,-2n,3n]); return abi.encode(q.nums); } }',
+      'type Q = { nums: Arr<i256,3> }; class C { get f(): External<bytes> { let q: Q = Q([i256(1n),-2n,3n]); return abi.encode(q.nums); } }',
       'struct Q { int256[3] nums; } contract C { function f() external pure returns(bytes memory){ Q memory q=Q([int256(1),-2,3]); return abi.encode(q.nums); } }',
       [['f()', '']],
     );
