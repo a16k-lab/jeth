@@ -12725,7 +12725,10 @@ ${indent(runtime, 6)}
     // step the cursor back
     L('      switch _selectorInSlotIndex');
     L('      case 0 {');
-    L('        _selectorSlotCount := sub(_selectorSlotCount, 1)');
+    // mudgen's `selectorSlotCount--` is a CHECKED uint256 subtraction: remove-below-zero (remove from an
+    // empty diamond / remove more than present) underflows to Panic(0x11) BEFORE the not-found check, so
+    // route through the checked helper to match the reference returndata exactly (MC#3).
+    L(`        _selectorSlotCount := ${this.checkedSubUint(256)}(_selectorSlotCount, 1)`);
     L(`        mstore(0x00, _selectorSlotCount)`);
     L(`        mstore(0x20, ${SLOTS})`);
     L('        _selectorSlot := sload(keccak256(0x00, 0x40))');
@@ -12931,7 +12934,10 @@ ${indent(runtime, 6)}
     L('    }');
     L('    let _si := 0');
     L('    for { } lt(_si, _selsLen) { _si := add(_si, 1) } {');
-    L('      _selectorCount := sub(_selectorCount, 1)');
+    // solidstate's `selectorCount--` is a CHECKED uint256 subtraction at the top of the loop: remove-below-
+    // zero underflows to Panic(0x11) BEFORE the SelectorNotFound check, so route through the checked helper
+    // to match the reference returndata exactly (MC#3).
+    L(`      _selectorCount := ${this.checkedSubUint(256)}(_selectorCount, 1)`);
     L(`      let _sel := and(calldataload(add(_selsData, mul(_si, 0x20))), ${SELMASK})`);
     L(`      mstore(0x00, _sel)`);
     L(`      mstore(0x20, ${FACETS})`);
