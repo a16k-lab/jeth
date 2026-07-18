@@ -1801,16 +1801,40 @@ stash-diff verified), and byte-identity holds across value / bytes / string / dy
 struct / funcref / enum / branded instantiations and every body shape (pre-only / post-placeholder /
 conditional / whole-body / constructor-applied) plus multi-type-param.
 
-**PRE-EXISTING SAFE over-rejection kept (NOT introduced by the lift above; different root cause):** a generic
-`@modifier` applied to a **CONSTRUCTOR** that uses a **pointer-headed AGGREGATE** type argument (struct /
-dynamic-field struct / fixed array `Arr<T,N>`) as a **WHOLE VALUE** rvalue - `this.sp = v` (whole storage
-assign), `this.sum(y)` (internal-fn arg), `emit(Ev(y))` (event arg) - rejects JETH085 ("cannot assign u256 to
-P"), where the equivalent solc monomorph compiles + runs. ROOT CAUSE: in `inlineModifierBodyIntoCtor` the
-whole-value rvalue of a T-typed name at a pointer-headed aggregate resolves to `u256` (the reference-typed
-bytes / `u256[]` path works; field-wise `this.sp.a = v.a` works; the FUNCTION site `buildModifierWrap` whole-
-assign works; a NON-generic ctor modifier whole-assign works). Confirmed PRE-EXISTING via stash-diff (rejects on
-pristine HEAD too, only the diagnostic cascade differs - pre-lift it also emitted JETH013 for the `let y:U`; the
-lift removed that cascade). SAFE (never wrong bytes); the pointer-headed-aggregate ctor-copy surface is
-historically miscompile-prone, so this is documented rather than force-fixed. Locus for a future fix:
-`src/analyzer.ts inlineModifierBodyIntoCtor` - resolve the T-typed identifier's whole-value rvalue type through
-the binding for pointer-headed aggregates, reusing the (proven-correct) non-generic-ctor codegen.
+**Generic `@modifier` on a CONSTRUCTOR with a pointer-headed AGGREGATE whole-value - LIFTED byte-identical
+(`4541fd1`).** A generic `@modifier` applied to a **CONSTRUCTOR** using a pointer-headed aggregate type argument
+(struct / dynamic-field struct / fixed array `Arr<T,N>`) as a **WHOLE VALUE** - `this.sp = v` (whole storage
+assign), a body local `let y: T = v; this.sp = y`, `this.sum(y)` (internal-fn arg), `emit(Ev(y))` (event arg) -
+was over-rejected JETH085 "cannot assign u256 to P" where the solc monomorph compiles + runs. ROOT CAUSE (an
+ANALYSIS-ORDERING bug, NOT codegen - the earlier "inlineModifierBodyIntoCtor resolves the rvalue to u256"
+diagnosis was WRONG, corrected by instrumenting the JETH085 emission stack): the standalone unapplied-generic-
+modifier-body pass type-checks a generic body under a FINITE probe set (u256/i256/bool/address/bytes/string/
+bytes32/array/enum/synthesized-struct) and rejects only errors firing under EVERY probe. A ctor-applied generic
+was not yet in `appliedGenericModifierNames` when that pass ran (constructor lowering runs LATER than function
+lowering), so a body valid ONLY at the real non-probe instantiation type - a user struct `P` - errored under
+every probe and was wrongly rejected as uninstantiable. A FUNCTION application already marks the template applied
+before the pass, which is exactly why the same body accepted on a function but not a constructor. FIX: pre-scan
+the route's constructor chain (`this.ctorChain`) for generic-modifier application names and add them to
+`appliedGenericModifierNames` before the standalone pass, excluding a ctor-applied template from it (identical to
+how a function application suppresses it). The real monomorph is still type-checked at the ctor inline site (which
+runs for every ctor in the chain, including the abstract-check route), so a genuinely broken ctor-applied body is
+still caught there. CODEGEN-NEUTRAL (the ctor inline codegen was always correct, only gated behind the spurious
+analysis reject). SOUND: a 4-lens adversarial verify (~122 cases, git-stash-proven non-vacuous) found 0 MC / 0 OA
+/ 0 new over-rejection - byte-identical across struct / nested / dyn-field / bytes-and-string-field / enum /
+`Arr<u256,N>` instantiations x whole-assign / body-local / internal-fn-arg / emit(+logs) / abi.encode / return
+consumers x inheritance / multi-level / merged-ctor / payable / mixed-modifier / multi-type-param / all body
+shapes; a broken ctor-applied body still rejects at the inline site; a sibling never-applied broken generic is
+still checked (no over-suppression); `Arr<In,N>` whole mem->storage copy stays a matching both-reject (JETH470 =
+solc legacy UnimplementedFeatureError). Note the diagnostic cascade also improved: pre-`9b780cd` the body-local
+form additionally emitted JETH013 for `let y:T`; the U-typed-local lift removed that, and this fix removes the
+remaining JETH085.
+
+**PRE-EXISTING SAFE over-rejections in the same neighbourhood (NOT introduced by either lift; orthogonal, kept):**
+(1) a struct with a dynamic array field constructed from an INLINE fixed-array literal - `D(7n, [u256(1n),2n,3n])`
+where `D = { a: u256; xs: u256[] }` - rejects JETH226 ("struct field xs expects u256[], got u256[3]"); the same
+literal is rejected identically in a plain body local / function arg (a general fixed-array-literal-to-dynamic-
+array-field coercion gap, not modifier-specific; the helper-built `@m(this.mk())` path is byte-identical). (2) a
+bare string LITERAL as a generic `@modifier` param argument - `@m("hi")` with `v: T` - is over-rejected ("a
+string literal is only valid where a string/bytes value is expected"); it also fires on a FUNCTION application, so
+it is a general generic-modifier string-literal-arg gap (a NON-generic modifier string param accepts). Both are
+safe (never wrong bytes) and independent of the ctor path.
