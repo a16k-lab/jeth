@@ -10844,9 +10844,34 @@ export class Analyzer {
     // valid at that type (solc's matching monomorphization accepts), so JETH must accept - we stop and emit
     // nothing. If every probe errors, the body type-checks for NO instantiation and must be rejected.
     let allErrored = true;
-    for (const probe of probes) {
-      const binding = new Map<string, JethType>();
-      for (const tp of gen.typeParams) binding.set(tp, probe);
+    // Enumerate candidate BINDINGS. For a SINGLE type parameter this is one binding per probe. For MULTIPLE
+    // type parameters a UNIFORM binding (all params = the same probe) would spuriously conclude "broken for
+    // every instantiation" for a valid HETEROGENEOUS-param body (e.g. `m<A,B>(a: A, b: B) { require(a > 0n);
+    // require(b && true) }` type-checks at A=uint256, B=bool), so use the CROSS-PRODUCT of probes over the
+    // type params: the body is broken for every instantiation iff it errors under EVERY combination. Capped at
+    // 2 type params (a modifier never has more); the (absurd) >2 case falls back to uniform bindings.
+    const bindings: Map<string, JethType>[] = [];
+    if (gen.typeParams.length === 0) bindings.push(new Map());
+    else if (gen.typeParams.length <= 2) {
+      const build = (i: number, cur: Map<string, JethType>): void => {
+        if (i === gen.typeParams.length) {
+          bindings.push(new Map(cur));
+          return;
+        }
+        for (const probe of probes) {
+          cur.set(gen.typeParams[i]!, probe);
+          build(i + 1, cur);
+        }
+      };
+      build(0, new Map());
+    } else {
+      for (const probe of probes) {
+        const m = new Map<string, JethType>();
+        for (const tp of gen.typeParams) m.set(tp, probe);
+        bindings.push(m);
+      }
+    }
+    for (const binding of bindings) {
       const mark = this.diags.items.length;
       this.withTypeBinding(binding, () => {
         // instanceKey set: collectModifier fully resolves the template's params + shape under the binding

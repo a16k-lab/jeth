@@ -877,6 +877,21 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
       // v.length is valid at bytes (the bytes probe accepts).
       expect(codes(`class C { x: u256; @modifier m<T>(v: T) { require(v.length > 0n, "x"); _; } get z(): External<u256> { return this.x; } }`)).toEqual([]);
     });
+    // MULTI-TYPE-PARAM: the "all probes errored" guard uses the CROSS-PRODUCT of probes over the type params,
+    // so a valid HETEROGENEOUS-param body (a: uint, b: bool) is NOT over-rejected (a mixed binding type-checks),
+    // while a genuine conflict on one param (no valid instantiation) still rejects.
+    it('no over-rejection: multi-type-param heterogeneous body stays accepted (cross-product binding)', () => {
+      const J = `class C { x: u256; @modifier m<A,B>(a: A, b: B) { require(a > 0n, "x"); require(b && true, "y"); _; } get z(): External<u256> { return this.x; } }`;
+      const S = `contract C { uint256 x; modifier m(uint256 a, bool b) { require(a > 0, "x"); require(b && true, "y"); _; } function z() external view returns(uint256){ return x; } }`;
+      expect(codes(J)).toEqual([]);
+      expect(solcRejects(S)).toBe(false);
+    });
+    it('OA close: multi-type-param conflict on one param still rejects (no valid instantiation)', () => {
+      const J = `class C { x: u256; @modifier m<A,B>(a: A, b: B) { let p: bool = a; let q: u256 = a; _; } get z(): External<u256> { return this.x; } }`;
+      const S = `contract C { uint256 x; modifier m(uint256 a, bool b) { bool p = a; uint256 q = a; _; } function z() external view returns(uint256){ return x; } }`;
+      expect(codes(J)).toContain('JETH085');
+      expect(solcRejects(S)).toBe(true);
+    });
     it('OA close: call to a non-existent function', () => {
       const J = `class C { @modifier m<U>() { nope(); _; } get z(): External<u256> { return 7n; } }`;
       const S = `contract C { modifier m() { nope(); _; } function z() external pure returns(uint256){ return 7; } }`;
