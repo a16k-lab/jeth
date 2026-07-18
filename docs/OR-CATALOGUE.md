@@ -1782,8 +1782,35 @@ all BOTH-REJECT PARITY with solc, NOT over-rejections.
   sides, pre-existing, code/message-only difference, not a bar violation.)
 
 The whole unused-@modifier-body family (contract / abstract / library / self-generic) is now closed; the
-library-modifier residual noted in earlier revisions is CLOSED (`5d813fc`). Separately, a PRE-EXISTING SAFE
-over-rejection was confirmed (not introduced, not a bar violation - over-rejections never miscompile): an
-APPLIED generic `@modifier` whose body declares a local typed with the type parameter (`let y: U = v`) is
-rejected JETH013 "unknown type U" at the specialization site (the new UNAPPLIED generic pass correctly accepts
-the same body form); left for a follow-up.
+library-modifier residual noted in earlier revisions is CLOSED (`5d813fc`).
+
+**APPLIED generic `@modifier` U-typed body local / annotation - LIFTED byte-identical (`9b780cd`).** An
+APPLIED generic `@modifier` whose body declares a local typed with the type parameter (`let y: U = v`, or any
+U-typed annotation in the body) was over-rejected JETH013 "unknown type U": `collectModifier` stores the body's
+RAW TS statements and they were re-checked at each application site OUTSIDE the monomorphization `withTypeBinding`
+that was active during collection, so `U` did not resolve. FIX: `RawModifier` now carries the concrete
+`binding` (type-param -> instantiation type) captured at monomorphization; `withModifierTypeBinding` restores it
+around the body lowering at all three application sites (`buildModifierWrap`, `inlineModifier`,
+`inlineModifierBodyIntoCtor`), so `U` resolves to the concrete type - matching solc's monomorphized modifier
+body. The binding is restored ONLY around the modifier body (the caller-scope application args stay outside it),
+so it does not leak into the wrapped function / sibling methods / the arg expressions. SOUND: a 6-lens adversarial
+verify (deploy+run+decode, 0 confirmed bar violations) proved zero MC / zero OA / zero NEW over-rejection - a
+body broken AT the concrete instantiation still rejects (the checker is as strict as solc on the substituted
+body), the binding is a genuine no-op for non-generic modifiers (byte-identical creation/runtime bytecode,
+stash-diff verified), and byte-identity holds across value / bytes / string / dynamic-array / fixed-array /
+struct / funcref / enum / branded instantiations and every body shape (pre-only / post-placeholder /
+conditional / whole-body / constructor-applied) plus multi-type-param.
+
+**PRE-EXISTING SAFE over-rejection kept (NOT introduced by the lift above; different root cause):** a generic
+`@modifier` applied to a **CONSTRUCTOR** that uses a **pointer-headed AGGREGATE** type argument (struct /
+dynamic-field struct / fixed array `Arr<T,N>`) as a **WHOLE VALUE** rvalue - `this.sp = v` (whole storage
+assign), `this.sum(y)` (internal-fn arg), `emit(Ev(y))` (event arg) - rejects JETH085 ("cannot assign u256 to
+P"), where the equivalent solc monomorph compiles + runs. ROOT CAUSE: in `inlineModifierBodyIntoCtor` the
+whole-value rvalue of a T-typed name at a pointer-headed aggregate resolves to `u256` (the reference-typed
+bytes / `u256[]` path works; field-wise `this.sp.a = v.a` works; the FUNCTION site `buildModifierWrap` whole-
+assign works; a NON-generic ctor modifier whole-assign works). Confirmed PRE-EXISTING via stash-diff (rejects on
+pristine HEAD too, only the diagnostic cascade differs - pre-lift it also emitted JETH013 for the `let y:U`; the
+lift removed that cascade). SAFE (never wrong bytes); the pointer-headed-aggregate ctor-copy surface is
+historically miscompile-prone, so this is documented rather than force-fixed. Locus for a future fix:
+`src/analyzer.ts inlineModifierBodyIntoCtor` - resolve the T-typed identifier's whole-value rvalue type through
+the binding for pointer-headed aggregates, reusing the (proven-correct) non-generic-ctor codegen.
