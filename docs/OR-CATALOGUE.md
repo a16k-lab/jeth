@@ -1764,13 +1764,22 @@ all BOTH-REJECT PARITY with solc, NOT over-rejections.
   enum member through the bare type param (valid only at a type outside the finite probe set) stays a clean
   reject - never instantiated, never a miscompile (the concrete / library / depth-1-struct generic cases ARE
   closed).
-- an UNAPPLIED @modifier body whose array param is used in a DATA-LOCATION CHIMERA - `v.push(1n); v =
-  new Array<u256>(3n)` - is accepted though solc rejects every monomorphization (push needs a storage array,
-  the memory-array reassign needs a memory array; no single location permits both). The standalone
-  unapplied-modifier-body check does not pin the param's data location, so both ops pass; a normal function
-  correctly rejects `push` on a memory local (JETH043). Astronomically contrived, HARMLESS (unapplied = dead
-  code = no bytecode emitted), and shared with the non-generic unapplied path. Closing it needs data-location
-  modeling of modifier params (over-rejection risk), so it is documented rather than force-fixed.
+- ~~an UNAPPLIED @modifier body whose array param is used in a DATA-LOCATION CHIMERA~~ **CLOSED (`bcfb8ad`).**
+  `@modifier m(v: u256[]) { v.push(1n); _; }` (and its `v.push(1n); v = new Array<u256>(3n)` chimera and generic
+  variants) was over-accepted while solc rejects the memory-array push at every monomorphization. ROOT CAUSE (the
+  earlier residual note misdiagnosed it): the `u256[]` param IS already a `memArray` base; a memory-array push was
+  simply rejected only at CODEGEN (the generic JETH900 in yul.ts), which fires solely when the body is lowered -
+  and a declared-but-UNAPPLIED @modifier body is type-checked into a discarded sink and never lowered, so JETH900
+  never ran. FIX: one analysis-time gate in `checkArrayMutator` (`analyzer.ts:~13008`) - a `memArray`/`memArrayExpr`
+  base emits JETH210, the memory analog of the calldata (JETH214) / fixed (JETH218) rejects just above it. Because
+  it fires during type-checking it catches the never-lowered body; the generic + chimera cases close for free (the
+  generic probe checker routes every monomorphization through the same body path). SOUND: solc never accepts
+  push/pop on a memory array, so it only turns an over-acceptance (or the normal-fn codegen reject) into a clean
+  analysis-time reject - proven with a 29-case no-new-over-rejection control sweep (v.length / v[i] / abi.encode(v)
+  / pass-to-internal-fn / storage `this.arr.push` / nested `this.dd[i].push` / applied-modifier valid body all still
+  accept + byte-identical). Diagnostics-only; byte-identity unaffected. (Residual: a struct-element `P[]` /
+  dyn-struct `D[]` memory array param push/pop rejects via JETH214 rather than JETH210 - a clean reject on both
+  sides, pre-existing, code/message-only difference, not a bar violation.)
 
 The whole unused-@modifier-body family (contract / abstract / library / self-generic) is now closed; the
 library-modifier residual noted in earlier revisions is CLOSED (`5d813fc`). Separately, a PRE-EXISTING SAFE
