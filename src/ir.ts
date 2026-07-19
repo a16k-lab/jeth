@@ -543,6 +543,10 @@ export type Stmt =
   // the decoded params, capturing the result into the dispatch's `ret` register(s). Never appears in
   // a normal body or a constructor.
   | { kind: 'modifierBody' }
+  // A modifier's bare return exits only that modifier layer. The layer marker gives lowering a local
+  // activity flag, while modifierLayerReturn clears it so enclosing modifier code resumes normally.
+  | { kind: 'modifierLayer'; body: Stmt[] }
+  | { kind: 'modifierLayerReturn' }
   // W5D-1 (P1-20): CONSTRUCTOR-body / constructor-LEVEL outlining for return-involving ctor shapes.
   // The BIND node appears exactly ONCE, at a point where the level's ctor params are un-shadowed: the
   // emitter resolves each param's current register, lowers `body` as a synthesized CREATION-block Yul

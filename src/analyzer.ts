@@ -10319,27 +10319,6 @@ export class Analyzer {
       );
       return { body: bodyIR };
     }
-    // W5D-1 SOUNDNESS FIX: solc scopes a bare `return;` in a modifier to THAT modifier LAYER - control
-    // resumes after the `_` in the ENCLOSING modifier (verified vs 0.8.35). The buffered lowering's
-    // emitModifierReturn exits the WHOLE function, which is equivalent ONLY when every enclosing layer
-    // has no code after its placeholder (a pre-only tail). A bare return in a NON-OUTERMOST modifier
-    // under a post-code/conditional/multi-placeholder outer layer therefore MISCOMPILED (outer post
-    // code skipped); keep it a clean reject until per-layer outlining exists for functions.
-    {
-      const metas = apps.map((a) => this.modifiersByName.get(a.name));
-      const preOnlyTail = (m: RawModifier | undefined): boolean =>
-        m !== undefined && m.postStmts.length === 0 && m.bodyStmts === undefined;
-      for (let mi = 1; mi < metas.length; mi++) {
-        if (metas[mi]?.hasBareReturn && metas.slice(0, mi).some((o) => !preOnlyTail(o))) {
-          this.diags.error(
-            rf.node,
-            'JETH323',
-            `a bare 'return;' in a nested (non-outermost) @modifier under an enclosing modifier with post-placeholder or conditional code is not supported yet (solc resumes after the enclosing '_', which the whole-function-exit lowering cannot express)`,
-          );
-          return { body: bodyIR };
-        }
-      }
-    }
     // JETH323 LIFTED for FUNCTION shapes: the synthesized body function userfn_<key> is a NORMAL
     // internal function, so it supports aggregate/dynamic PARAMS, a MULTI-VALUE return, and an aggregate
     // RETURN (struct / fixed / value-element dynamic array). The dispatch materializes each decoded param
@@ -10456,14 +10435,18 @@ export class Analyzer {
       const savedModOwnerC = this.bodyOwnerContract;
       if (mod.definingContract !== undefined) this.bodyOwnerContract = mod.definingContract;
       const bodyC = mod.bodyStmts;
+      const savedLayerReturnC = this.currentModifierLayerReturn;
+      this.currentModifierLayerReturn = mod.hasBareReturn === true;
       this.withModifierTypeBinding(mod, () => {
         for (const s of bodyC) this.checkStatement(s, VOID, lowered);
       });
+      this.currentModifierLayerReturn = savedLayerReturnC;
       this.bodyOwnerContract = savedModOwnerC;
       this.placeholderInner = savedPlaceholder;
       this.popScope();
       this.scopes = savedScopesC;
-      return [{ kind: 'block', body: [...argDecls, ...lowered] }];
+      const layerBody: Stmt[] = [...argDecls, ...lowered];
+      return [mod.hasBareReturn ? { kind: 'modifierLayer', body: layerBody } : { kind: 'block', body: layerBody }];
     }
     // 2. (top-level placeholder) Check pre AND post in the SAME fresh scope (only the modifier's params
     //    + contract state), under the modifier's DECLARING class (see above).
@@ -10475,16 +10458,20 @@ export class Analyzer {
     if (mod.definingContract !== undefined) this.bodyOwnerContract = mod.definingContract;
     const pre: Stmt[] = [];
     const post: Stmt[] = [];
+    const savedLayerReturn = this.currentModifierLayerReturn;
+    this.currentModifierLayerReturn = mod.hasBareReturn === true;
     this.withModifierTypeBinding(mod, () => {
       for (const s of mod.preStmts) this.checkStatement(s, VOID, pre);
       for (const s of mod.postStmts) this.checkStatement(s, VOID, post);
     });
+    this.currentModifierLayerReturn = savedLayerReturn;
     this.bodyOwnerContract = savedModOwner;
     this.popScope();
     this.scopes = savedScopes;
     // 3. Wrap [argDecls, pre, inner, post] in a block so the modifier's params are scoped to the whole
     //    wrap (visible to pre AND post). `inner` is a call marker, not the inlined body, so no shadow.
-    return [{ kind: 'block', body: [...argDecls, ...pre, ...inner, ...post] }];
+    const layerBody: Stmt[] = [...argDecls, ...pre, ...inner, ...post];
+    return [mod.hasBareReturn ? { kind: 'modifierLayer', body: layerBody } : { kind: 'block', body: layerBody }];
   }
 
   // W5D-1: unique ids for outlined constructor units (ctorOutlineBind/ctorOutlineCall pairs).
@@ -10493,6 +10480,9 @@ export class Analyzer {
   // not the spliced ctor body). solc rejects an immutable WRITE there ("Cannot write to immutable
   // here") while allowing reads; currentInConstructor alone cannot distinguish the two regions.
   private currentInCtorModifierCode = false;
+  // Set only while checking a modifier's own source statements. A bare return then becomes a
+  // layer-local exit marker; a wrapped function/constructor body's pre-checked return is unaffected.
+  private currentModifierLayerReturn = false;
 
   /** W5D-1: does the constructor BODY write one of its OWN (value) parameters? Source-level scan
    *  (assignment / compound-assign / ++ / -- whose target is a bare identifier naming a param) -
@@ -10534,11 +10524,9 @@ export class Analyzer {
    *     of it, or the level is a BASE (code of more-derived levels follows in the merged ctor);
    *   - the whole LEVEL (modifier wrap + body call) is outlined when a modifier carries a bare
    *     `return;` and the level is a BASE (the modifier return exits the level, not the merged ctor).
-   *  KEPT REJECTS (clean JETH323, matching the sacred bar):
-   *   - a bare `return;` in a NON-OUTERMOST modifier under an enclosing non-pre-only-tail layer
-   *     (solc resumes after the enclosing `_`; the level-exit lowering cannot express that);
-   *   - an outlined body that WRITES one of its own params AND can be re-run by a conditional/multi-
-   *     placeholder modifier (each outlined run passes a fresh copy; solc shares the ctor frame). */
+   *  Modifier returns use modifierLayer markers, so each exits only its own layer and an enclosing
+   *  modifier resumes after `_`. Outlined constructor parameters are threaded as function outputs, so
+   *  mutations remain visible across conditional or repeated placeholder calls. */
   private buildCtorLevelStmts(
     mods: { name: string; argNodes: ts.Expression[]; typeArgs?: readonly ts.TypeNode[]; site: ts.Node }[],
     bodyStmts: Stmt[],
@@ -10569,17 +10557,8 @@ export class Analyzer {
     }
     const hasReturn = ctorNode.body ? this.findReturns([...ctorNode.body.statements]).length > 0 : false;
     const metas = mods.map((a) => this.modifiersByName.get(a.name));
-    const preOnlyTail = (m: RawModifier | undefined): boolean =>
-      m !== undefined && m.postStmts.length === 0 && m.bodyStmts === undefined;
     const anyBodyRoute = metas.some((m) => m !== undefined && (m.postStmts.length > 0 || m.bodyStmts !== undefined));
     const anyModRet = metas.some((m) => m?.hasBareReturn === true);
-    // Gate A (nested-layer return): mods[0] is OUTERMOST; a bare return in mods[i>0] resumes after the
-    // `_` of layer i-1 in solc, which equals the level exit ONLY when every enclosing layer is a
-    // pre-only tail. Otherwise fall through to the old inline path, whose hasBareReturn gate rejects.
-    let gateA = false;
-    metas.forEach((m, idx) => {
-      if (m?.hasBareReturn && idx > 0 && metas.slice(0, idx).some((o) => !preOnlyTail(o))) gateA = true;
-    });
     // A modifier param sharing a name with a ctor param: the whole-body-inline route would let the
     // modifier's value shadow the ctor param inside the inlined body (the old collision reject).
     // Outlining the body gives them naturally separate scopes (the body reads its own formals; the
@@ -10587,31 +10566,21 @@ export class Analyzer {
     const modParamCollision = metas.some(
       (m) => m !== undefined && m.params.some((mp) => params.some((cp) => cp.name === mp.name)),
     );
-    const needBodyOutline = !gateA && ((hasReturn && (isBase || anyBodyRoute)) || (anyBodyRoute && modParamCollision));
-    // Gate B (re-run param writes): an outlined body re-run by a conditional/multi-placeholder modifier
-    // receives fresh copies of its VALUE params per run, while solc shares the ctor frame across runs.
-    if (needBodyOutline && metas.some((m) => m?.bodyStmts !== undefined) && this.ctorBodyWritesOwnParam(ctorNode, params)) {
-      this.diags.error(
-        ctorNode,
-        'JETH323',
-        `a constructor whose body contains 'return;' AND writes one of its own parameters, re-run by a conditional/multi-placeholder @modifier, is not supported yet (each outlined body run would receive a fresh copy of the written parameter)`,
-      );
-      return bodyStmts;
-    }
+    const needBodyOutline = (hasReturn && (isBase || anyBodyRoute)) || (anyBodyRoute && modParamCollision);
     let levelStmts: Stmt[];
     if (needBodyOutline) {
       const id = this.ctorOutlineCounter++;
       let inner: Stmt[] = [{ kind: 'ctorOutlineCall', id }];
       for (const app of [...mods].reverse())
-        inner = this.inlineModifier(app, inner, true, false, { allowModBareReturn: !gateA, bodyOutlined: true });
+        inner = this.inlineModifier(app, inner, true, false, { allowModBareReturn: true, bodyOutlined: true });
       levelStmts = [{ kind: 'ctorOutlineBind', id, params, body: bodyStmts }, ...inner];
     } else {
       let inner = bodyStmts;
       for (const app of [...mods].reverse())
-        inner = this.inlineModifier(app, inner, true, hasReturn, { allowModBareReturn: !gateA, bodyOutlined: false });
+        inner = this.inlineModifier(app, inner, true, hasReturn, { allowModBareReturn: true, bodyOutlined: false });
       levelStmts = inner;
     }
-    if (!gateA && anyModRet && isBase) {
+    if (anyModRet && isBase) {
       // A BASE level with a modifier bare-return: outline the WHOLE level wrap so the modifier's
       // `return;` (leave) exits only this level, and the more-derived ctor bodies still run.
       const wid = this.ctorOutlineCounter++;
@@ -10640,9 +10609,8 @@ export class Analyzer {
     inner: Stmt[],
     isConstructor = false,
     ctorBodyHasReturn = false,
-    // W5D-1: set by buildCtorLevelStmts. allowModBareReturn = a bare `return;` in THIS modifier's body
-    // is representable (the level exit point matches solc's layer exit - outermost position, or all
-    // enclosing layers pre-only-tail; a base level is wrap-outlined so the exit leaves only the level).
+    // W5D-1: set by buildCtorLevelStmts. allowModBareReturn confirms that the caller will wrap this
+    // modifier in a modifierLayer, making a bare return local to this layer.
     // bodyOutlined = `inner` is the ctorOutlineCall marker (not the inlined ctor body), so the
     // modifier-param/ctor-param collision hazard does not exist.
     opts?: { allowModBareReturn?: boolean; bodyOutlined?: boolean },
@@ -10793,15 +10761,19 @@ export class Analyzer {
     this.currentInCtorModifierCode = true;
     const savedModOwner = this.bodyOwnerContract;
     if (mod.definingContract !== undefined) this.bodyOwnerContract = mod.definingContract;
+    const savedLayerReturn = this.currentModifierLayerReturn;
+    this.currentModifierLayerReturn = mod.hasBareReturn === true;
     this.withModifierTypeBinding(mod, () => {
       for (const s of mod.node.body!.statements) this.checkStatement(s, VOID, lowered);
     });
+    this.currentModifierLayerReturn = savedLayerReturn;
     this.bodyOwnerContract = savedModOwner;
     this.currentInCtorModifierCode = savedInModCode;
     this.placeholderInner = savedPlaceholder;
     this.popScope();
     this.scopes = savedScopes;
-    return [{ kind: 'block', body: [...argDecls, ...lowered] }];
+    const layerBody: Stmt[] = [...argDecls, ...lowered];
+    return [mod.hasBareReturn ? { kind: 'modifierLayer', body: layerBody } : { kind: 'block', body: layerBody }];
   }
 
   /** UNUSED-MODIFIER-BODY: type-check a DECLARED-but-UNAPPLIED @modifier body standalone (no application
@@ -11611,6 +11583,10 @@ export class Analyzer {
 
   private checkStatementInner(node: ts.Statement, returnType: JethType, out: Stmt[]): void {
     if (ts.isReturnStatement(node)) {
+      if (!node.expression && this.currentModifierLayerReturn) {
+        out.push({ kind: 'modifierLayerReturn' });
+        return;
+      }
       // multi-value return: `return [a, b, ...]` matching the function's tuple return type.
       if (this.currentReturnTypes) {
         const rts = this.currentReturnTypes;

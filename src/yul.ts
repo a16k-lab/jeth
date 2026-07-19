@@ -742,6 +742,8 @@ ${indent(runtime, 6)}
     switch (s.kind) {
       case 'block':
         return { ...s, body: this.inlineDeadAggCaptures(s.body) };
+      case 'modifierLayer':
+        return { ...s, body: this.inlineDeadAggCaptures(s.body) };
       case 'if':
         return {
           ...s,
@@ -2822,6 +2824,22 @@ ${indent(runtime, 6)}
         out.push(md.retVars.length === 0 ? call : `${md.retVars.join(', ')} := ${call}`);
         break;
       }
+      case 'modifierLayer': {
+        const active = this.fresh();
+        out.push('{');
+        out.push(`  let ${active} := 1`);
+        const saved = ctx.modifierLayerExit;
+        ctx.modifierLayerExit = active;
+        for (const l of this.lowerBlock(s.body, ctx)) out.push('  ' + l);
+        ctx.modifierLayerExit = saved;
+        out.push('}');
+        break;
+      }
+      case 'modifierLayerReturn': {
+        if (!ctx.modifierLayerExit) throw new UnsupportedError('modifierLayerReturn lowered outside a modifier layer');
+        out.push(`${ctx.modifierLayerExit} := 0`);
+        break;
+      }
       case 'ctorOutlineBind': {
         // W5D-1: outline a return-involving ctor unit (the level's own body, or a whole base-level
         // modifier wrap) into a creation-block Yul function, so a bare `return;` inside it lowers to
@@ -2848,10 +2866,15 @@ ${indent(runtime, 6)}
         };
         if (ctx.ctorImmShadow) sub.ctorImmShadow = ctx.ctorImmShadow;
         const formals: string[] = [];
+        const paramOuts: string[] = [];
+        const unitLines: string[] = [];
         for (const p of s.params) {
-          const f = this.freshLocal(p.name);
-          this.ctxDeclare(sub, p.name, f);
-          formals.push(f);
+          const pin = this.freshLocal(`${p.name}_in`);
+          const pout = this.freshLocal(`${p.name}_out`);
+          this.ctxDeclare(sub, p.name, pout);
+          formals.push(pin);
+          paramOuts.push(pout);
+          unitLines.push(`${pout} := ${pin}`);
         }
         const immNames = [...(ctx.immStaged?.keys() ?? [])];
         const immIns: string[] = [];
@@ -2865,10 +2888,10 @@ ${indent(runtime, 6)}
           subStaged.set(nm, iout);
         }
         if (immNames.length) sub.immStaged = subStaged;
-        const unitLines: string[] = [];
         immNames.forEach((nm, k) => unitLines.push(`${immOuts[k]} := ${immIns[k]}`));
         for (const st of s.body) for (const l of this.lowerStmt(st, sub)) unitLines.push(l);
-        const sig = `function ${fnName}(${[...formals, ...immIns].join(', ')})${immOuts.length ? ` -> ${immOuts.join(', ')}` : ''}`;
+        const outputs = [...paramOuts, ...immOuts];
+        const sig = `function ${fnName}(${[...formals, ...immIns].join(', ')})${outputs.length ? ` -> ${outputs.join(', ')}` : ''}`;
         this.ctorOutlineDefs.push(`${sig} {\n${unitLines.map((l) => '  ' + l).join('\n')}${unitLines.length ? '\n' : ''}}`);
         this.ctorOutlines.set(s.id, { fnName, argRegs, immNames });
         break; // the bind emits no inline code (the defs are hoisted next to jeth_constructor)
@@ -2878,7 +2901,8 @@ ${indent(runtime, 6)}
         if (!rec) throw new UnsupportedError('ctorOutlineCall lowered before its ctorOutlineBind');
         const immVars = rec.immNames.map((nm) => ctx.immStaged!.get(nm)!);
         const call = `${rec.fnName}(${[...rec.argRegs, ...immVars].join(', ')})`;
-        out.push(immVars.length ? `${immVars.join(', ')} := ${call}` : call);
+        const outputs = [...rec.argRegs, ...immVars];
+        out.push(outputs.length ? `${outputs.join(', ')} := ${call}` : call);
         break;
       }
       case 'if': {
@@ -2904,6 +2928,7 @@ ${indent(runtime, 6)}
         // iteration (its prep statements must run inside the loop), continue OK.
         out.push('for {} 1 {} {');
         const inner: string[] = [];
+        if (ctx.modifierLayerExit) inner.push(`if iszero(${ctx.modifierLayerExit}) { break }`);
         const c = this.lowerExpr(s.cond, ctx, inner);
         inner.push(`if iszero(${c}) { break }`);
         for (const l of this.lowerBlock(s.body, ctx)) inner.push(l);
@@ -2919,8 +2944,16 @@ ${indent(runtime, 6)}
         const run = this.fresh();
         out.push(`let ${run} := 1`);
         const post: string[] = [];
-        const c = this.lowerExpr(s.cond, ctx, post);
-        post.push(`${run} := ${c}`);
+        const condLines: string[] = [];
+        const c = this.lowerExpr(s.cond, ctx, condLines);
+        condLines.push(`${run} := ${c}`);
+        if (ctx.modifierLayerExit) {
+          post.push(`switch ${ctx.modifierLayerExit}`);
+          post.push(`case 0 { ${run} := 0 }`);
+          post.push('default {');
+          for (const l of condLines) post.push('  ' + l);
+          post.push('}');
+        } else post.push(...condLines);
         out.push(`for {} ${run} {`);
         for (const l of post) out.push('  ' + l);
         out.push('} {');
@@ -2931,8 +2964,12 @@ ${indent(runtime, 6)}
       case 'for': {
         this.ctxPush(ctx); // for-init scope encloses cond/post/body
         const initLines = s.init ? this.lowerStmt(s.init, ctx) : [];
-        const postLines = s.post ? this.lowerStmt(s.post, ctx) : [];
+        let postLines = s.post ? this.lowerStmt(s.post, ctx) : [];
+        if (ctx.modifierLayerExit && postLines.length > 0) {
+          postLines = [`if ${ctx.modifierLayerExit} {`, ...postLines.map((l) => '  ' + l), '}'];
+        }
         const bodyLines: string[] = [];
+        if (ctx.modifierLayerExit) bodyLines.push(`if iszero(${ctx.modifierLayerExit}) { break }`);
         if (s.cond) {
           const c = this.lowerExpr(s.cond, ctx, bodyLines);
           bodyLines.push(`if iszero(${c}) { break }`);
@@ -3134,8 +3171,22 @@ ${indent(runtime, 6)}
   /** Lower a Stmt[] branch in a fresh ctx scope (mirrors a Yul block scope). */
   private lowerBlock(body: Stmt[], ctx: LowerCtx): string[] {
     this.ctxPush(ctx);
-    const inner: string[] = [];
-    for (const s of body) for (const l of this.lowerStmt(s, ctx)) inner.push(l);
+    const lowerFrom = (at: number): string[] => {
+      if (at >= body.length) return [];
+      const s = body[at]!;
+      const lines = this.lowerStmt(s, ctx);
+      const rest = lowerFrom(at + 1);
+      if (!ctx.modifierLayerExit || s.kind === 'modifierLayerReturn') return [...lines, ...rest];
+      // Nest the remainder in the same guard scope. This both skips it after a layer return and keeps
+      // locals declared by the current statement visible to every following statement.
+      return [
+        `if ${ctx.modifierLayerExit} {`,
+        ...lines.map((l) => '  ' + l),
+        ...rest.map((l) => '  ' + l),
+        '}',
+      ];
+    };
+    const inner = lowerFrom(0);
     this.ctxPop(ctx);
     return inner;
   }
@@ -14998,6 +15049,7 @@ interface LowerCtx {
     returnType: JethType;
     returnTypes?: JethType[];
   };
+  modifierLayerExit?: string;
 }
 
 // A lowered array reference, by source location.

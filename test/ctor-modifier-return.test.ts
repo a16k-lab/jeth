@@ -8,7 +8,7 @@
 //   - the modifier-param/ctor-param name-collision gate is lifted when the body is outlined.
 // ALSO fixed here (pre-existing, verified vs solc):
 //   - FUNCTION path: a bare `return;` in a nested NON-OUTERMOST modifier under a post-code outer layer
-//     exited the whole function where solc resumes after the enclosing `_` -> now a clean JETH323;
+//     exits only its own layer, then resumes the enclosing modifier after `_`;
 //   - an immutable WRITE inside ctor-MODIFIER code was accepted (solc: "Cannot write to immutable
 //     here") -> now JETH313 (reads stay legal, matching solc).
 import { describe, it, expect } from 'vitest';
@@ -311,33 +311,87 @@ describe('W5D-1: constructor modifier/body `return;` via outlining', () => {
     await expect(hs.deploy(compileSolidity(SPDX + S, 'C').creation + W(0))).rejects.toThrow();
   });
 
-  it('KEPT REJECTS: nested inner-modifier return under a post-code outer; multi-run body param write', () => {
-    // solc resumes after the enclosing `_`; the level-exit lowering cannot express that -> JETH323.
-    expect(
-      codes(`class C {
+  it('nested layer returns resume enclosing post-code, and outlined ctor params thread between runs', async () => {
+    await eqDeploy(
+      `class C {
         s: u256;
         @modifier a() { this.s = this.s + 1n; _; this.s = this.s + 10n; }
         @modifier b() { this.s = this.s + 100n; if (this.s > 0n) { return; } _; }
         @a @b constructor() { this.s = this.s + 10000n; }
-      }`),
-    ).toContain('JETH323');
-    // same shape on a FUNCTION (the fixed pre-existing miscompile): clean JETH323, no wrong bytes.
-    expect(
-      codes(`class C {
+      }`,
+      `contract C {
+        uint256 s;
+        modifier a() { s = s + 1; _; s = s + 10; }
+        modifier b() { s = s + 100; if (s > 0) { return; } _; }
+        constructor() a() b() { s = s + 10000; }
+      }`,
+      '',
+      [0n],
+    );
+    await eqDeploy(
+      `class C {
         s: u256;
         @modifier a() { this.s = this.s + 1n; _; this.s = this.s + 10n; }
         @modifier b() { this.s = this.s + 100n; if (this.s > 0n) { return; } _; this.s = this.s + 1000n; }
         @a @b f(): External<void> { this.s = this.s + 10000n; }
-      }`),
-    ).toContain('JETH323');
-    // an outlined body re-run by a multi-placeholder modifier that WRITES its own param -> JETH323.
-    expect(
-      codes(`class C {
+        get value(): External<u256> { return this.s; }
+      }`,
+      `contract C {
+        uint256 s;
+        modifier a() { s = s + 1; _; s = s + 10; }
+        modifier b() { s = s + 100; if (s > 0) { return; } _; s = s + 1000; }
+        function f() external a() b() { s = s + 10000; }
+        function value() external view returns(uint256) { return s; }
+      }`,
+      '',
+      [0n],
+      [['f()', ''], ['value()', '']],
+    );
+    await eqDeploy(
+      `class C {
         s: u256;
         @modifier m() { _; this.s = this.s + 10n; _; }
         @m constructor(x: u256) { x = x + 1n; this.s = this.s + x; if (x > 0n) { return; } this.s = 0n; }
-      }`),
-    ).toContain('JETH323');
+      }`,
+      `contract C {
+        uint256 s;
+        modifier m() { _; s = s + 10; _; }
+        constructor(uint256 x) m() { x = x + 1; s = s + x; if (x > 0) { return; } s = 0; }
+      }`,
+      W(1),
+      [0n],
+    );
+  });
+
+  it('a layer return inside while/for/do-while terminates the loop and preserves outer post-code', async () => {
+    await eqDeploy(
+      `class C {
+        s: u256;
+        @modifier outer() { this.s = this.s + 1n; _; this.s = this.s + 10n; }
+        @modifier loops() {
+          let i: u256 = 0n;
+          while (i < 2n) { i = i + 1n; }
+          for (let j: u256 = 0n; j < 2n; j = j + 1n) { this.s = this.s + 100n; }
+          do { this.s = this.s + 1000n; return; } while (true);
+          _;
+        }
+        @outer @loops constructor() { this.s = this.s + 10000n; }
+      }`,
+      `contract C {
+        uint256 s;
+        modifier outer() { s = s + 1; _; s = s + 10; }
+        modifier loops() {
+          uint256 i = 0;
+          while (i < 2) { i = i + 1; }
+          for (uint256 j = 0; j < 2; j = j + 1) { s = s + 100; }
+          do { s = s + 1000; return; } while (true);
+          _;
+        }
+        constructor() outer() loops() { s = s + 10000; }
+      }`,
+      '',
+      [0n],
+    );
   });
 
   it('unregressed: nested modifiers with a bare return confined to the OUTERMOST layer still lift', async () => {

@@ -820,7 +820,7 @@ and is never miscompiled.
   constructor rejects deploy-time value. Immutable value-type fields (a ctor-assigned `static K: T;`) are assigned in the
   constructor and baked into the runtime code via `setimmutable`/`loadimmutable` - they consume NO
   storage slot (a constructor read sees the staged value, a runtime read is `loadimmutable`, and
-  reading one needs view not pure). User `@modifier`s (a single `_` placeholder, applied via
+  reading one needs view not pure). User `@modifier`s (applied via
   `@name` / `@name(args)`) inline their code around the body - both PRE-code (a guard like
   `require(cond); _;`) and POST-code (after `_`). Post-code with an early `return` uses solc-identical
   buffered-return semantics: the body's `return` runs the enclosing modifier post-code (inner-first,
@@ -828,9 +828,8 @@ and is never miscompiled.
   lowered as a synthesized Yul function so `return` becomes `ret := v; leave`). Multiple modifiers nest
   leftmost-outermost, the same modifier may apply twice, arguments evaluate exactly once (a modifier
   param never shadows a same-named function param in the body), their effects feed the purity fixpoint,
-  and they compose with `@nonReentrant`. Post-code is scoped to value-type-param functions with a
-  void/value/bytes/string return (an aggregate/dynamic param, multi-value/aggregate return, or a
-  constructor with post-code is cleanly gated JETH323).
+  and they compose with `@nonReentrant`. A bare return in a modifier exits only that modifier layer, so
+  an enclosing modifier resumes after its `_`; this also works inside loops and constructor modifiers.
   A `@modifier` may also decorate the **constructor** (the canonical base-init guard, e.g.
   `@onlyValid constructor(...) { ... }`). The identifier `_` is reserved (the modifier placeholder)
   and cannot be a declared name (JETH034), matching solc.
@@ -880,9 +879,8 @@ Each of the following compiles to a clean compile-time error (verified), not a m
   REMAINING clean gates (rare shapes; each a diagnostic, never a miscompile): a defaulted ctor param
   (JETH304 - JETH-specific, no solc form); a non-value-type immutable (JETH310) and an immutable
   assigned outside the constructor (JETH313) are accept/reject PARITY (solc rejects too); and a few rare
-  modifier shapes not yet lifted - more than one `_` placeholder (JETH320), an aggregate modifier param
-  (JETH322), a `return` inside the modifier body (JETH324 value-return = parity / JETH325 bare-return), a
-  generic modifier (JETH327), and a POST-code modifier on an aggregate/dynamic-param or
+  modifier shapes not yet lifted - a value-return inside the modifier body (JETH324, parity), and a
+  POST-code modifier on an aggregate/dynamic-param or
   multi-value/aggregate-return function or constructor (JETH323). One known low-severity over-rejection:
   a constructor that *provably* overflows a staged immutable-field read at runtime is rejected (JETH901)
   where solc accepts and the deploy then reverts (the contract is non-functional in both compilers).
