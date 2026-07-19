@@ -72,13 +72,13 @@ describe('A: bare-bodyless COLLIDING method -> [JETH489] alone on BOTH paths (no
     expect(mcodes(entry, { 'd.jeth': DEP })).toEqual(['JETH489']);
   });
 
-  it('JETH041 short-circuit twin (two abstract leaves + a bare-bodyless): single == multi == [JETH041]', () => {
+  it('two abstract leaves + a bare-bodyless member: single == multi == [JETH489]', () => {
     const single =
       'type Bad = error<{ a: u256 }>;\nabstract class B { foo(): u256; }\n' +
       'abstract class C { Bad(): u256 { return 5n; } g(): External<void> {} }';
     const entry = `import { Bad } from './d.jeth';\nimport { B } from './b.jeth';\nabstract class C { Bad(): u256 { return 5n; } g(): External<void> {} }`;
-    expect(scodes(single)).toEqual(['JETH041']);
-    expect(mcodes(entry, { 'd.jeth': DEP, 'b.jeth': 'export abstract class B { foo(): u256; }' })).toEqual(['JETH041']);
+    expect(scodes(single)).toEqual(['JETH489']);
+    expect(mcodes(entry, { 'd.jeth': DEP, 'b.jeth': 'export abstract class B { foo(): u256; }' })).toEqual(['JETH489']);
   });
 });
 

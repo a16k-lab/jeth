@@ -57,10 +57,19 @@ describe('ABSTRACT-ONLY / INTERFACE-ONLY unit: accept with empty bytecode, match
     expect(codes(`abstract class Bad { f(a: u256): u256 { return true; } abstract p(): External<u256>; } abstract class C extends Bad { abstract m(): External<u256>; }`)).toContain('JETH085');
   });
 
-  it('two INDEPENDENT abstract contracts in one file is a SAFE over-rejection (JETH041 MVP limit)', () => {
-    // solc accepts this (two abstract contracts, empty bytecode each). JETH keeps a clean reject rather
-    // than run analyzeContract twice (shared registry state); a reject that never over-accepts is safe.
-    expect(codes(`abstract class A { abstract m(): External<u256>; } abstract class B { abstract n(): External<u256>; }`)).toContain('JETH041');
+  it('emits one empty, independently checked artifact per abstract leaf', () => {
+    const src = `abstract class A { abstract m(): External<u256>; } abstract class B { abstract n(): External<u256>; }`;
+    const r = compile(src, { fileName: 'C.jeth' });
+    expect(codes(src)).toEqual([]);
+    expect(r.contracts?.map((c) => [c.contractName, c.creationBytecode, c.runtimeBytecode])).toEqual([
+      ['A', '', ''],
+      ['B', '', ''],
+    ]);
+    expect(compileSolidity(SPDX + `abstract contract A { function m() external virtual returns(uint256); } abstract contract B { function n() external virtual returns(uint256); }`, 'A').creation).toBe('');
+  });
+
+  it('still rejects a bad body in the second independent abstract leaf', () => {
+    expect(codes(`abstract class A { abstract m(): External<u256>; } abstract class B { abstract n(): External<u256>; f(): u256 { return true; } }`)).toContain('JETH085');
   });
 
   // ---- NEGATIVES: member/body validation must STILL fire (no silent accept-all) ----

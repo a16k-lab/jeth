@@ -56,6 +56,10 @@ The **keep-list** decorators are still legal (they have no native spelling): `@v
 constructor**. Separately, `@hidden` was never a native spelling and stays rejected (**JETH440**):
 internal is the bare default, so a member needs no visibility decorator at all.
 
+An abstract-only translation unit is fully type-checked and produces empty creation/runtime bytecode.
+Independent abstract leaves produce separate empty artifacts in `CompileResult.contracts`, matching solc's
+per-contract artifact model; an invalid body in any leaf rejects the whole unit.
+
 ## Differential audit (2026-06-20) - fixes
 
 A fresh adversarial differential audit against solc 0.8.35 found and fixed the following. All are

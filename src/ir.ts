@@ -827,8 +827,8 @@ export interface ContractIR {
   // analyzer's findContractClasses list length). solc compiles such a file into one SEPARATE artifact per
   // contract; JETH mirrors that by analyzing the unit once PER ROUTE (see compileUnit), and this count is
   // how the driver learns how many routes to run after analyzing route 0. Always >= 1 on the deployed
-  // path; absent on the non-deployable (abstract/interface-only) path, which stays single-route (its own
-  // multi-leaf JETH041 is retained).
+  // path; absent on the non-deployable path, whose independent abstract leaves are routed through
+  // abstractCheckLeaves and returned as separate empty artifacts.
   routeCount?: number;
   // UNEXTENDED-ABSTRACT BODY CHECK (solc parity): the (final, post-module-rename) names of every abstract
   // class that is a SIBLING of the deployed route and that NOTHING in the unit extends. solc type-checks

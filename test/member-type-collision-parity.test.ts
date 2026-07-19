@@ -111,17 +111,17 @@ describe('ROUTE EMULATION: cells where the single-file gate never fires stay JET
     expect(multi).toEqual(['JETH133']);
     expect(multi).toEqual(scodes(`type Bad = error<{ a: u256 }>;\nabstract class C { Bad: u256; g(): External<void> {} }`));
   });
-  it('TWO abstract leaves (JETH041 short-circuit): colliding field -> [JETH041] alone on BOTH paths', () => {
+  it('two abstract leaves: a colliding field rejects JETH133 on both paths', () => {
     const single = scodes(`type Bad = error<{ a: u256 }>;\nabstract class A { Bad: u256; }\nabstract class Z { g(): External<void> {} }`);
     const multi = mcodes(`import { Bad } from "./d.jeth";\nabstract class A { Bad: u256; }\nabstract class Z { g(): External<void> {} }`, { 'd.jeth': DEP_E });
-    expect(single).toEqual(['JETH041']);
-    expect(multi).toEqual(['JETH041']);
+    expect(single).toEqual(['JETH133']);
+    expect(multi).toEqual(['JETH133']);
   });
-  it('TWO abstract leaves + colliding METHOD: [JETH041] alone both (the pre-pass no longer adds JETH133)', () => {
+  it('two abstract leaves + colliding method: JETH133 on both paths', () => {
     const single = scodes(`type Bad = error<{ a: u256 }>;\nabstract class A { Bad(): u256 { return 5n; } }\nabstract class Z { g(): External<void> {} }`);
     const multi = mcodes(`import { Bad } from "./d.jeth";\nabstract class A { Bad(): u256 { return 5n; } }\nabstract class Z { g(): External<void> {} }`, { 'd.jeth': DEP_E });
-    expect(single).toEqual(['JETH041']);
-    expect(multi).toEqual(['JETH041']);
+    expect(single).toEqual(['JETH133']);
+    expect(multi).toEqual(['JETH133']);
   });
   it('STRAY abstract class (deployed route, off the chain) with a colliding FIELD: ACCEPT both (== single)', () => {
     const single = scodes(`type Bad = error<{ a: u256 }>;\nabstract class S { Bad: u256; }\nclass C { g(): External<void> {} }`);

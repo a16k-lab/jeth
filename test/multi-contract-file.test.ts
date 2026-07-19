@@ -212,10 +212,11 @@ contract B { function sum() external pure returns (uint256) { P memory p = P(10,
     }
   });
 
-  // ---- the gates that STAY -----------------------------------------------------------------------------
-  it('KEEPS JETH041 for two independent ABSTRACT leaves (no deployable contract)', () => {
-    expect(codes(`abstract class X { get a(): External<u256> { return 1n; } }
-abstract class Y { get b(): External<u256> { return 2n; } }`)).toEqual(['JETH041']);
+  // ---- non-deployable and diamond routes ----------------------------------------------------------------
+  it('returns separate empty artifacts for independent abstract leaves', () => {
+    const r = compile(`abstract class X { get a(): External<u256> { return 1n; } }
+abstract class Y { get b(): External<u256> { return 2n; } }`, { fileName: 'C.jeth' });
+    expect(r.contracts?.map((c) => [c.contractName, c.creationBytecode])).toEqual([['X', ''], ['Y', '']]);
   });
 
   it('KEEPS JETH041 for two @diamond classes in one file', () => {

@@ -34,8 +34,8 @@ const solcAccepts = (src: string, name = 'C'): boolean => {
   }
 };
 
-// A deployable sibling: the unit MUST have one, or the abstract-only JETH041 gate fires first (an
-// abstract-only unit emits no bytecode, so there is no artifact to prove byte-identical - that gate stays).
+// A deployable sibling exercises the stray-abstract route. Abstract-only files use the separate empty-
+// artifact route and are covered below.
 const DEPLOYABLE = `class C { get z(): External<u256> { return 7n; } }`;
 const SOL_DEPLOYABLE = `contract C { function z() external pure returns (uint256) { return 7; } }`;
 
@@ -80,15 +80,16 @@ describe('an unextended abstract class is type-checked (solc parity)', () => {
     expect(r.contracts?.length).toBe(2);
   });
 
-  it('the abstract-ONLY unit is untouched by this work (it was ALREADY type-checked)', () => {
+  it('the abstract-only unit type-checks every independent leaf', () => {
     // SCOPE PIN. A unit with NO deployable takes the non-deployable path, which already resolved its
     // types - the gap closed here is narrower: an abstract class that is a SIBLING of a deployable and
     // that nothing extends, which only the route chain ever visited.
     expect(codes(`abstract class B { f: Nope; }`)).toContain('JETH013'); // already rejected before this change
-    // a single abstract-only unit still compiles to NO bytecode (there is no artifact to prove
-    // byte-identical, which is why the abstract-leaf gate stays); two or more leaves stay JETH041.
+    // Every leaf is a separate empty artifact, and each is independently checked.
     expect(compile(`abstract class B { f: u256; }`, { fileName: 'C.jeth' }).creationBytecode).toBe('');
-    expect(codes(`abstract class B { f: u256; }\nabstract class D { g: u256; }`)).toContain('JETH041');
+    const r = compile(`abstract class B { f: u256; }\nabstract class D { g: u256; }`, { fileName: 'C.jeth' });
+    expect(r.contracts?.map((c) => c.contractName)).toEqual(['B', 'D']);
+    expect(codes(`abstract class B { f: u256; }\nabstract class D { bad(): u256 { return true; } }`)).toContain('JETH085');
   });
 
   it('an UNDEFINED type in an event/error FIELD, a CONSTRUCTOR param, or a @modifier param rejects (JETH013), like solc', () => {

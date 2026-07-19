@@ -413,11 +413,8 @@ function rewriteModuleScopes(
  * ROUTE CLASS - the one class whose linearized members the single-file gate actually counts:
  *   - DEPLOYED route: the first deployable class (decorated @proxy/@beacon/@facet/@contract-from-@diamond,
  *     else the first native bare class not extended by another), exactly findContractClasses' classes[0].
- *   - NON-DEPLOYABLE route (no deployable class): the single abstract LEAF, with analyzeNonDeployableUnit's
- *     short-circuits emulated - if TWO OR MORE abstract leaves exist (JETH041) or any abstract class carries
- *     a bare bodyless method/get (JETH489; JETH040 returns the same way), the analyzer returns BEFORE its
- *     JETH133 gate, so the single-file code list carries NO JETH133 and this pre-pass emits nothing (the
- *     analyzer's own JETH041/JETH489 is the reject on both paths).
+ *   - NON-DEPLOYABLE route (no deployable class): the representative abstract leaf, or the leaf named by
+ *     abstractCheck on a follow-up route. A bare bodyless method/get still short-circuits at JETH489.
  * Member kinds are collected over the route class's OWN members UNION every class reached through `extends`
  * (multi-level, multiple-base / diamond, cycle-guarded; an interface base is walked through but contributes
  * NO member - the single-file linearization gate accepts a contract that merely inherits an interface
@@ -433,8 +430,8 @@ function rewriteModuleScopes(
  * member name (an entry-file declaration, never renamed) is left to the analyzer's own gate, which sees
  * that pair and fires JETH133 with its native companion diagnostics - firing here too would double-report.
  *
- * NON-ROUTE contract-kind classes (strays off the deployed/leaf chain, and the extra deployables behind a
- * JETH041) keep the NARROWER legacy scan - VISIBLE METHODS ONLY, cross-file collisions only. The single-file
+ * NON-ROUTE contract-kind classes (strays off the deployed/leaf chain) keep the NARROWER legacy scan -
+ * VISIBLE METHODS ONLY, cross-file collisions only. The single-file
  * gate never counts a stray's members (it accepts them), so the legacy stray reject is a known deliberate
  * multi-file-only over-rejection kept because removing it would flip a reject to an accept (forbidden).
  *
@@ -459,6 +456,7 @@ function collectImportedMemberTypeCollisions(
   // route must scope from ITS OWN class - a hard-coded classes[0] would judge route 1 against route 0's
   // member namespace and emit a JETH133 the single-file twin never gives (and miss route 1's real one).
   routeIndex = 0,
+  abstractCheck?: string,
 ): Map<ts.ClassDeclaration, Set<string>> {
   const fired = new Map<ts.ClassDeclaration, Set<string>>();
   if (renamesByFile.size === 0) return fired;
@@ -590,18 +588,16 @@ function collectImportedMemberTypeCollisions(
     const leaves = abstractClasses.filter(
       (ac) => ac.name && !extendedFinal.has(finalNameIn(fileOf(ac.name), ac.name.text)),
     );
-    // SHORT-CIRCUIT EMULATION (single-file parity for the non-deployable route). analyzeNonDeployableUnit
-    // returns BEFORE its JETH133 linearization gate when two or more abstract leaves exist (JETH041) or any
-    // abstract class declares a bare bodyless method/get (JETH489) - so the single-file code list for such
-    // a program carries NO JETH133 ([JETH041] / [JETH489] alone; the earlier JETH040 gate returns the same
-    // way and has no member-bearing class to collide anyway). The multi-file analyzer fires the identical
-    // JETH041/JETH489 over the merged bundle (imported abstract bases included), so BOTH scans emit nothing
-    // here and the analyzer's own reject is the whole code list, exactly as in the single-file all-in-one.
+    // A bodyless member still short-circuits before the collision gate. Multiple independent abstract
+    // leaves no longer do: compileUnit checks each on a fresh route, so select the requested leaf for a
+    // follow-up pass and the first leaf for the representative artifact.
     // The DEPLOYED route has no such short-circuit (witnessed: a deployed contract with a bare-bodyless
     // colliding method rejects [JETH483,JETH380,JETH133] single-file, the linearization gate still counting
     // the member), so a bundle WITH a deployable class never suppresses.
-    if (leaves.length > 1 || anyBareBodyless) return fired;
-    routeClass = leaves[0]; // undefined for an interface-only unit: analyzeContract never runs there either
+    if (anyBareBodyless) return fired;
+    routeClass = abstractCheck
+      ? leaves.find((l) => l.name && finalNameIn(fileOf(l.name), l.name.text) === abstractCheck)
+      : leaves[0]; // undefined for an interface-only unit: analyzeContract never runs there either
   }
   // A class that carries solc's contract MEMBER namespace: a bare / @contract-family / abstract class. A
   // @library / `static class` (library) / @struct object type / native `interface`-as-class / @diamond does
@@ -1148,17 +1144,22 @@ function compileUnit(source: string, opts: CompileOptions): CompileResult {
   // markers off the tree in place, so a leaf sharing a base with the route cannot be checked on route 0's
   // tree) and body-check it; surface every reject together so the whole file rejects exactly as solc does.
   const abstractLeaves = first.ir.abstractCheckLeaves ?? [];
+  const abstractArtifacts: CompileResult[] = [];
   if (abstractLeaves.length > 0) {
     const strayDiags: Diagnostic[] = [];
     for (const leaf of abstractLeaves) {
       try {
-        compileRoute(source, opts, 0, leaf); // non-deployable result discarded; only its diagnostics matter
+        abstractArtifacts.push(compileRoute(source, opts, 0, leaf));
       } catch (e) {
         if (e instanceof CompileError) strayDiags.push(...e.diagnostics);
         else throw e;
       }
     }
     if (strayDiags.length > 0) throw new CompileError(strayDiags);
+  }
+  if (first.ir.nonDeployable && abstractArtifacts.length > 0) {
+    first.contracts = [first, ...abstractArtifacts];
+    return first;
   }
   const routeCount = first.ir.routeCount ?? 1;
   if (routeCount <= 1) return first; // single-contract file: `contracts` stays undefined, result unchanged
@@ -1414,7 +1415,7 @@ function compileRoute(source: string, opts: CompileOptions, routeIndex: number, 
   // for exactly those pairs so the companion code list matches the single-file twin's (see the pre-pass doc).
   const memberCollisionRejects =
     bundleSegments && bundleRenames
-      ? collectImportedMemberTypeCollisions(parsed.sourceFile, bundleSegments, bundleRenames, diags, routeIndex)
+      ? collectImportedMemberTypeCollisions(parsed.sourceFile, bundleSegments, bundleRenames, diags, routeIndex, abstractCheck)
       : undefined;
   // v3 module scoping FIRST: rename each dep's top-level declarations (and every file's import bindings)
   // to their `$mN$` scoped names, so every later pass (the # mangle, the static-member rewrite, all name

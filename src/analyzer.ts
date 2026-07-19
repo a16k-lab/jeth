@@ -1005,8 +1005,8 @@ export class Analyzer {
    *  identifier, bad assignment, return arity/overflow, illegal @override, view/pure mutation, unknown or
    *  wrong-arity call) rejects. The emitted IR is discarded; only the diagnostics matter. This is the same
    *  machinery analyzeNonDeployableUnit runs for the abstract-ONLY file, applied to a single named leaf when a
-   *  deployable sibling exists (so the abstract-only JETH041/JETH489 gates - which are about the missing
-   *  artifact - do not apply here). */
+   *  deployable sibling exists (so the abstract-only JETH489 bodyless-member check is handled by this
+   *  route rather than by the representative non-deployable route). */
   private analyzeAbstractCheckRoute(name: string): ContractIR | undefined {
     const empty: ContractIR = {
       name,
@@ -2327,16 +2327,6 @@ export class Analyzer {
     // single-contract path (which likewise calls analyzeContract once).
     const extended = this.extendedClassNames();
     const leaves = abstractClasses.filter((ac) => ac.name && !extended.has(ac.name.text));
-    // MVP scope (mirrors JETH041): two or more INDEPENDENT abstract contracts in one file. The DEPLOYED
-    // path now handles N contracts per file (the driver re-parses and re-analyzes once per route), so the
-    // mechanism to lift this exists - but an abstract-only unit emits NO bytecode, so there is nothing to
-    // emit per route and no artifact to prove byte-identical against solc. Deliberately KEPT as a SAFE
-    // over-rejection (solc accepts such a file): a clean reject, never a wrong accept. Lifting it would be
-    // a separate, independently-verified change.
-    if (leaves.length > 1) {
-      this.diags.error(leaves[1]!, 'JETH041', 'multiple contract classes per file are not supported in the MVP');
-      return undefined;
-    }
     // solc: "Functions without implementation must be marked virtual." A bodyless method/getter in an
     // abstract class must be @virtual (or the native `abstract` member keyword, JETH's spelling of a
     // bodyless @virtual). The DEPLOYED path catches this transitively (JETH380 / the override rules); the
@@ -2379,7 +2369,13 @@ export class Analyzer {
     // parse diagnostic (BYTE-SLICE-MC), unless the analyzer already rejected.
     this.rejectSilentlyAcceptedSyntaxErrors();
     if (this.diags.hasErrors) return undefined;
-    if (repIr) return { ...repIr, nonDeployable: true };
+    if (repIr) {
+      // Each independent abstract leaf is a separate solc artifact. The first leaf is the representative
+      // route checked above; compileUnit re-parses and checks every remaining leaf, preserving its ABI while
+      // keeping creation/runtime empty because none is deployable.
+      repIr.abstractCheckLeaves = leaves.slice(1).flatMap((l) => (l.name ? [l.name.text] : []));
+      return { ...repIr, nonDeployable: true };
+    }
     // Interface-only file (no abstract leaf): no class was analyzed. Name the artifact after the first
     // interface; it carries no state/functions of its own (interface methods are declarations validated
     // in collectInterfaces/collectNativeInterfaces, exposed via the ABI layer).

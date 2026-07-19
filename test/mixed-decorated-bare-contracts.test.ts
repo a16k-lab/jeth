@@ -130,10 +130,9 @@ describe('mixed decorated + bare contracts: the bare contract is no longer dropp
     expect(codes(`@diamond('array') class D { }\n@diamond('array') class E { }`)).toEqual(['JETH041']);
   });
 
-  it('two bare abstract leaves still reject JETH041', () => {
-    expect(
-      codes(`abstract class A { get a(): External<u256> { return 1n; } }\nabstract class B { get b(): External<u256> { return 2n; } }`),
-    ).toEqual(['JETH041']);
+  it('two bare abstract leaves produce two empty artifacts', () => {
+    const r = compile(`abstract class A { get a(): External<u256> { return 1n; } }\nabstract class B { get b(): External<u256> { return 2n; } }`, { fileName: 'C.jeth' });
+    expect(r.contracts?.map((c) => [c.contractName, c.creationBytecode])).toEqual([['A', ''], ['B', '']]);
   });
 
   it('a bare contract sharing the @diamond`s name still rejects JETH037', () => {
