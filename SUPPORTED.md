@@ -851,6 +851,9 @@ Each of the following compiles to a clean compile-time error (verified), not a m
 - **A struct memory local with a DYNAMIC-array field** (`u256[]` / `string[]`) - JETH200; and ELEMENT
   access into a FIXED-array field through such a local (`s.a[i]`) - JETH900. Value-typed,
   `bytes`/`string`-field, and NESTED-STRUCT-field struct memory locals work fully (G9/G10).
+- **A whole calldata/memory struct copied into storage when it contains a dynamic array with a
+  fixed-inner value-array level** (`uint256[2][]`, `address[2][][]`, and deeper variants) - JETH470.
+  Storage-to-storage copy of the same shape remains supported.
 - **`new T[](n)`** - JETH023 (use an array literal `let xs: u256[] = [...]`).
 - **In-place assignment of a WHOLE fixed-array element** `this.g[i] = arr` - JETH226 (whole fixed-array
   storage copy `this.g = this.src` and whole STORAGE-source inner-array assignment

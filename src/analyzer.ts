@@ -16328,6 +16328,32 @@ export class Analyzer {
     return false;
   }
 
+  /** JETH470 soundness gate: true when a struct contains an array chain with a DYNAMIC level followed
+   *  by a FIXED value-array level, for example `Arr<u256,2>[]`, `Arr<address,2>[][]`, or
+   *  `Arr<Arr<u256,2>,3>[]`. JETH's calldata/memory struct-to-storage copier cannot transcode this
+   *  pointer-headed inner image: it accepts the source, then either drops the payload or reverts while
+   *  writing it. Struct fields are walked recursively, including fields behind array-of-struct wrappers,
+   *  but a fixed array without a dynamic ancestor is not part of this family. */
+  private containsDynArrayFixedInnerValueArray(t: JethType): boolean {
+    const arrayChainHasFixedAfterDynamic = (a: JethType, sawDynamic: boolean): boolean => {
+      if (a.kind !== 'array') return false;
+      if (sawDynamic && a.length !== undefined && isValueLeafArray(a)) return true;
+      if (a.element.kind !== 'array') return false;
+      return arrayChainHasFixedAfterDynamic(a.element, sawDynamic || a.length === undefined);
+    };
+    const seenStructs = new Set<JethType>();
+    const visit = (cur: JethType): boolean => {
+      if (cur.kind === 'struct') {
+        if (seenStructs.has(cur)) return false;
+        seenStructs.add(cur);
+        return cur.fields.some((f) => visit(f.type));
+      }
+      if (cur.kind !== 'array') return false;
+      return arrayChainHasFixedAfterDynamic(cur, false) || visit(cur.element);
+    };
+    return visit(t);
+  }
+
   /** Whether a checked RHS `value` reads a whole aggregate FROM CALLDATA (a calldata struct value or a
    *  calldata array/element). Used by the JETH470 gate: legacy COPIES a whole calldata struct into storage
    *  fine, so a struct target rejects only a memory source; a DIRECT array-of-struct target rejects BOTH. */
@@ -16403,6 +16429,21 @@ export class Analyzer {
     value: Expr,
   ): { code: string; msg: string } | undefined {
     if (this.isStorageAggSource(value)) return undefined;
+    const calldataSource = this.isCalldataAggSource(value);
+    // PRE-EXISTING accept-then-revert divergence: a whole calldata/memory STRUCT containing a dynamic
+    // array with a fixed-inner value-array level (uint256[2][], address[2][], and deeper variants) reaches
+    // writeDynStructFromMem/copyArrayValueIntoStorage with a pointer-headed inner image that the storage
+    // copier does not reproduce. solc 0.8.35 copies the payload successfully. Reject at analysis time until
+    // that transcode is proven byte-identical. Keep a bare calldata Arr<T,N>[] assignment on its existing
+    // JETH900 gate by scoping this new clause to the whole-struct path that exposed the gap.
+    if (copiedType.kind === 'struct' && this.containsDynArrayFixedInnerValueArray(copiedType)) {
+      return {
+        code: 'JETH470',
+        msg: `copying a whole ${displayName(copiedType)} that contains a dynamic array with a fixed-size value-array level from ${
+          calldataSource ? 'calldata' : 'memory'
+        } into storage is not supported (JETH cannot yet reproduce solc's storage-copy layout); assign its fields/elements individually`,
+      };
+    }
     // JETH467: a whole FIXED-outer DYNAMIC-STRUCT array (Arr<DIn,N>) from a MEMORY source. Scoped to the
     // memory source; the calldata form is caught by JETH900 in codegen. Batch D: the funcref twin
     // (Arr<Fd,N>) rejects here too (solc legacy: the same UnimplementedFeatureError).
@@ -16412,7 +16453,6 @@ export class Analyzer {
         msg: `copying a whole ${displayName(copiedType)} (a fixed array of dynamic structs) from memory into storage is not supported (solc's legacy pipeline rejects this too); assign its elements/fields individually`,
       };
     }
-    const calldataSource = this.isCalldataAggSource(value);
     if (
       this.solcCannotCopyMemAggToStorage(copiedType) &&
       (copiedType.kind === 'array' || !calldataSource)
