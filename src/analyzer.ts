@@ -10824,17 +10824,14 @@ export class Analyzer {
    *  ACCEPTED while solc's monomorphized mirror rejects it: an over-acceptance).
    *
    *  A template body cannot be checked with `T` unresolved, and binding `T` to ONE concrete type would
-   *  over-REJECT a body valid at a DIFFERENT type (`v.length` is valid at bytes, not at uint256). So the
-   *  body is checked under a DIVERSE probe set of concrete bindings - one per capability class (numeric,
-   *  bool, address, dynamic bytes, string, bytesN, dynamic array, funcref, plus synthesized structs whose
-   *  fields are the body's member names, below) - and ONLY an error that fires under EVERY probe is
-   *  reported. Such an error holds for all those types, so it is type-parameter-INDEPENDENT (every
-   *  monomorphized mirror rejects it); an error that depends on `T` being a particular type is valid at
-   *  some probe and is excluded, so a valid unapplied generic modifier stays ACCEPTED.
-   *  (Residual: an access valid ONLY at a type OUTSIDE the probe set - a NESTED/deeper struct field, a
-   *  struct field of an aggregate type, or an enum member reached through the bare type parameter - can
-   *  survive the intersection; such a never-instantiated template body is an extreme corner and errs to a
-   *  clean reject, never a miscompile or over-acceptance.)
+   *  over-REJECT a body valid at a DIFFERENT type (`v.length` is valid at bytes, not at uint256). Check it
+   *  against the CLOSED compilation unit's REAL passable types instead: primitive capability anchors plus
+   *  every resolved type annotation and named type declared in this source. The former synthetic-struct
+   *  probes invented a flat struct containing every accessed member name. That accepted bodies valid only
+   *  for an imaginary type (OA) while rejecting bodies valid for a real nested aggregate omitted from the
+   *  finite shapes (OR). A real-type binding is constructive evidence that the template has a legal
+   *  monomorph in this unit; if every real binding errors, the declaration is invalid here. Applied generic
+   *  modifiers remain checked at their exact application-site type and never enter this standalone path.
    *
    *  Diagnostics-only: the probe instantiations' emission side effects are discarded by the CALLER's
    *  snapshot/restore block; each probe's diagnostics are captured into a scratch region of the bag and
@@ -10846,9 +10843,9 @@ export class Analyzer {
     definingContract: string;
     buffered: boolean;
   }): void {
-    // One representative concrete type per capability class a type parameter could take. A modifier param
-    // may not be a mapping, so no mapping probe is needed. u256 is included so any body VALID at u256 (the
-    // common controls) accepts.
+    // Primitive capability anchors are always available as explicit type arguments. Add every REAL named
+    // or annotated type below, including nested arrays/structs/enums/brands. Mappings/void are never passable
+    // modifier arguments and are excluded exactly like gateModifierGenericTypeArg.
     const probes: JethType[] = [
       { kind: 'uint', bits: 256 },
       { kind: 'int', bits: 256 },
@@ -10860,32 +10857,35 @@ export class Analyzer {
       { kind: 'array', element: { kind: 'uint', bits: 256 } }, // dynamic T[]: push/pop/length/index
       { kind: 'funcref', params: [], ret: undefined }, // callable
     ];
-    // Struct capability: a member access `v.foo` through the type parameter is valid at a STRUCT that HAS
-    // `foo` - so, unlike the value probes above, no fixed struct covers an arbitrary field NAME. Synthesize
-    // struct probes whose fields are EXACTLY the member names accessed anywhere in the body (one struct per
-    // candidate field TYPE), so `v.foo` is valid under the matching probe and is EXCLUDED from the
-    // intersection as the type-parameter-DEPENDENT access it is - while a genuinely type-INDEPENDENT error
-    // (an undeclared bare name / a missing free function / a member access on `this` or another local) is
-    // unaffected by U's binding and stays broken under every probe, struct included. Over-collecting names
-    // is safe: it can only make MORE `v.<name>` accesses valid, never resolve an error on a non-U base.
-    const memberNames = new Set<string>();
-    const collectMembers = (n: ts.Node): void => {
-      if (ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.name)) memberNames.add(n.name.text);
-      n.forEachChild(collectMembers);
+    const addProbe = (t: JethType): void => {
+      if (t.kind === 'void' || this.typeHasMapping(t)) return;
+      if (!probes.some((p) => typesEqual(p, t))) probes.push(t);
+      // A nested component is itself a legal explicit type argument even when it appears only behind a
+      // field/array in the source. Add the reachable closure so no real nested capability is missed.
+      if (t.kind === 'array') addProbe(t.element);
+      else if (t.kind === 'struct' && !t.recursiveRef) for (const f of t.fields) addProbe(f.type);
     };
-    if (gen.node.body) gen.node.body.forEachChild(collectMembers);
-    if (memberNames.size > 0) {
-      const fieldTypes: JethType[] = [
-        { kind: 'uint', bits: 256 },
-        { kind: 'bool' },
-        { kind: 'address', payable: false },
-        { kind: 'bytesN', size: 32 },
-      ];
-      fieldTypes.forEach((ft, ti) => {
-        const fields = [...memberNames].map((nm, i) => ({ name: nm, type: ft, slot: i, offset: 0 }));
-        probes.push({ kind: 'struct', name: `$genprobe$${ti}`, fields });
-      });
-    }
+    for (const t of this.structsByName.values()) addProbe(t);
+    // Named registries cover structs/enums/brands. Traverse annotations too so a real array/funcref/
+    // contract/interface type used directly in a field, local, param, or return is also a candidate.
+    const scratch = new DiagnosticBag(this.sourceFile, this.sourceFile.fileName);
+    const collectAnnotatedTypes = (n: ts.Node): void => {
+      if (ts.isTypeNode(n)) {
+        const mark = scratch.items.length;
+        const t = resolveType(
+          n,
+          scratch,
+          this.structsByName,
+          this.namedDim,
+          this.interfacesByName,
+          this.contractRefNames(),
+        );
+        scratch.items.length = mark;
+        if (t) addProbe(t);
+      }
+      ts.forEachChild(n, collectAnnotatedTypes);
+    };
+    ts.forEachChild(this.sourceFile, collectAnnotatedTypes);
     const keyOf = (d: Diagnostic): string => `${d.code}|${d.line}|${d.column}|${d.length}`;
     let intersection: Map<string, Diagnostic> | undefined;
     // The FIRST broken probe's diagnostics, kept as a concrete representative for the multi-site case below.
@@ -10955,12 +10955,10 @@ export class Analyzer {
       // let q: u256 = v` - no T is assignable to both), which must still reject. Keep probing to confirm.
     }
     if (!allErrored) return; // some instantiation accepted -> the body is valid at that type -> accept
-    // Every probe was broken: the body does not type-check for ANY instantiation. Prefer the shared
+    // Every real probe was broken: the body does not type-check for any available instantiation. Prefer the shared
     // (type-parameter-INDEPENDENT) diagnostics that survived the span intersection - a precise, real error
     // location. When none survived (a multi-site conflict, empty intersection), emit the first broken probe's
-    // concrete diagnostics: a genuine reject at a genuine location, closing the empty-intersection
-    // over-acceptance. (A body valid ONLY at a type outside this finite probe set - e.g. a deeply nested
-    // struct field or a specific enum - is a safe clean reject, never a miscompile.)
+    // concrete diagnostics: a genuine reject at a genuine location, closing the empty-intersection OA.
     const toEmit = intersection && intersection.size > 0 ? intersection : firstErrors;
     if (toEmit) for (const d of toEmit.values()) this.diags.items.push(d);
   }
