@@ -1757,13 +1757,15 @@ all BOTH-REJECT PARITY with solc, NOT over-rejections.
 - **deep-nesting** (~200+ levels): solc stack-overflows / crashes; JETH accepts with correct bytecode.
   Genuinely unmatchable (like `gasleft`).
 
-**RARE PRE-EXISTING RESIDUAL OVER-ACCEPTANCES (documented, out of scope; sound bytes, never a miscompile):**
-- an `abstract` used as a plain local/field identifier (TS parses `abstract` as a modifier keyword, so the
-  JETH500 walker sees no identifier node; it fires for `abstract` in the positions TS does yield a node).
-- a broken body inside an unapplied SELF-GENERIC modifier that reaches a NESTED-aggregate struct field or an
-  enum member through the bare type param (valid only at a type outside the finite probe set) stays a clean
-  reject - never instantiated, never a miscompile (the concrete / library / depth-1-struct generic cases ARE
-  closed).
+**RARE PRE-EXISTING RESIDUAL OVER-ACCEPTANCES:**
+- ~~`abstract` used as a plain local/field identifier~~ **CLOSED**: `abstract` is now in the JETH500 reserved
+  declaration-name set. The native `abstract class` / bodyless-member modifier positions remain accepted.
+- ~~unapplied SELF-GENERIC modifier finite-probe OA/OR~~ **CLOSED**: standalone validation no longer invents
+  flat synthetic structs from accessed property names. It checks primitive anchors plus every real passable
+  named or annotated type in the compilation unit, including the reachable nested type closure. A member
+  valid only on an imaginary probe now rejects, while a body valid for a real nested struct/array/funcref
+  accepts. Applied templates remain checked at their exact monomorph site. Pins:
+  `test/unapplied-generic-modifier-real-types.test.ts`.
 - ~~an UNAPPLIED @modifier body whose array param is used in a DATA-LOCATION CHIMERA~~ **CLOSED (`bcfb8ad`).**
   `@modifier m(v: u256[]) { v.push(1n); _; }` (and its `v.push(1n); v = new Array<u256>(3n)` chimera and generic
   variants) was over-accepted while solc rejects the memory-array push at every monomorphization. ROOT CAUSE (the
