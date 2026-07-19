@@ -112,7 +112,9 @@ const KEPT_BUILTIN_DECORATOR_NAMES = new Set(['nonReentrant', 'virtual', 'overri
 // RESERVED SOLIDITY KEYWORDS that JETH's TS-based parser accepts as an ordinary identifier but solc
 // PARSE-REJECTS everywhere an identifier is declared (a var / field / parameter / function / modifier /
 // struct-or-event member name). Accepting them is an over-acceptance; checkReservedIdentifierNames rejects
-// exactly this minimal set (JETH500). `using` and `virtual` are also kept decorator names above.
+// the full solc-0.8.35 set that can reach an identifier-shaped TS declaration node (JETH500). `abstract`
+// is contextual in TS: it remains legal as the native class/member modifier, but is reserved when the same
+// token occupies a declaration NAME. `using` and `virtual` are also kept decorator names above.
 // PARSE-REJECTS at EVERY identifier DECLARATION name (a var / field / parameter / function / modifier /
 // struct-or-event member name AND a contract-or-library-or-abstract (class) / interface / enum / enum-member /
 // struct-or-type-alias name). This is the FULL set of solc-0.8.35 keywords + reserved-for-future words that
@@ -129,7 +131,7 @@ const KEPT_BUILTIN_DECORATOR_NAMES = new Set(['nonReentrant', 'virtual', 'overri
 // open to keep the special entries working. `virtual`/`using`/`override` are also kept decorator names, so a
 // @modifier declared with one is caught here (a single JETH500) rather than JETH499.
 const RESERVED_SOLIDITY_IDENTIFIERS = new Set([
-  'address', 'after', 'alias', 'anonymous', 'apply', 'as', 'assembly', 'auto', 'bool', 'byte', 'bytes',
+  'abstract', 'address', 'after', 'alias', 'anonymous', 'apply', 'as', 'assembly', 'auto', 'bool', 'byte', 'bytes',
   'calldata', 'constant', 'constructor', 'contract', 'copyof', 'days', 'define', 'emit', 'ether', 'event',
   'external', 'final', 'fixed', 'gwei', 'hex', 'hours', 'immutable', 'implements', 'indexed',
   'inline', 'interface', 'internal', 'is', 'let', 'library', 'macro', 'mapping', 'match', 'memory', 'minutes',

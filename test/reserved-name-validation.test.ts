@@ -256,7 +256,7 @@ describe('CONTROL: built-in @nonReentrant guard still reverts on re-entrance (un
 // as special-entry method names) and `error` is EXCLUDED (solc accepts it as an identifier).
 describe('JETH500: the full solc reserved-word list rejects at declaration names (expanded set)', () => {
   const SAMPLE = [
-    'after', 'alias', 'apply', 'as', 'auto', 'byte', 'copyof', 'define', 'final', 'implements',
+    'abstract', 'after', 'alias', 'apply', 'as', 'auto', 'byte', 'copyof', 'define', 'final', 'implements',
     'inline', 'is', 'let', 'macro', 'match', 'mutable', 'of', 'partial', 'reference', 'sealed', 'sizeof',
     'static', 'supports', 'typedef', 'immutable', 'indexed', 'unchecked', 'emit', 'event', 'payable',
     'modifier', 'calldata', 'memory', 'storage', 'mapping', 'hex', 'assembly', 'address',
@@ -283,5 +283,19 @@ describe('JETH500: the full solc reserved-word list rejects at declaration names
     for (const w of ['afterX', 'typeOf', 'isValid', 'staticData', 'mappingKey', 'addressBook', 'errorCount']) {
       expect(accepts(`class C { get f(): External<u256> { let ${w}: u256 = 1n; return ${w}; } }`), w).toBe(true);
     }
+  });
+  it('the native abstract declaration keyword remains legal while abstract declaration names reject', () => {
+    expect(
+      accepts(
+        `abstract class B { abstract f(v: u256): External<u256>; }
+         class C extends B { x: u256; @override f(v: u256): External<u256> { this.x = v; return this.x; } }`,
+      ),
+    ).toBe(true);
+    expect(codes(`class C { abstract: u256; get f(): External<u256> { return this.abstract; } }`)).toContain(
+      'JETH500',
+    );
+    expect(
+      codes(`class C { get f(): External<u256> { let abstract: u256 = 1n; return abstract; } }`),
+    ).toContain('JETH500');
   });
 });
