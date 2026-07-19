@@ -506,6 +506,12 @@ export class Analyzer {
   // so a global merge would be UNSOUND both ways. The selector/topic0 is keccak of the BARE signature
   // (scope-independent), so the per-library ErrorDecl/EventIR carry the identical, byte-identical value.
   private libraryConstantsByName = new Map<string, Map<string, { value: bigint | boolean | Uint8Array; type: JethType }>>();
+  // Library constants are legal forward references in Solidity. Keep the declarations separately so a
+  // reference can fold its target lazily, with a recursion guard that turns cycles into a clean reject.
+  private libraryConstantNodesByName = new Map<string, Map<string, ts.PropertyDeclaration>>();
+  private attemptedLibraryConstants = new Set<ts.PropertyDeclaration>();
+  private foldingLibraryConstants = new Set<string>();
+  private currentFoldingLibrary?: string;
   private libraryEventsByName = new Map<string, Map<string, EventIR[]>>();
   private libraryErrorsByName = new Map<string, Map<string, ErrorDecl>>();
   // LIB-MODIFIER: the BARE names of each library's @modifier declarations (solc allows a `modifier` in a
@@ -3025,6 +3031,20 @@ export class Analyzer {
       );
     }
     const fns: RawFunction[] = [];
+    // Pre-index constant declarations before folding any of them. Solidity permits a constant to refer
+    // to a later sibling, so source-order collection alone would incorrectly reject a forward reference.
+    let constantNodes = this.libraryConstantNodesByName.get(name);
+    if (!constantNodes) this.libraryConstantNodesByName.set(name, (constantNodes = new Map()));
+    for (const member of cls.members) {
+      if (!ts.isPropertyDeclaration(member) || !member.initializer || !ts.isIdentifier(member.name)) continue;
+      const isStatic = (ts.getModifiers(member) ?? []).some((m) => m.kind === ts.SyntaxKind.StaticKeyword);
+      const isVisible =
+        !!member.type &&
+        ts.isTypeReferenceNode(member.type) &&
+        ts.isIdentifier(member.type.typeName) &&
+        member.type.typeName.text === 'Visible';
+      if (isStatic && !isVisible && !constantNodes.has(member.name.text)) constantNodes.set(member.name.text, member);
+    }
     // LIB-MODIFIER: @modifier declarations for THIS library, collected via the same collectModifier
     // pipeline a contract uses (identical validation + placeholder/shape analysis), then registered
     // under a qualified `L.name` key after the member loop (so the bare-name duplicate check inside
@@ -8990,6 +9010,13 @@ export class Analyzer {
       // a string constant must be a string literal (solc: only a literal); store the UTF-8 bytes,
       // substituted as a fresh memory string at each read site.
       const init = member.initializer;
+      const ref =
+        ts.isIdentifier(init) && !this.lookupLocal(init.text)
+          ? this.ownLibraryConst(init.text)
+          : this.libQualifiedConst(init);
+      if (ref?.type.kind === 'string' && ref.value instanceof Uint8Array) {
+        return { value: new Uint8Array(ref.value), type };
+      }
       if (!ts.isStringLiteral(init) && !ts.isNoSubstitutionTemplateLiteral(init)) {
         this.diags.error(init, 'JETH048', `@constant '${name}' must be a string literal`);
         return undefined;
@@ -9008,7 +9035,15 @@ export class Analyzer {
       // materializes it as a fresh memory bytes via the SAME `stringLiteral` IR the string path uses (a
       // string and bytes value share one in-memory ABI layout), so the read/getter/encode parity that is
       // already verified for string constants carries over unchanged.
-      const bbytes = this.constByteString(member.initializer);
+      const init = member.initializer;
+      const ref =
+        ts.isIdentifier(init) && !this.lookupLocal(init.text)
+          ? this.ownLibraryConst(init.text)
+          : this.libQualifiedConst(init);
+      if (ref?.type.kind === 'bytes' && ref.value instanceof Uint8Array) {
+        return { value: new Uint8Array(ref.value), type };
+      }
+      const bbytes = this.constByteString(init);
       if (bbytes === undefined) {
         this.diags.error(
           member.initializer,
@@ -9080,15 +9115,41 @@ export class Analyzer {
    *  storage slot, no getter (solc: `library L { T internal constant K = ...; }` reads as a folded
    *  literal at `L.K` and bare `K` inside L's own functions). */
   private collectLibraryConstant(member: ts.PropertyDeclaration, libName: string): void {
+    this.ensureLibraryConstant(libName, (member.name as ts.Identifier).text, member);
+  }
+
+  private ensureLibraryConstant(
+    libName: string,
+    name: string,
+    exactNode?: ts.PropertyDeclaration,
+  ): { value: bigint | boolean | Uint8Array; type: JethType } | undefined {
     let map = this.libraryConstantsByName.get(libName);
     if (!map) {
       map = new Map();
       this.libraryConstantsByName.set(libName, map);
     }
-    const name = (member.name as ts.Identifier).text;
+    if (!exactNode) {
+      const ready = map.get(name);
+      if (ready) return ready;
+    }
+    const member = exactNode ?? this.libraryConstantNodesByName.get(libName)?.get(name);
+    if (!member) return undefined;
+    if (this.attemptedLibraryConstants.has(member)) return map.get(name);
+    const key = `${libName}.${name}`;
+    if (this.foldingLibraryConstants.has(key)) {
+      this.diags.error(member, 'JETH048', `@constant '${name}' has a cyclic dependency`);
+      return undefined;
+    }
+    this.foldingLibraryConstants.add(key);
+    const saved = this.currentFoldingLibrary;
+    this.currentFoldingLibrary = libName;
     const rec = this.foldConstantField(member, (n) => map!.has(n));
+    this.currentFoldingLibrary = saved;
+    this.foldingLibraryConstants.delete(key);
+    this.attemptedLibraryConstants.add(member);
     if (!rec) return;
     map.set(name, rec);
+    return rec;
   }
 
   // An `@immutable` is a value-type field assigned once in the constructor and baked into the
@@ -29004,6 +29065,20 @@ export class Analyzer {
     if (ts.isParenthesizedExpression(node)) return this.foldConstant(node.expression, expected);
     if (this.rejectUppercaseHexPrefix(node)) return undefined; // 0X prefix (solc parser error)
     if (this.rejectBadUnderscores(node)) return undefined; // bad underscore placement (solc parser error)
+    // A library constant may initialize another compatible value-type constant directly. This covers
+    // address and bytesN in addition to the integer/bool expression folders below; their register value
+    // is already in canonical form, and widening preserves that word exactly.
+    const directLibRef =
+      ts.isIdentifier(node) && !this.lookupLocal(node.text)
+        ? this.ownLibraryConst(node.text)
+        : this.libQualifiedConst(node);
+    if (
+      directLibRef &&
+      !(directLibRef.value instanceof Uint8Array) &&
+      (typesEqual(directLibRef.type, expected) || isImplicitWiden(directLibRef.type, expected))
+    ) {
+      return directLibRef.value;
+    }
     // constant ternary `c ? a : b` (any target type): fold the constant condition, then the chosen arm.
     if (ts.isConditionalExpression(node)) {
       const c = this.foldConstBool(node.condition);
@@ -29274,7 +29349,7 @@ export class Analyzer {
         const lq = this.libQualifiedConst(n); // LIB-CONST-IN-CONST: a bool `L.K` folds like `C.K`
         return lq && typeof lq.value === 'boolean' ? lq.value : undefined;
       }
-      const c = this.constantsByName.get(name);
+      const c = this.constantsByName.get(name) ?? this.ownLibraryConst(name);
       return c && typeof c.value === 'boolean' ? c.value : undefined;
     };
     const cb = constBool(node);
@@ -29505,15 +29580,25 @@ export class Analyzer {
    *  initializer (inheriting the exact same wrap/reject behavior - no new miscompile). Guarded by
    *  libraryBindsInScope so a contract member named like the library shadows it. */
   private libQualifiedConst(node: ts.Expression): { value: bigint | boolean | Uint8Array; type: JethType } | undefined {
-    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && this.libraryBindsInScope(node.expression.text)) {
-      return this.libraryConstantsByName.get(node.expression.text)?.get(node.name.text);
+    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression)) {
+      const lib = node.expression.text;
+      // During collection the current library is not yet installed in libraryByName. Its qualified
+      // self-reference still binds, and may target a later sibling declaration.
+      if (lib === this.currentFoldingLibrary || this.libraryBindsInScope(lib)) {
+        return this.libraryConstantsByName.get(lib)?.get(node.name.text) ?? this.ensureLibraryConstant(lib, node.name.text);
+      }
     }
     return undefined;
   }
 
+  private ownLibraryConst(name: string): { value: bigint | boolean | Uint8Array; type: JethType } | undefined {
+    const lib = this.currentFoldingLibrary;
+    return lib === undefined ? undefined : this.libraryConstantsByName.get(lib)?.get(name) ?? this.ensureLibraryConstant(lib, name);
+  }
+
   private constIntRef(node: ts.Expression): bigint | undefined {
     if (ts.isIdentifier(node) && !this.lookupLocal(node.text)) {
-      const c = this.constantsByName.get(node.text);
+      const c = this.constantsByName.get(node.text) ?? this.ownLibraryConst(node.text);
       if (c && typeof c.value === 'bigint' && isInteger(c.type)) return c.value;
     }
     if (ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword) {
@@ -29556,7 +29641,7 @@ export class Analyzer {
     else if (ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword)
       nm = node.name.text;
     if (nm !== undefined) {
-      const c = this.constantsByName.get(nm);
+      const c = this.constantsByName.get(nm) ?? this.ownLibraryConst(nm);
       return c && typeof c.value === 'bigint' && isInteger(c.type) ? c.type : undefined;
     }
     const lq = this.libQualifiedConst(node); // LIB-CONST-IN-CONST: a typed `L.K` types like `C.K`
@@ -29758,7 +29843,8 @@ export class Analyzer {
         const lq = this.libQualifiedConst(node); // LIB-CONST-IN-CONST: a typed `L.K` evaluates like `C.K`
         if (lq && typeof lq.value === 'bigint') return { value: lq.value, type: rt };
         const nm = ts.isIdentifier(node) ? node.text : (node as ts.PropertyAccessExpression).name.text;
-        const c = this.constantsByName.get(nm)!;
+        const c = this.constantsByName.get(nm) ?? this.ownLibraryConst(nm);
+        if (!c) return undefined;
         return { value: c.value as bigint, type: rt };
       }
     }

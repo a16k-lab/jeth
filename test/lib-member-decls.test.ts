@@ -32,6 +32,41 @@ async function sameRun(jsrc: string, ssrc: string, calls: [string, string?][]) {
 }
 
 describe('LIB-CONST: a library constant', () => {
+  it('folds same-library sibling constants, including forward and qualified references', async () => {
+    await sameRun(
+      `static class L { static K: u256 = 5n; static M: u256 = K + 1n; static N: u256 = L.M + 2n; static F: u256 = Q + 3n; static Q: u256 = 7n; }
+       class C { get f(): External<u256> { return L.M * 1000n + L.N * 100n + L.F * 10n + L.Q; } }`,
+      `library L { uint256 internal constant K = 5; uint256 internal constant M = K + 1; uint256 internal constant N = L.M + 2; uint256 internal constant F = Q + 3; uint256 internal constant Q = 7; }
+       contract C { function f() external pure returns(uint256) { return L.M * 1000 + L.N * 100 + L.F * 10 + L.Q; } }`,
+      [['f()']],
+    );
+    await sameRun(
+      `static class L { static A: bool = true; static B: bool = A && !false; }
+       class C { get f(): External<bool> { return L.B; } }`,
+      `library L { bool internal constant A = true; bool internal constant B = A && !false; }
+       contract C { function f() external pure returns(bool) { return L.B; } }`,
+      [['f()']],
+    );
+    await sameRun(
+      `static class L { static A: address = address(1n); static B: address = A; static X: bytes4 = "abcd"; static Y: bytes4 = X; }
+       class C { get a(): External<address> { return L.B; } get b(): External<bytes4> { return L.Y; } }`,
+      `library L { address internal constant A = address(1); address internal constant B = A; bytes4 internal constant X = "abcd"; bytes4 internal constant Y = X; }
+       contract C { function a() external pure returns(address) { return L.B; } function b() external pure returns(bytes4) { return L.Y; } }`,
+      [['a()'], ['b()']],
+    );
+    await sameRun(
+      `static class L { static S2: string = S1; static S1: string = "hello"; static B1: bytes = "abc"; static B2: bytes = B1; }
+       class C { get s(): External<string> { return L.S2; } get b(): External<bytes> { return L.B2; } }`,
+      `library L { string internal constant S2 = S1; string internal constant S1 = "hello"; bytes internal constant B1 = "abc"; bytes internal constant B2 = B1; }
+       contract C { function s() external pure returns(string memory) { return L.S2; } function b() external pure returns(bytes memory) { return L.B2; } }`,
+      [['s()'], ['b()']],
+    );
+  });
+
+  it('rejects cyclic sibling constants cleanly, matching solc', () => {
+    expect(codes(`static class L { static A: u256 = B + 1n; static B: u256 = A + 1n; } class C { get f(): External<u256> { return 1n; } }`)).toContain('JETH048');
+  });
+
   it('reads byte-identically to solc as L.K and bare K inside a lib fn (value / string / bytes)', async () => {
     await sameRun(
       `static class L { static K: u256 = 5n; g(): u256 { return K; } }\nclass C { get f(): External<u256> { return L.g() + L.K; } }`,

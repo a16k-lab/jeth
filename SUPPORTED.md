@@ -216,6 +216,10 @@ receiver, or whose name is not a built-in member of the receiver type, is not a 
 attached function (no-collision attached calls still work). Rejected (clean): a library with a state field /
 constructor, `L.unknownMember`, and an ambiguous attachment.
 
+Library constants may depend on sibling constants by bare or qualified name, including forward references.
+Integer, bool, address, bytesN, string, and bytes dependencies fold byte-identically to solc; cyclic
+dependencies reject cleanly at compile time.
+
 External (delegatecall) library functions (Phase B) are also supported, byte-identical to solc's public/
 external library functions: an `External<T>` method in a `static class` library is deployed in the library's own bytecode
 and called via `DELEGATECALL` to a link-time address. `compile()` returns the library artifacts +
