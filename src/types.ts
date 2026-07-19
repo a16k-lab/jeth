@@ -689,7 +689,8 @@ export function isDynStructLeafArrayField(t: JethType): boolean {
  *  T[][]) -> head pointer to the B4 pointer-headed image) AND which has at least one dynamic field (so
  *  it is a genuine dynamic-field struct, not a static struct that B1 owns). Mirrors
  *  Analyzer.isSupportedDynStructLocal (kept here so the array gate can recurse without an
- *  Analyzer instance). Static-array / nested-struct / struct-element-array fields stay gated. */
+ *  Analyzer instance). Nested dynamic structs and dynamic struct-element arrays recurse through the same
+ *  one-word pointer heads; static aggregates are flattened inline. */
 export function isDynStructLeaf(t: JethType): boolean {
   if (t.kind !== 'struct' || !isDynamicType(t)) return false;
   return t.fields.every((f) => isDynStructLeafFieldOk(f.type));
@@ -713,6 +714,10 @@ export function isDynStructLeafFieldOk(ft: JethType): boolean {
     // Lift #4 mirror of Analyzer.isSupportedDynStructLocal: a FIXED-outer DYNAMIC-STRUCT array field
     // (Arr<In,N>) - one head word -> the N-pointer fixed image (each -> a per-element dyn-struct image).
     isDynStructFixedLeafArray(ft) ||
+    // Nested dynamic aggregates use the same one-word pointer head as the already-supported dynamic
+    // leaves. The recursive calldata/memory codecs build and consume their images at arbitrary depth.
+    isDynStructElemArrayField(ft) ||
+    (ft.kind === 'struct' && isDynamicType(ft) && isDynStructLeaf(ft)) ||
     // B(1) mirror of Analyzer.isSupportedDynStructLocal: a NESTED STATIC AGGREGATE field (nested static
     // struct / static fixed array Arr<T,N>) stored INLINE as flattened head words. Keep byte-parallel.
     (ft.kind === 'struct' && isStaticType(ft)) ||

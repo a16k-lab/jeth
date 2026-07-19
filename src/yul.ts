@@ -1869,12 +1869,10 @@ ${indent(runtime, 6)}
           // branch -> cdFieldArrayHeader + abiDecFromCdToImage, Panic 0x41 cd->mem alloc cap), then ABI-
           // encode that image with the SAME encoder the memArray-local return uses (encodeNestedMemReturn:
           // [0x20] wrapper + abiEncFromMem). GATED to isAggregateLeafArray (the EXACT element-shape
-          // predicate the let-bound localDecl gate uses): admits St with value / bytes/string / dynamic
-          // value-array / static-struct-or-fixed-array fields, and REJECTS a NESTED-DYNAMIC-STRUCT-leaf
-          // (St{inner:In}) or a struct-element-array field (St{ps:P[]}) - exactly the shapes
-          // abiDecFromCdToImage cannot build and where the let-bound path itself rejects (JETH200/JETH072).
-          // An unsupported element falls through to a clean JETH900 reject (byte-parallel to the let form),
-          // never truncated/dangling bytes. Does NOT touch abi.encode(o.xs) (a separate path, already MATCHes).
+          // predicate the let-bound localDecl gate uses). Its recursive field set includes nested dynamic
+          // structs and struct-element arrays; abiDecFromCdToImage builds both pointer-headed images.
+          // Genuinely unsupported elements still fall through to a clean JETH900 reject. Does NOT touch
+          // abi.encode(o.xs), which has its own already-matching route.
           if (
             s.value.kind === 'arrayValue' &&
             s.value.arr.base.kind === 'cdDynArrayField' &&
@@ -10791,9 +10789,8 @@ ${indent(runtime, 6)}
     // each dynamic field's head word = an ABSOLUTE pointer to its own fresh [len][..] sub-image). The
     // calldata twin of buildDynStructFromMemBlob; uses calldatasize() as the source data-bounds limit
     // and the caller-selected `cap` for oversized-length / alloc-overflow (panic(0x41) in the cd->mem
-    // copy context, matching solc's calldata->memory deep copy). Restricted to the isDynStructLeaf field
-    // set the rest of the dyn-struct machinery admits (a nested-struct / struct-element-array field stays
-    // gated upstream, so it never reaches here).
+    // copy context, matching solc's calldata->memory deep copy). Restricted to the recursive
+    // isDynStructLeaf field set, including nested dynamic structs and struct-element arrays.
     if (t.kind === 'struct' && isDynamicType(t)) {
       return this.buildDynStructFromCdBase(t, cdPtr, out, cap);
     }

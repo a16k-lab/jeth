@@ -3,16 +3,13 @@
 // matching two-step form `let ys: St[] = o.xs; return ys`: DEEP-COPY the field from its resolved calldata
 // header into a fresh pointer-headed memory image (aggArgToMemPtr's cdDynArrayField branch ->
 // cdFieldArrayHeader + abiDecFromCdToImage), then ABI-encode that image with the SAME encoder the
-// memArray-local return uses (encodeNestedMemReturn). Gated to isAggregateLeafArray (the EXACT
-// element-shape predicate the let-bound localDecl gate uses): it admits an St element whose fields are
-// value / bytes/string / dynamic-value-array / static-struct-or-fixed-array, and REJECTS a
-// NESTED-DYNAMIC-STRUCT-leaf element (St{inner:In}) or a struct-element-array field (St{ps:P[]}) - exactly
-// the shapes abiDecFromCdToImage cannot build and where the let-bound path itself rejects. An unsupported
-// element stays a CLEAN JETH900 reject (byte-parallel to the let form), never truncated/dangling bytes.
+// memArray-local return uses (encodeNestedMemReturn). Gated to isAggregateLeafArray, the exact
+// element-shape predicate the let-bound localDecl gate uses. Its recursive field predicate includes nested
+// dynamic structs and dynamic arrays of static/dynamic structs, all decoded by abiDecFromCdToImage.
 // Byte-identical to solc 0.8.35 for the supported element shapes (string+value, bytes, dyn-value-array,
 // static-struct field) across empty/single/3 elements and a >32-byte string, with a non-vacuous gk() reading
-// o.k. CONTROLS: nested-In + struct-element-array direct returns are clean JETH900 rejects; the let-bound
-// and abi.encode(o.xs) forms still MATCH; o.xs[999n] const-OOB is a runtime Panic 0x32.
+// o.k. Nested-In and struct-element-array forms are checked direct and let-bound; abi.encode(o.xs) remains
+// matched; o.xs[999n] const-OOB is a runtime Panic 0x32.
 import { describe, it, expect } from 'vitest';
 import { compile } from '../src/compile.js';
 import { Harness, pad32 } from '../src/evm.js';
@@ -84,6 +81,10 @@ const eDynarr = (n: bigint | number, arr: bigint[]) =>
   tuple([{ static: W(n) }, { dyn: W(arr.length) + arr.map((x) => W(x)).join('') }]);
 const eStrStat = (s: string, a: bigint, b: bigint, n: bigint) =>
   tuple([{ dyn: encString(s) }, { static: W(a) + W(b) }, { static: W(n) }]);
+const eNested = (s: string, n: bigint | number) =>
+  tuple([{ dyn: tuple([{ dyn: encString(s) }]) }, { static: W(n) }]);
+const ePoints = (n: bigint | number, ps: [bigint, bigint][]) =>
+  tuple([{ static: W(n) }, { dyn: W(ps.length) + ps.map(([a, b]) => W(a) + W(b)).join('') }]);
 
 async function diff(J: string, S: string, calls: [string, string][]) {
   const h = await Harness.create();
@@ -194,21 +195,23 @@ describe('S5-B: direct return of a calldata dyn-struct-array field o.xs vs solc 
     await diff(Jlet, Slet, [['go(((string,uint256)[],uint256))', cd]]);
   });
 
-  it('CONTROL: nested-dyn-struct-leaf element St{inner:In;n} DIRECT return is a CLEAN JETH900 reject (no truncated bytes)', () => {
-    // solc returns 448 bytes of full nested bodies for this shape; the tight gate keeps it rejecting,
-    // BYTE-PARALLEL to the let-bound form which itself rejects (JETH200). A wrong-bytes accept (the
-    // attempt-1 miscompile: 128 bytes with dangling offsets) is FAR WORSE than this clean reject.
+  it('nested dynamic struct fields return byte-identically, direct and through a memory local', async () => {
     const Jn = `type In = { s: string }; type St = { inner: In; n: u256 }; type O = { xs: St[]; k: u256 }; class C { get go(o: O): External<St[]> { return o.xs; } get gk(o: O): External<u256> { return o.k; } }`;
-    expect(codes(Jn)).toContain('JETH900');
-    // parity: the let-bound form of the SAME shape also rejects (analyzer JETH200).
+    const Sn = `struct In { string s; } struct St { In inner; uint256 n; } struct O { St[] xs; uint256 k; } contract C { function go(O calldata o) external pure returns(St[] memory) { return o.xs; } function gk(O calldata o) external pure returns(uint256) { return o.k; } }`;
+    const cd = encO(dynArr([eNested('alpha', 7), eNested('a string longer than thirty two bytes for tail coverage', 9)]), 42);
+    await diff(Jn, Sn, [['go((((string),uint256)[],uint256))', cd], ['gk((((string),uint256)[],uint256))', cd]]);
     const JnLet = `type In = { s: string }; type St = { inner: In; n: u256 }; type O = { xs: St[]; k: u256 }; class C { get go(o: O): External<St[]> { let ys: St[] = o.xs; return ys; } get gk(o: O): External<u256> { return o.k; } }`;
-    expect(codes(JnLet)).toContain('JETH200');
+    const SnLet = `struct In { string s; } struct St { In inner; uint256 n; } struct O { St[] xs; uint256 k; } contract C { function go(O calldata o) external pure returns(St[] memory) { St[] memory ys = o.xs; return ys; } function gk(O calldata o) external pure returns(uint256) { return o.k; } }`;
+    await diff(JnLet, SnLet, [['go((((string),uint256)[],uint256))', cd]]);
   });
 
-  it('CONTROL: struct-element-array field St{n;ps:Pt[]} DIRECT return is a CLEAN JETH900 reject', () => {
+  it('dynamic arrays of static structs inside elements return byte-identically', async () => {
     const Jp = `type Pt = { a: u256; b: u256 }; type St = { n: u256; ps: Pt[] }; type O = { xs: St[]; k: u256 }; class C { get go(o: O): External<St[]> { return o.xs; } get gk(o: O): External<u256> { return o.k; } }`;
-    expect(codes(Jp)).toContain('JETH900');
+    const Sp = `struct Pt { uint256 a; uint256 b; } struct St { uint256 n; Pt[] ps; } struct O { St[] xs; uint256 k; } contract C { function go(O calldata o) external pure returns(St[] memory) { return o.xs; } function gk(O calldata o) external pure returns(uint256) { return o.k; } }`;
+    const cd = encO(dynArr([ePoints(1, []), ePoints(2, [[3n, 4n], [5n, 6n]])]), 77);
+    await diff(Jp, Sp, [['go(((uint256,(uint256,uint256)[])[],uint256))', cd], ['gk(((uint256,(uint256,uint256)[])[],uint256))', cd]]);
     const JpLet = `type Pt = { a: u256; b: u256 }; type St = { n: u256; ps: Pt[] }; type O = { xs: St[]; k: u256 }; class C { get go(o: O): External<St[]> { let ys: St[] = o.xs; return ys; } get gk(o: O): External<u256> { return o.k; } }`;
-    expect(codes(JpLet)).toContain('JETH200');
+    const SpLet = `struct Pt { uint256 a; uint256 b; } struct St { uint256 n; Pt[] ps; } struct O { St[] xs; uint256 k; } contract C { function go(O calldata o) external pure returns(St[] memory) { St[] memory ys = o.xs; return ys; } function gk(O calldata o) external pure returns(uint256) { return o.k; } }`;
+    await diff(JpLet, SpLet, [['go(((uint256,(uint256,uint256)[])[],uint256))', cd]]);
   });
 });

@@ -19883,7 +19883,7 @@ export class Analyzer {
     // every field must be a value type (inline head word), bytes/string (head pointer to [len][data]),
     // a dynamic value-element array (head pointer to [len][elems]), or a NESTED-DYNAMIC-LEAF array
     // (bytes[]/string[]/T[][]) whose head word points to the B4 pointer-headed image (Cat C).
-    // Static-array / nested-struct / struct-element-array fields stay gated.
+    // Nested dynamic structs and struct-element arrays recurse through the same pointer-headed image.
     return t.fields.every(
       (f) =>
         isStaticValueType(f.type) ||
