@@ -1,47 +1,60 @@
 # JETH
 
-A smart-contract language whose **surface syntax is a strict subset of TypeScript**
-but whose **semantics, type system, and memory/state model are the EVM's**
-(Solidity-equivalent). Think "AssemblyScript for the EVM." JETH compiles to EVM
-bytecode by emitting **Yul** and handing it to `solc`.
+JETH is a smart-contract language with a strict TypeScript-shaped syntax and
+Solidity-compatible EVM semantics. It compiles JETH source to typed IR, Yul,
+ABI metadata, and EVM bytecode through `solc`.
 
-## Pipeline
+The project follows one non-negotiable compiler rule: a clean rejection is
+better than accepted code that produces the wrong behavior. Accepted programs
+are tested against Solidity 0.8.35 at deployment and runtime, including return
+data, revert data, event logs, and raw storage slots.
 
-```
-.jeth source
-  -> ts.createSourceFile (TS syntactic AST)
-  -> subset validator        (reject non-EVM constructs, source-span diagnostics)
-  -> semantic analyzer       (decorators -> IR metadata, symbol table)
-  -> type checker            (JETH types, checked-arith rules, BigInt literals)
-  -> storage-layout planner  (Solidity-compatible slots + packing)
-  -> Yul emitter             (dispatcher, codecs, checked arithmetic, storage ops)
-  -> solc (Yul mode, Cancun) (optimizer + stack scheduler + assembler + JUMPDESTs)
-  -> creation + runtime bytecode  +  ABI JSON (emitted by us)
-```
+> JETH is pre-release software. It has a large differential test suite and zero
+> known miscompiles at the current revision, but it has not yet completed an
+> independent production security audit or a stable public release process. Do
+> not treat it as production-ready until the release gates below are complete.
+
+## Why JETH
+
+- Familiar TypeScript-shaped syntax without JavaScript runtime semantics.
+- Checked EVM arithmetic, Solidity-compatible storage, ABI, and revert behavior.
+- Compile-time mutability inference and a deliberately small visibility model.
+- Branded value types, exhaustive switches, generics, named/default arguments,
+  struct spread, `for...of`, and an EIP-1153 `@nonReentrant` guard.
+- Native support for interfaces, inheritance, libraries, proxies, beacons, and
+  multiple EIP-2535 diamond storage models.
+- A safety-first compiler policy: unsupported shapes must fail loudly at compile
+  time instead of falling through to partial code generation.
 
 ## Quick start
 
+JETH currently requires Node.js 22 and uses the compiler directly from the
+repository.
+
 ```bash
 npm install
-npx tsx src/cli.ts examples/Counter.jeth --bin --layout --yul
-npm test     # compiles Counter, deploys on @ethereumjs/evm, asserts state
+npm run build
+npm run jethc -- examples/Counter.jeth --abi --bin --layout
+npm test
 ```
 
-## Example
+Write compiler artifacts to a directory:
 
-JETH is **native-syntax only**: a bare `class` is the deployed contract, a bare
-field is contract state, `External<T>` exposes a function to the ABI, and mutability
-is inferred (a read-only value-returning entry is spelled with `get`). No decorators
-are required for the ordinary surface. See the
-[Legacy decorator removal](SUPPORTED.md#legacy-decorator-removal-native-syntax-only)
-section for the retired decorator spellings and their native replacements.
+```bash
+npm run jethc -- examples/Counter.jeth -o build/
+```
+
+The public package and standalone binary are roadmap items. Until they ship,
+the repository command above is the supported entry point.
+
+## A first contract
 
 ```typescript
 class Counter {
   count: u256 = 0n;
 
   increment(): External<void> {
-    this.count += 1n;   // checked uint256 add -> SSTORE at slot 0
+    this.count += 1n;
   }
 
   get current(): External<u256> {
@@ -50,63 +63,167 @@ class Counter {
 }
 ```
 
-`this.count += 1n` is checked 256-bit integer addition with EVM overflow rules
-(reverts with `Panic(0x11)`), **not** JS `+`.
+A bare class is a deployed contract. A bare field is contract storage.
+`External<T>` exposes a method through the ABI, while `get` marks a read-only
+value-returning entry. The compiler infers whether that entry is `pure` or
+`view`.
 
-## Status
+`this.count += 1n` is checked `uint256` arithmetic. It reverts with
+`Panic(0x11)` on overflow; it is not JavaScript addition.
 
-Everything through Phase 5 is complete and verified on a live EVM with differential
-tests against real Solidity (`solc-js`): Phase 0 (frontend + validator), Phase 1
-(Counter end-to-end), Phase 2 (control flow, `require`/`revert`/`Error(string)`/custom
-errors, events), Phase 3 (mappings with keccak slot derivation, `msg.*`/`block.*`/`tx.*`
-globals, `payable`, `address(this)`), Phase 4 (the full ABI-v2 surface: arrays,
-structs, `bytes`/`string`, dynamic head/tail encode/decode with unbounded nesting,
-storage/calldata composites, memory locals, internal calls + overloading, tuple
-destructuring, `delete`, events/errors), and Phase 5 (functions in depth: constructors
-with ABI-encoded args, immutable fields - a ctor-assigned `static K: T;` - baked into
-code with no storage slot, and user `@modifier`s with pre/post code + solc-identical
-buffered return). Phase 6 is in
-progress (external low-level calls `addr.call`/`tryCall`/`staticcall`, `abi.decode`,
-typed interface calls `IFoo(addr).bar(x)`, `try`/`catch`, `new Array<T>(n)`,
-`addr.code`/`codehash`). Returndata, raw storage slots (including keccak-derived mapping
-slots), event logs, and revert data are asserted byte-identical to Solidity across
-**1900+ differential tests** plus repeated adversarial fuzzing (zero known miscompiles).
-The directive's `Vault` contract runs end-to-end.
+## Current status
 
-On top of Phase 4, JETH ships **enums** (Solidity-exact: ABI `uint8`, 1-byte storage,
-`Panic(0x21)` on an out-of-range conversion) plus six **distinctive features** that go
-beyond plain Solidity parity, each differentially verified byte-identical to solc and
-adversarially audited:
+The current compiler supports a broad Solidity-compatible surface:
 
-- **Branded newtypes** `type TokenId = Brand<u256>` (nominal value types, zero runtime cost)
-- **Struct spread** `{ ...cfg, fee: f }` and **`for...of`** over arrays (compile-time desugarings)
-- **Default + named arguments** at internal call sites (`f(a, b = 10n)`, `f({ a, b })`)
-- **`@nonReentrant`** (an EIP-1153 transient-storage reentrancy guard, no storage slot)
-- **Exhaustive `switch`** over enums/value types (no implicit fall-through, exhaustiveness checked)
-- **Generics** `f<T>(...)` (compile-time monomorphization, internal-only)
+- value types, enums, branded newtypes, arrays, mappings, structs, tuples,
+  bytes, strings, events, custom errors, and checked/unchecked arithmetic;
+- constructors, immutable fields, modifiers, inheritance, abstract contracts,
+  interfaces, internal and externally linked libraries;
+- ABI v2 encoding and decoding, external calls, `try`/`catch`, calldata slices,
+  hashing, signature recovery, and EVM precompiles;
+- EIP-1167 clones, ERC-1967 and transparent proxies, UUPS, beacons, and three
+  EIP-2535 diamond storage models;
+- compile-time generics, exhaustive switches, named/default arguments, struct
+  spread, `for...of`, mutability inference, and transient-storage reentrancy
+  protection.
 
-plus compile-time **mutability inference** (the compiler resolves `view` vs `pure` from a function's
-body, so no marker is written; `View<T>`/`Pure<T>` markers exist only inside an `interface`) and a
-deliberately minimal visibility surface (`External<T>` exposes a function; everything else is internal). See
-[docs/distinctive-features.md](docs/distinctive-features.md) for these and [SUPPORTED.md](SUPPORTED.md)
-for the full Solidity-parity matrix. Remaining Phase 6 work: inheritance, libraries (`using for` /
-`DELEGATECALL`), `ecrecover` + precompiles, `receive`/`fallback`, function types, `bytes`/`string.concat`,
-calldata slicing, and source maps / CLI polish.
+The full acceptance matrix and every deliberate compile-time gate live in
+[SUPPORTED.md](SUPPORTED.md). JETH currently has more than 5,000 tests across
+502 test files, with extensive runtime differential checks against solc 0.8.35.
+Test count alone is not a security audit; the production gates below remain
+mandatory.
 
-## Layout
+## Documentation
 
-| Path | Role |
-|------|------|
-| `src/parser.ts` | TS AST + decorator extraction |
-| `src/validator.ts` | Phase 0 subset gate |
-| `src/typeresolver.ts` | TS type annotations -> JethType |
-| `src/analyzer.ts` | semantic analysis + type checking -> typed IR |
-| `src/layout.ts` | Solidity storage-layout planner |
-| `src/selectors.ts` | keccak256 signatures + 4-byte selectors |
-| `src/yul.ts` | IR -> Yul (codegen, checked arithmetic) |
-| `src/solc.ts` | Yul -> bytecode via solc-js |
-| `src/abi.ts` | ABI JSON from IR |
-| `src/compile.ts` | pipeline orchestrator |
-| `src/evm.ts` | @ethereumjs/evm execution harness |
-| `src/cli.ts` | `jethc` CLI |
+Public language documentation lives in [docs/guide](docs/guide/README.md):
+
+- [Getting started](docs/guide/getting-started.md)
+- [Source units and imports](docs/guide/language/source-units.md)
+- [Structure of a contract](docs/guide/language/contract-structure.md)
+- [Types and data locations](docs/guide/language-reference.md)
+- [Expressions and control flow](docs/guide/language/expressions.md)
+- [Functions and composition](docs/guide/language/functions.md)
+- [Contract ABI specification](docs/guide/internals/abi.md)
+- [Storage layout](docs/guide/internals/storage-layout.md)
+- [Examples](docs/guide/examples.md)
+- [Security considerations](docs/guide/security/considerations.md)
+- [Compiler correctness model](docs/guide/security/compiler-correctness.md)
+- [Compiler and tooling](docs/guide/compiler-and-tooling.md)
+- [Product roadmap](docs/guide/roadmap.md)
+
+The existing files directly under `docs/` are engineering design notes, audit
+records, and implementation specifications. They support compiler development
+but are not the recommended learning path.
+
+## Roadmap to a production release
+
+The detailed roadmap is maintained in [docs/guide/roadmap.md](docs/guide/roadmap.md).
+The short version is ordered by release risk, not novelty.
+
+### 1. Productize the compiler and CLI
+
+- Publish a real `jethc` package and standalone binary with a stable versioned
+  command surface.
+- Add project builds, multi-file input, a config file, incremental/watch mode,
+  deterministic artifact directories, and a content-addressed compile cache.
+- Add structured JSON diagnostics, stable exit codes, standard JSON input/output,
+  source maps, contract selection, optimizer/EVM target controls, and dependency
+  metadata.
+- Integrate with Foundry, Hardhat, deployment scripts, explorer verification,
+  editor diagnostics, and an LSP.
+
+### 2. Preserve the correctness bar while expanding the language
+
+- Continue differential and adversarial testing for every accepted source shape.
+- Squash high-value over-rejections only when the lifted path is proven at
+  deploy, run, and decode time. A safe reject remains preferable to a speculative
+  lift.
+- Strengthen analyzer reachability, aliasing, data-location, ABI, storage-layout,
+  and optimizer invariants with generated conformance tests.
+- Add the remaining useful compiler features from `SUPPORTED.md`, with priority
+  based on real contract demand instead of surface-area counts.
+- Build optimizer validation around semantic equivalence, gas snapshots, and
+  reproducible before/after artifacts.
+
+### 3. Build a local AI-assisted verification lab
+
+- Use an offline model as a test and exploit-candidate proposer, never as the
+  source of truth for compiler correctness or contract safety.
+- Pair it with deterministic parsers, the JETH analyzer, solc 0.8.35, deploy/run
+  differential oracles, fuzzers, and minimized reproducible witnesses.
+- First collect a high-quality corpus of accepted/rejected parity cases, known
+  compiler bugs, diagnostics, and reductions. Fine-tune only after the dataset
+  and evaluation harness are stable.
+- Require every model-generated claim to produce executable evidence. Security
+  findings without a reproducer remain hypotheses.
+
+### 4. Ship safe numerical libraries as separately audited packages
+
+- Start with integer utilities, full-precision `mulDiv`, fixed-point types,
+  explicit rounding modes, unit/range types, bounds, and domain checks.
+- Treat transcendental functions, numerical integration, differentiation, and
+  approximation as error-bounded algorithms with explicit precision and gas
+  contracts.
+- Prefer compile-time symbolic simplification where possible. EVM runtime math
+  must never pretend to have floating-point or real-number semantics.
+- Keep the math package separate from the compiler core and audit it independently.
+  Avoid claims such as "super safe" until a precise threat model and external
+  review support them.
+
+### 5. Complete the release and security system
+
+- Define semantic versioning, changelogs, migration notes, compatibility policy,
+  and a frozen language-spec version for each compiler release.
+- Produce reproducible builds, signed release artifacts, checksums, an SBOM, and
+  provenance through CI.
+- Add a public security policy, private disclosure channel, bug bounty, external
+  compiler audit, standard-library audits, and an incident-response process.
+- Maintain a public conformance corpus and a machine-readable list of supported
+  features and deliberate rejection gates.
+- Resolve release metadata before publication, including the current mismatch
+  between the GPLv3 `LICENSE` file and the `MIT` value in `package.json`.
+
+## Compiler pipeline
+
+```text
+.jeth source
+  -> TypeScript syntactic AST
+  -> subset validator and diagnostics
+  -> semantic analyzer and type checker
+  -> Solidity-compatible storage planner
+  -> typed JETH IR
+  -> Yul emitter and ABI generator
+  -> solc in Yul mode
+  -> creation bytecode, runtime bytecode, ABI, layout, and link references
 ```
+
+| Path | Responsibility |
+| --- | --- |
+| `src/parser.ts` | Source parsing and JETH syntax extraction |
+| `src/validator.ts` | TypeScript-subset validation |
+| `src/typeresolver.ts` | Source annotations to JETH types |
+| `src/analyzer.ts` | Semantic analysis and typed IR construction |
+| `src/layout.ts` | Solidity-compatible storage planning |
+| `src/abi.ts` | ABI metadata generation |
+| `src/yul.ts` | Yul generation, codecs, arithmetic, and storage operations |
+| `src/solc.ts` | Yul compilation through solc-js |
+| `src/compile.ts` | Pipeline and multi-artifact orchestration |
+| `src/evm.ts` | Local EVM execution harness |
+| `src/cli.ts` | Current `jethc` command-line entry |
+
+## Development checks
+
+```bash
+npm run build
+npm test
+npm run format:check
+```
+
+Compiler changes should include focused regression pins and, when behavior has a
+Solidity equivalent, deploy/run/decode comparisons against solc. The suite should
+also pass with shuffled test-file order to detect hidden global state and flakes.
+
+## License
+
+See [LICENSE](LICENSE). The repository must resolve the license identifier mismatch
+in `package.json` before the first public package release.
