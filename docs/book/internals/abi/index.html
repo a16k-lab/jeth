@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Contract ABI specification in the JETH language documentation.">
+  <meta name="theme-color" content="#11131a">
+  <meta property="og:image" content="../../assets/a16k-avatar-logo.png">
+  <title>Contract ABI specification | JETH</title>
+  <link rel="icon" href="../../assets/jeth-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../../assets/book.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../../index.html" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span></a>
+    <nav class="top-nav" aria-label="Primary"><a class="is-active" href="../../index.html">Guides</a><a href="../compiler-and-tooling/index.html">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
+    <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
+  </header>
+  <div class="pre-release"><span>Pre-release</span> JETH is under active compiler and security review.</div>
+  <div class="book-shell">
+    <aside class="sidebar"><div class="sidebar-title">Guides</div><section class="sidebar-group"><h2>Guides</h2><a class="sidebar-link" href="../../index.html">JETH Documentation</a><a class="sidebar-link" href="../../guides/getting-started/index.html">Getting started</a><a class="sidebar-link" href="../../guides/language-tour/index.html">Language tour</a><a class="sidebar-link" href="../../guides/examples/index.html">Examples</a></section><section class="sidebar-group"><h2>Language</h2><a class="sidebar-link" href="../../language/source-units/index.html">Source units and imports</a><a class="sidebar-link" href="../../language/contract-structure/index.html">Contract structure</a><a class="sidebar-link" href="../../language/types/index.html">Types</a><a class="sidebar-link" href="../../language/value-types/index.html">Value types</a><a class="sidebar-link" href="../../language/reference-types/index.html">Reference and composite types</a><a class="sidebar-link" href="../../language/data-locations/index.html">Data locations and copying</a><a class="sidebar-link" href="../../language/expressions/index.html">Expressions and operators</a><a class="sidebar-link" href="../../language/control-flow/index.html">Statements and control flow</a><a class="sidebar-link" href="../../language/functions/index.html">Functions</a><a class="sidebar-link" href="../../language/globals-and-builtins/index.html">Units, globals, and builtins</a><a class="sidebar-link" href="../../language/jeth-features/index.html">JETH-specific features</a></section><section class="sidebar-group"><h2>Contracts</h2><a class="sidebar-link" href="../../contracts/inheritance/index.html">Constructors and inheritance</a><a class="sidebar-link" href="../../contracts/modifiers/index.html">Function modifiers</a><a class="sidebar-link" href="../../contracts/interfaces-and-calls/index.html">Interfaces and external calls</a><a class="sidebar-link" href="../../contracts/libraries/index.html">Libraries and using</a><a class="sidebar-link" href="../../contracts/events-and-errors/index.html">Events, errors, and panics</a></section><section class="sidebar-group"><h2>Internals</h2><a class="sidebar-link is-active" href="./index.html" aria-current="page">Contract ABI specification</a><a class="sidebar-link" href="../storage-layout/index.html">Storage layout</a><a class="sidebar-link" href="../compiler-and-tooling/index.html">Compiler, CLI, and tooling</a><a class="sidebar-link" href="../artifacts/index.html">Contracts and artifacts</a></section><section class="sidebar-group"><h2>Advanced</h2><a class="sidebar-link" href="../../advanced/contract-creation-and-clones/index.html">Contract creation and clones</a><a class="sidebar-link" href="../../advanced/proxies-and-diamonds/index.html">Proxies, beacons, and diamonds</a></section><section class="sidebar-group"><h2>Security</h2><a class="sidebar-link" href="../../security/considerations/index.html">Security considerations</a><a class="sidebar-link" href="../../security/compiler-correctness/index.html">Compiler correctness model</a></section><section class="sidebar-group"><h2>Reference</h2><a class="sidebar-link" href="../../reference/cheatsheet/index.html">Syntax cheatsheet</a><a class="sidebar-link" href="../../reference/differences/index.html">Differences from TypeScript and Solidity</a><a class="sidebar-link" href="../../reference/diagnostics/index.html">Compiler diagnostics</a><a class="sidebar-link" href="../../reference/known-limitations/index.html">Supported features and limitations</a><a class="sidebar-link" href="../../reference/feature-matrix/index.html">Complete feature matrix</a></section><section class="sidebar-group"><h2>Project</h2><a class="sidebar-link" href="../../project/roadmap/index.html">Product roadmap</a><a class="sidebar-link" href="../../project/overview/index.html">Repository overview</a></section><a class="built-by" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></aside>
+    <main class="content-shell">
+      <article class="article"><div class="article-kicker">Internals</div>
+<h1 id="contract-abi-specification">Contract ABI specification</h1>
+<p>Built by <a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer">@a16k-lab</a>.</p>
+<p>JETH uses the Ethereum Contract ABI for externally visible calls, returns, events, and errors. The target behavior is Solidity 0.8.35 for overlapping supported types.</p>
+<h2 id="function-selectors">Function selectors<a class="heading-anchor" href="#function-selectors" aria-label="Link to Function selectors">#</a></h2>
+<p>The first four calldata bytes are:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>text</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="text"><code>keccak256(&quot;name(canonicalType1,canonicalType2,...)&quot;)[0:4]</code></pre></div>
+<p>Return types are not part of the selector.</p>
+<p>Examples of canonical mappings:</p>
+<div class="table-wrap"><table><thead><tr><th>JETH source type</th><th>Canonical ABI type</th></tr></thead><tbody><tr><td><code>u256</code></td><td><code>uint256</code></td></tr><tr><td><code>i32</code></td><td><code>int32</code></td></tr><tr><td><code>address</code></td><td><code>address</code></td></tr><tr><td><code>bytes4</code></td><td><code>bytes4</code></td></tr><tr><td><code>T[]</code></td><td>canonical <code>T</code> plus <code>[]</code></td></tr><tr><td><code>Arr&lt;T, N&gt;</code></td><td>canonical <code>T</code> plus <code>[N]</code></td></tr><tr><td>enum</td><td><code>uint8</code></td></tr><tr><td><code>Brand&lt;T&gt;</code></td><td>canonical base type</td></tr><tr><td>struct</td><td>canonical tuple form</td></tr></tbody></table></div>
+<p>An external overload must have a unique canonical parameter signature.</p>
+<h2 id="static-and-dynamic-types">Static and dynamic types<a class="heading-anchor" href="#static-and-dynamic-types" aria-label="Link to Static and dynamic types">#</a></h2>
+<p>Value types are ABI-static. Fixed arrays and structs are static only if all of their recursive elements/fields are static.</p>
+<p>Dynamic types include:</p>
+<ul><li><code>bytes</code>;</li><li><code>string</code>;</li><li>every dynamic array <code>T[]</code>;</li><li>a fixed array with a dynamic element;</li><li>a struct with any recursively dynamic field.</li></ul>
+<h2 id="head-and-tail-encoding">Head and tail encoding<a class="heading-anchor" href="#head-and-tail-encoding" aria-label="Link to Head and tail encoding">#</a></h2>
+<p>Static values are encoded in place as 32-byte words or recursively inlined static heads. A dynamic value&#39;s head word is an offset to its tail. Offsets are relative to the start of the current ABI tuple or array pointer region, not always the start of calldata.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>text</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="text"><code>selector
+tuple head
+dynamic tails</code></pre></div>
+<p>Nested containers reset their relative offset base according to ABI rules.</p>
+<h3 id="worked-calldata-example">Worked calldata example<a class="heading-anchor" href="#worked-calldata-example" aria-label="Link to Worked calldata example">#</a></h3>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> AbiInbox {
+  lastCount: <span class="tok-type">u256</span>;
+
+  submit(id: <span class="tok-type">u256</span>, values: <span class="tok-type">u256</span>[]): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+    <span class="tok-builtin">require</span>(values.length &gt; <span class="tok-number">0n</span>, <span class="tok-string">&quot;empty values&quot;</span>);
+    <span class="tok-keyword">this</span>.lastCount = values.length;
+    <span class="tok-keyword">return</span> id + values[<span class="tok-number">0n</span>];
+  }
+
+  <span class="tok-keyword">get</span> count(): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.lastCount;
+  }
+}</code></pre></div>
+<p>The canonical signature is <code>submit(uint256,uint256[])</code>, so the selector is <code>0x2f344195</code>. Calling <code>submit(7, [10, 20])</code> produces:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>text</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="text"><code>2f344195                                                        selector
+0000000000000000000000000000000000000000000000000000000000000007  id
+0000000000000000000000000000000000000000000000000000000000000040  values offset
+0000000000000000000000000000000000000000000000000000000000000002  values length
+000000000000000000000000000000000000000000000000000000000000000a  values[0]
+0000000000000000000000000000000000000000000000000000000000000014  values[1]</code></pre></div>
+<p>The offset is <code>0x40</code> from the start of the argument tuple, immediately after the selector. The successful return value is <code>17</code>, encoded as one 32-byte word.</p>
+<h2 id="word-representation">Word representation<a class="heading-anchor" href="#word-representation" aria-label="Link to Word representation">#</a></h2>
+<ul><li>Unsigned integers and addresses are zero-extended.</li><li>Signed integers are sign-extended.</li><li>Booleans encode as zero or one.</li><li>Fixed bytes are left-aligned and right-padded.</li><li>Dynamic bytes/string tails contain length followed by right-padded data.</li><li>Arrays contain a length when dynamic, followed by elements or element offsets.</li><li>Structs encode as tuples in field declaration order.</li></ul>
+<h2 id="calldata-validation">Calldata validation<a class="heading-anchor" href="#calldata-validation" aria-label="Link to Calldata validation">#</a></h2>
+<p>JETH validates accepted calldata paths:</p>
+<ul><li>narrow unsigned high bits must be zero;</li><li>signed values must have correct sign extension;</li><li>bool must be exactly zero or one;</li><li>address high bits must be zero;</li><li>fixed-bytes padding must match alignment;</li><li>enum values must be in range;</li><li>dynamic heads, lengths, and accessed data must stay within calldata;</li><li>runtime indices must be in bounds.</li></ul>
+<p>Some aggregate field reads are intentionally lazy. An unread malformed field can remain unobserved where Solidity also decodes lazily, while a whole-value copy or return validates the fields it must materialize.</p>
+<h2 id="return-encoding">Return encoding<a class="heading-anchor" href="#return-encoding" aria-label="Link to Return encoding">#</a></h2>
+<p>Return data omits a selector and contains the ABI encoding of the return tuple. A single dynamic return therefore usually begins with an offset word to its tail.</p>
+<p>The recursive encoder can source values from calldata, memory, or storage using location-specific readers. Acceptance of a source shape does not imply every location-to-location copy is enabled.</p>
+<h2 id="event-encoding">Event encoding<a class="heading-anchor" href="#event-encoding" aria-label="Link to Event encoding">#</a></h2>
+<p>Non-anonymous events use the canonical signature hash as topic 0. Indexed static values occupy one topic. Indexed dynamic values and supported aggregates use the event indexed hash rules. Non-indexed values use ABI tuple encoding in log data.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">type</span> Submitted = <span class="tok-type">event</span>&lt;{
+  sender: <span class="tok-type">indexed</span>&lt;<span class="tok-type">address</span>&gt;;
+  id: <span class="tok-type">indexed</span>&lt;<span class="tok-type">u256</span>&gt;;
+  values: <span class="tok-type">u256</span>[];
+}&gt;;</code></pre></div>
+<p>For <code>Submitted</code>, topic 0 is the event signature hash, topics 1 and 2 contain the indexed sender and id, and the dynamic array is encoded in the log data tuple.</p>
+<h2 id="error-encoding">Error encoding<a class="heading-anchor" href="#error-encoding" aria-label="Link to Error encoding">#</a></h2>
+<p>Custom errors use a selector followed by ABI arguments. <code>Error(string)</code> uses selector <code>0x08c379a0</code>. <code>Panic(uint256)</code> uses selector <code>0x4e487b71</code>.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">type</span> Unauthorized = <span class="tok-type">error</span>&lt;{ caller: <span class="tok-type">address</span> }&gt;;
+
+<span class="tok-keyword">class</span> Guarded {
+  owner: <span class="tok-type">address</span>;
+
+  constructor(owner: <span class="tok-type">address</span>) {
+    <span class="tok-keyword">this</span>.owner = owner;
+  }
+
+  run(): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-keyword">if</span> (<span class="tok-builtin">msg</span>.sender <span class="tok-operator">!=</span> <span class="tok-keyword">this</span>.owner) {
+      <span class="tok-builtin">revert</span>(Unauthorized({ caller: <span class="tok-builtin">msg</span>.sender }));
+    }
+  }
+}</code></pre></div>
+<p><code>Unauthorized(address)</code> uses its own four-byte selector followed by one zero-extended address word.</p>
+<h2 id="abi-json">ABI JSON<a class="heading-anchor" href="#abi-json" aria-label="Link to ABI JSON">#</a></h2>
+<p>The compiler emits ABI JSON from analyzed declarations. Selectors and runtime encoding use canonical types. The current known JSON presentation gap for some struct tuples is tracked separately from runtime correctness.</p>
+<p>Use compiler-produced ABI artifacts. Do not infer exact tuple component metadata from a short source-name table.</p>
+<h2 id="malformed-calldata-deviations">Malformed calldata deviations<a class="heading-anchor" href="#malformed-calldata-deviations" aria-label="Link to Malformed calldata deviations">#</a></h2>
+<p>JETH can reject a small set of adversarial, noncanonical offset/length values earlier than solc while both reject the call. Those safer-than-solc cases are documented in the supported matrix. Honest ABI-encoder output is expected to match.</p><div class="article-footer"><span>JETH language documentation</span><a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></div><nav class="pagination" aria-label="Documentation pages"><a class="pagination-link previous" href="../../contracts/events-and-errors/index.html"><span>Previous</span><strong>Events, errors, and panics</strong></a><a class="pagination-link next" href="../storage-layout/index.html"><span>Next</span><strong>Storage layout</strong></a></nav></article>
+      <nav class="page-toc" aria-label="On this page"><div class="toc-title">On this page</div><a class="toc-link depth-2" href="#function-selectors">Function selectors</a><a class="toc-link depth-2" href="#static-and-dynamic-types">Static and dynamic types</a><a class="toc-link depth-2" href="#head-and-tail-encoding">Head and tail encoding</a><a class="toc-link depth-3" href="#worked-calldata-example">Worked calldata example</a><a class="toc-link depth-2" href="#word-representation">Word representation</a><a class="toc-link depth-2" href="#calldata-validation">Calldata validation</a><a class="toc-link depth-2" href="#return-encoding">Return encoding</a><a class="toc-link depth-2" href="#event-encoding">Event encoding</a><a class="toc-link depth-2" href="#error-encoding">Error encoding</a><a class="toc-link depth-2" href="#abi-json">ABI JSON</a><a class="toc-link depth-2" href="#malformed-calldata-deviations">Malformed calldata deviations</a></nav>
+    </main>
+  </div>
+  <div class="search-modal" hidden><button class="search-backdrop" type="button" aria-label="Close search"></button><div class="search-panel" role="dialog" aria-modal="true" aria-label="Search documentation"><div class="search-box"><span>⌕</span><input class="search-input" type="search" placeholder="Search JETH guides..." autocomplete="off"><button class="search-close" type="button">Esc</button></div><div class="search-results"><div class="search-empty">Start typing to search the book.</div></div></div></div>
+  <script src="../../assets/search-index.js"></script>
+  <script src="../../assets/book.js"></script>
+</body>
+</html>

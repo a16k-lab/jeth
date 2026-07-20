@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Language tour in the JETH language documentation.">
+  <meta name="theme-color" content="#11131a">
+  <meta property="og:image" content="../../assets/a16k-avatar-logo.png">
+  <title>Language tour | JETH</title>
+  <link rel="icon" href="../../assets/jeth-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../../assets/book.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../../index.html" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span></a>
+    <nav class="top-nav" aria-label="Primary"><a class="is-active" href="../../index.html">Guides</a><a href="../../internals/compiler-and-tooling/index.html">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
+    <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
+  </header>
+  <div class="pre-release"><span>Pre-release</span> JETH is under active compiler and security review.</div>
+  <div class="book-shell">
+    <aside class="sidebar"><div class="sidebar-title">Guides</div><section class="sidebar-group"><h2>Guides</h2><a class="sidebar-link" href="../../index.html">JETH Documentation</a><a class="sidebar-link" href="../getting-started/index.html">Getting started</a><a class="sidebar-link is-active" href="./index.html" aria-current="page">Language tour</a><a class="sidebar-link" href="../examples/index.html">Examples</a></section><section class="sidebar-group"><h2>Language</h2><a class="sidebar-link" href="../../language/source-units/index.html">Source units and imports</a><a class="sidebar-link" href="../../language/contract-structure/index.html">Contract structure</a><a class="sidebar-link" href="../../language/types/index.html">Types</a><a class="sidebar-link" href="../../language/value-types/index.html">Value types</a><a class="sidebar-link" href="../../language/reference-types/index.html">Reference and composite types</a><a class="sidebar-link" href="../../language/data-locations/index.html">Data locations and copying</a><a class="sidebar-link" href="../../language/expressions/index.html">Expressions and operators</a><a class="sidebar-link" href="../../language/control-flow/index.html">Statements and control flow</a><a class="sidebar-link" href="../../language/functions/index.html">Functions</a><a class="sidebar-link" href="../../language/globals-and-builtins/index.html">Units, globals, and builtins</a><a class="sidebar-link" href="../../language/jeth-features/index.html">JETH-specific features</a></section><section class="sidebar-group"><h2>Contracts</h2><a class="sidebar-link" href="../../contracts/inheritance/index.html">Constructors and inheritance</a><a class="sidebar-link" href="../../contracts/modifiers/index.html">Function modifiers</a><a class="sidebar-link" href="../../contracts/interfaces-and-calls/index.html">Interfaces and external calls</a><a class="sidebar-link" href="../../contracts/libraries/index.html">Libraries and using</a><a class="sidebar-link" href="../../contracts/events-and-errors/index.html">Events, errors, and panics</a></section><section class="sidebar-group"><h2>Internals</h2><a class="sidebar-link" href="../../internals/abi/index.html">Contract ABI specification</a><a class="sidebar-link" href="../../internals/storage-layout/index.html">Storage layout</a><a class="sidebar-link" href="../../internals/compiler-and-tooling/index.html">Compiler, CLI, and tooling</a><a class="sidebar-link" href="../../internals/artifacts/index.html">Contracts and artifacts</a></section><section class="sidebar-group"><h2>Advanced</h2><a class="sidebar-link" href="../../advanced/contract-creation-and-clones/index.html">Contract creation and clones</a><a class="sidebar-link" href="../../advanced/proxies-and-diamonds/index.html">Proxies, beacons, and diamonds</a></section><section class="sidebar-group"><h2>Security</h2><a class="sidebar-link" href="../../security/considerations/index.html">Security considerations</a><a class="sidebar-link" href="../../security/compiler-correctness/index.html">Compiler correctness model</a></section><section class="sidebar-group"><h2>Reference</h2><a class="sidebar-link" href="../../reference/cheatsheet/index.html">Syntax cheatsheet</a><a class="sidebar-link" href="../../reference/differences/index.html">Differences from TypeScript and Solidity</a><a class="sidebar-link" href="../../reference/diagnostics/index.html">Compiler diagnostics</a><a class="sidebar-link" href="../../reference/known-limitations/index.html">Supported features and limitations</a><a class="sidebar-link" href="../../reference/feature-matrix/index.html">Complete feature matrix</a></section><section class="sidebar-group"><h2>Project</h2><a class="sidebar-link" href="../../project/roadmap/index.html">Product roadmap</a><a class="sidebar-link" href="../../project/overview/index.html">Repository overview</a></section><a class="built-by" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></aside>
+    <main class="content-shell">
+      <article class="article"><div class="article-kicker">Guides</div>
+<h1 id="language-tour">Language tour</h1>
+<p>This tour introduces JETH by building a small vault. It focuses on the concepts that differ most from TypeScript and Solidity.</p>
+<h2 id="state-and-external-methods">State and external methods<a class="heading-anchor" href="#state-and-external-methods" aria-label="Link to State and external methods">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> Vault {
+  balances: <span class="tok-type">mapping</span>&lt;<span class="tok-type">address</span>, <span class="tok-type">u256</span>&gt;;
+
+  deposit(): <span class="tok-type">Payable</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-keyword">this</span>.balances[<span class="tok-builtin">msg</span>.sender] <span class="tok-operator">+=</span> <span class="tok-builtin">msg</span>.value;
+  }
+
+  <span class="tok-keyword">get</span> balanceOf(owner: <span class="tok-type">address</span>): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.balances[owner];
+  }
+}</code></pre></div>
+<p><code>balances</code> is persistent contract storage. <code>Payable&lt;void&gt;</code> exposes a payable entry point. <code>External&lt;u256&gt;</code> exposes a nonpayable ABI entry. Because <code>balanceOf</code> uses <code>get</code> and reads storage, its ABI mutability is inferred as <code>view</code>.</p>
+<h2 id="checked-arithmetic">Checked arithmetic<a class="heading-anchor" href="#checked-arithmetic" aria-label="Link to Checked arithmetic">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">let</span> next: <span class="tok-type">u256</span> = current + amount;</code></pre></div>
+<p>Unsigned overflow and signed overflow revert with Solidity-compatible panic data. Division by zero and invalid enum conversions also use the matching panic codes. Use <code>unchecked</code> only when wrapping is deliberate and proven safe:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">unchecked</span>: {
+  i <span class="tok-operator">+=</span> <span class="tok-number">1n</span>;
+}</code></pre></div>
+<h2 id="internal-helpers">Internal helpers<a class="heading-anchor" href="#internal-helpers" aria-label="Link to Internal helpers">#</a></h2>
+<p>Methods without an exposure return wrapper are internal:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> Fees {
+  fee(amount: <span class="tok-type">u256</span>, bps: <span class="tok-type">u256</span> = <span class="tok-number">30n</span>): <span class="tok-type">u256</span> {
+    <span class="tok-keyword">return</span> (amount * bps) / <span class="tok-number">10000n</span>;
+  }
+
+  <span class="tok-keyword">get</span> quote(amount: <span class="tok-type">u256</span>): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.fee(amount);
+  }
+}</code></pre></div>
+<p>Internal calls can use trailing defaults and named arguments. External ABI calls always provide the full selector-defined argument list.</p>
+<h2 id="types">Types<a class="heading-anchor" href="#types" aria-label="Link to Types">#</a></h2>
+<p>JETH includes Solidity-compatible integer widths, signed integers, booleans, addresses, fixed bytes, dynamic bytes, strings, mappings, arrays, fixed arrays, struct-like object aliases, enums, and tuples.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">type</span> Position = {
+  owner: <span class="tok-type">address</span>;
+  size: <span class="tok-type">u128</span>;
+  active: <span class="tok-type">bool</span>;
+};
+
+<span class="tok-keyword">enum</span> Status {
+  Pending,
+  Active,
+  Closed,
+}
+
+<span class="tok-keyword">type</span> OrderId = <span class="tok-type">Brand</span>&lt;<span class="tok-type">u256</span>&gt;;</code></pre></div>
+<p><code>Brand&lt;T&gt;</code> creates a nominal value type with no runtime or ABI overhead. Different brands cannot be mixed accidentally without an explicit conversion.</p>
+<h2 id="arrays-and-iteration">Arrays and iteration<a class="heading-anchor" href="#arrays-and-iteration" aria-label="Link to Arrays and iteration">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> Scores {
+  scores: <span class="tok-type">u256</span>[];
+
+  <span class="tok-keyword">get</span> total(): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+    <span class="tok-keyword">let</span> result: <span class="tok-type">u256</span> = <span class="tok-number">0n</span>;
+    <span class="tok-keyword">for</span> (<span class="tok-keyword">const</span> score <span class="tok-keyword">of</span> <span class="tok-keyword">this</span>.scores) {
+      result <span class="tok-operator">+=</span> score;
+    }
+    <span class="tok-keyword">return</span> result;
+  }
+}</code></pre></div>
+<p>JETH supports dynamic arrays <code>T[]</code> and fixed arrays <code>Arr&lt;T, N&gt;</code>. <code>for...of</code> desugars to indexed EVM-oriented iteration and supports <code>break</code>, <code>continue</code>, and <code>return</code> where the element shape is supported.</p>
+<h2 id="events-and-custom-errors">Events and custom errors<a class="heading-anchor" href="#events-and-custom-errors" aria-label="Link to Events and custom errors">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">type</span> Deposited = <span class="tok-type">event</span>&lt;{
+  account: <span class="tok-type">indexed</span>&lt;<span class="tok-type">address</span>&gt;;
+  amount: <span class="tok-type">u256</span>;
+}&gt;;
+
+<span class="tok-keyword">type</span> InsufficientBalance = <span class="tok-type">error</span>&lt;{
+  available: <span class="tok-type">u256</span>;
+  requested: <span class="tok-type">u256</span>;
+}&gt;;</code></pre></div>
+<p>Events use Solidity-compatible topics and ABI data. Custom errors use canonical selectors and ABI-encoded arguments.</p>
+<h2 id="modifiers-and-reentrancy-protection">Modifiers and reentrancy protection<a class="heading-anchor" href="#modifiers-and-reentrancy-protection" aria-label="Link to Modifiers and reentrancy protection">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> GuardedForwarder {
+  <span class="tok-decorator">@nonReentrant</span>
+  forward(target: <span class="tok-type">address</span>, data: <span class="tok-type">bytes</span>): <span class="tok-type">Payable</span>&lt;<span class="tok-type">bytes</span>&gt; {
+    <span class="tok-keyword">return</span> target.call({
+      data,
+      value: <span class="tok-builtin">msg</span>.value,
+      success: { condition: <span class="tok-keyword">this</span>.accepted, <span class="tok-builtin">revert</span>: <span class="tok-string">&quot;call failed&quot;</span> },
+    });
+  }
+
+  <span class="tok-keyword">get</span> accepted(): <span class="tok-type">bool</span> {
+    <span class="tok-keyword">return</span> <span class="tok-keyword">true</span>;
+  }
+}</code></pre></div>
+<p><code>@nonReentrant</code> uses EIP-1153 transient storage and consumes no persistent slot. It is one defense, not a replacement for checks-effects-interactions, access control, invariant tests, and review.</p>
+<h2 id="exhaustive-control-flow">Exhaustive control flow<a class="heading-anchor" href="#exhaustive-control-flow" aria-label="Link to Exhaustive control flow">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">get</span> weight(status: Status): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+  <span class="tok-keyword">switch</span> (status) {
+    <span class="tok-keyword">case</span> Status.Pending:
+      <span class="tok-keyword">return</span> <span class="tok-number">0n</span>;
+    <span class="tok-keyword">case</span> Status.Active:
+      <span class="tok-keyword">return</span> <span class="tok-number">1n</span>;
+    <span class="tok-keyword">case</span> Status.Closed:
+      <span class="tok-keyword">return</span> <span class="tok-number">2n</span>;
+  }
+}</code></pre></div>
+<p>An enum switch without <code>default</code> must cover every member. Adding an enum member therefore makes incomplete switches fail at compile time.</p>
+<h2 id="where-to-go-deeper">Where to go deeper<a class="heading-anchor" href="#where-to-go-deeper" aria-label="Link to Where to go deeper">#</a></h2>
+<ul><li><a href="../../language/types/index.html">Language reference</a></li><li><a href="../../language/functions/index.html">Functions</a></li><li><a href="../../internals/artifacts/index.html">Contracts and ABI</a></li><li><a href="../../language/jeth-features/index.html">JETH-specific features</a></li><li><a href="../../reference/feature-matrix/index.html">Complete supported matrix</a></li></ul><div class="article-footer"><span>JETH language documentation</span><a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></div><nav class="pagination" aria-label="Documentation pages"><a class="pagination-link previous" href="../getting-started/index.html"><span>Previous</span><strong>Getting started</strong></a><a class="pagination-link next" href="../examples/index.html"><span>Next</span><strong>Examples</strong></a></nav></article>
+      <nav class="page-toc" aria-label="On this page"><div class="toc-title">On this page</div><a class="toc-link depth-2" href="#state-and-external-methods">State and external methods</a><a class="toc-link depth-2" href="#checked-arithmetic">Checked arithmetic</a><a class="toc-link depth-2" href="#internal-helpers">Internal helpers</a><a class="toc-link depth-2" href="#types">Types</a><a class="toc-link depth-2" href="#arrays-and-iteration">Arrays and iteration</a><a class="toc-link depth-2" href="#events-and-custom-errors">Events and custom errors</a><a class="toc-link depth-2" href="#modifiers-and-reentrancy-protection">Modifiers and reentrancy protection</a><a class="toc-link depth-2" href="#exhaustive-control-flow">Exhaustive control flow</a><a class="toc-link depth-2" href="#where-to-go-deeper">Where to go deeper</a></nav>
+    </main>
+  </div>
+  <div class="search-modal" hidden><button class="search-backdrop" type="button" aria-label="Close search"></button><div class="search-panel" role="dialog" aria-modal="true" aria-label="Search documentation"><div class="search-box"><span>⌕</span><input class="search-input" type="search" placeholder="Search JETH guides..." autocomplete="off"><button class="search-close" type="button">Esc</button></div><div class="search-results"><div class="search-empty">Start typing to search the book.</div></div></div></div>
+  <script src="../../assets/search-index.js"></script>
+  <script src="../../assets/book.js"></script>
+</body>
+</html>

@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Storage layout in the JETH language documentation.">
+  <meta name="theme-color" content="#11131a">
+  <meta property="og:image" content="../../assets/a16k-avatar-logo.png">
+  <title>Storage layout | JETH</title>
+  <link rel="icon" href="../../assets/jeth-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../../assets/book.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../../index.html" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span></a>
+    <nav class="top-nav" aria-label="Primary"><a class="is-active" href="../../index.html">Guides</a><a href="../compiler-and-tooling/index.html">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
+    <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
+  </header>
+  <div class="pre-release"><span>Pre-release</span> JETH is under active compiler and security review.</div>
+  <div class="book-shell">
+    <aside class="sidebar"><div class="sidebar-title">Guides</div><section class="sidebar-group"><h2>Guides</h2><a class="sidebar-link" href="../../index.html">JETH Documentation</a><a class="sidebar-link" href="../../guides/getting-started/index.html">Getting started</a><a class="sidebar-link" href="../../guides/language-tour/index.html">Language tour</a><a class="sidebar-link" href="../../guides/examples/index.html">Examples</a></section><section class="sidebar-group"><h2>Language</h2><a class="sidebar-link" href="../../language/source-units/index.html">Source units and imports</a><a class="sidebar-link" href="../../language/contract-structure/index.html">Contract structure</a><a class="sidebar-link" href="../../language/types/index.html">Types</a><a class="sidebar-link" href="../../language/value-types/index.html">Value types</a><a class="sidebar-link" href="../../language/reference-types/index.html">Reference and composite types</a><a class="sidebar-link" href="../../language/data-locations/index.html">Data locations and copying</a><a class="sidebar-link" href="../../language/expressions/index.html">Expressions and operators</a><a class="sidebar-link" href="../../language/control-flow/index.html">Statements and control flow</a><a class="sidebar-link" href="../../language/functions/index.html">Functions</a><a class="sidebar-link" href="../../language/globals-and-builtins/index.html">Units, globals, and builtins</a><a class="sidebar-link" href="../../language/jeth-features/index.html">JETH-specific features</a></section><section class="sidebar-group"><h2>Contracts</h2><a class="sidebar-link" href="../../contracts/inheritance/index.html">Constructors and inheritance</a><a class="sidebar-link" href="../../contracts/modifiers/index.html">Function modifiers</a><a class="sidebar-link" href="../../contracts/interfaces-and-calls/index.html">Interfaces and external calls</a><a class="sidebar-link" href="../../contracts/libraries/index.html">Libraries and using</a><a class="sidebar-link" href="../../contracts/events-and-errors/index.html">Events, errors, and panics</a></section><section class="sidebar-group"><h2>Internals</h2><a class="sidebar-link" href="../abi/index.html">Contract ABI specification</a><a class="sidebar-link is-active" href="./index.html" aria-current="page">Storage layout</a><a class="sidebar-link" href="../compiler-and-tooling/index.html">Compiler, CLI, and tooling</a><a class="sidebar-link" href="../artifacts/index.html">Contracts and artifacts</a></section><section class="sidebar-group"><h2>Advanced</h2><a class="sidebar-link" href="../../advanced/contract-creation-and-clones/index.html">Contract creation and clones</a><a class="sidebar-link" href="../../advanced/proxies-and-diamonds/index.html">Proxies, beacons, and diamonds</a></section><section class="sidebar-group"><h2>Security</h2><a class="sidebar-link" href="../../security/considerations/index.html">Security considerations</a><a class="sidebar-link" href="../../security/compiler-correctness/index.html">Compiler correctness model</a></section><section class="sidebar-group"><h2>Reference</h2><a class="sidebar-link" href="../../reference/cheatsheet/index.html">Syntax cheatsheet</a><a class="sidebar-link" href="../../reference/differences/index.html">Differences from TypeScript and Solidity</a><a class="sidebar-link" href="../../reference/diagnostics/index.html">Compiler diagnostics</a><a class="sidebar-link" href="../../reference/known-limitations/index.html">Supported features and limitations</a><a class="sidebar-link" href="../../reference/feature-matrix/index.html">Complete feature matrix</a></section><section class="sidebar-group"><h2>Project</h2><a class="sidebar-link" href="../../project/roadmap/index.html">Product roadmap</a><a class="sidebar-link" href="../../project/overview/index.html">Repository overview</a></section><a class="built-by" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></aside>
+    <main class="content-shell">
+      <article class="article"><div class="article-kicker">Internals</div>
+<h1 id="storage-layout">Storage layout</h1>
+<p>Built by <a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer">@a16k-lab</a>.</p>
+<p>JETH follows Solidity-compatible persistent storage layout for supported types. Raw-slot compatibility is part of the differential test bar.</p>
+<h2 id="slots-and-packing">Slots and packing<a class="heading-anchor" href="#slots-and-packing" aria-label="Link to Slots and packing">#</a></h2>
+<p>Storage is divided into 32-byte slots. Consecutive value fields smaller than 32 bytes can share a slot when they fit. A value that does not fit starts in the next slot. Structs and arrays apply their own boundaries according to Solidity layout rules.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> Packed {
+  a: <span class="tok-type">u8</span>;
+  b: <span class="tok-type">u16</span>;
+  c: <span class="tok-type">address</span>;
+  d: <span class="tok-type">u256</span>;
+}</code></pre></div>
+<p>Writes to packed fields use read-modify-write so neighboring lanes remain unchanged.</p>
+<h2 id="fixed-arrays">Fixed arrays<a class="heading-anchor" href="#fixed-arrays" aria-label="Link to Fixed arrays">#</a></h2>
+<p>Fixed arrays are inline. Value elements pack without crossing a slot. Composite elements use their recursive storage width.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code>values: <span class="tok-type">Arr</span>&lt;<span class="tok-type">u8</span>, <span class="tok-number">40</span>&gt;;</code></pre></div>
+<p>Runtime indexing computes the containing slot and byte offset, then masks or sign-extends the value as required.</p>
+<h2 id="dynamic-arrays">Dynamic arrays<a class="heading-anchor" href="#dynamic-arrays" aria-label="Link to Dynamic arrays">#</a></h2>
+<p>The declared slot stores array length. Element data begins at:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>text</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="text"><code>keccak256(lengthSlot)</code></pre></div>
+<p>Whole-slot elements use a stride. Packed value elements compute a slot and lane. Composite elements recursively use the element&#39;s storage layout.</p>
+<p><code>push</code> increments length after validating capacity. <code>pop</code> clears the removed element and decrements length. Removing a dynamic element also clears its owned tail data.</p>
+<h2 id="mappings">Mappings<a class="heading-anchor" href="#mappings" aria-label="Link to Mappings">#</a></h2>
+<p>For a mapping at slot <code>p</code>, a static key&#39;s value base is derived from:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>text</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="text"><code>keccak256(canonicalKeyWord || p)</code></pre></div>
+<p>Nested mappings repeat the process with the previous derived slot. Dynamic bytes/string keys use their content-based mapping-key rule.</p>
+<p>Mappings have no stored length and cannot be enumerated from storage alone.</p>
+<h2 id="structs">Structs<a class="heading-anchor" href="#structs" aria-label="Link to Structs">#</a></h2>
+<p>Struct fields follow declaration order and pack within the struct. A mapping field occupies its own base slot but stores no data at that slot. Nested structs and arrays expand according to their recursive layout.</p>
+<h2 id="dynamic-bytes-and-string">Dynamic bytes and string<a class="heading-anchor" href="#dynamic-bytes-and-string" aria-label="Link to Dynamic bytes and string">#</a></h2>
+<p>For length below 32, bytes are stored in the header slot with length metadata. For longer values, the header stores encoded length and data begins at the hash of the header slot.</p>
+<p>Overwriting or deleting a long value must clear old data slots that are no longer used. Short/long transitions are tested against raw Solidity storage.</p>
+<h2 id="constants-and-immutables">Constants and immutables<a class="heading-anchor" href="#constants-and-immutables" aria-label="Link to Constants and immutables">#</a></h2>
+<p>Compile-time constants consume no storage. Immutables are baked into deployed runtime code and also consume no storage slot. Adding a constant or immutable therefore does not shift ordinary state fields.</p>
+<h2 id="inheritance">Inheritance<a class="heading-anchor" href="#inheritance" aria-label="Link to Inheritance">#</a></h2>
+<p>State layout follows the resolved base order. Base and derived fields can pack according to the Solidity layout rules. Reordering bases or inserting fields can break upgrade compatibility.</p>
+<h2 id="namespaced-proxy-and-diamond-storage">Namespaced proxy and diamond storage<a class="heading-anchor" href="#namespaced-proxy-and-diamond-storage" aria-label="Link to Namespaced proxy and diamond storage">#</a></h2>
+<p>Proxy implementation/admin/beacon slots use their specified collision-resistant constants. Diamond/facet state uses the selected reference model and namespace.</p>
+<p><code>@storage(&quot;namespace&quot;)</code> places fields in an ERC-7201 region. Fields with the same namespace form one logical struct and pack in declaration order:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> NamespacedState {
+  <span class="tok-decorator">@storage</span>(<span class="tok-string">&quot;app.config&quot;</span>) owner: <span class="tok-type">address</span>;
+  <span class="tok-decorator">@storage</span>(<span class="tok-string">&quot;app.config&quot;</span>) enabled: <span class="tok-type">bool</span>;
+  <span class="tok-decorator">@storage</span>(<span class="tok-string">&quot;app.accounting&quot;</span>) totals: <span class="tok-type">mapping</span>&lt;<span class="tok-type">address</span>, <span class="tok-type">u256</span>&gt;;
+
+  configure(owner: <span class="tok-type">address</span>, enabled: <span class="tok-type">bool</span>): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-keyword">this</span>.owner = owner;
+    <span class="tok-keyword">this</span>.enabled = enabled;
+  }
+
+  add(account: <span class="tok-type">address</span>, amount: <span class="tok-type">u256</span>): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-keyword">this</span>.totals[account] <span class="tok-operator">+=</span> amount;
+  }
+}</code></pre></div>
+<p>The namespace string is part of the persistent layout. Changing <code>&quot;app.config&quot;</code> creates a different region. The compiler-internal raw namespace mode is reserved for synthesized diamond compatibility layouts and should not be used as an application storage convention.</p>
+<p>Never mix generated proxy storage, implementation state, and custom assembly slots without a complete layout review.</p>
+<h2 id="upgrade-checklist">Upgrade checklist<a class="heading-anchor" href="#upgrade-checklist" aria-label="Link to Upgrade checklist">#</a></h2>
+<p>For each compiler and contract release:</p>
+<ol><li>save the compiler version and EVM target;</li><li>save the storage-layout artifact;</li><li>diff slot, offset, width, and recursive type changes;</li><li>preserve field and base order;</li><li>test upgrades against populated state;</li><li>inspect raw reserved proxy/diamond slots;</li><li>reject incompatible changes before deployment.</li></ol>
+<p>The current CLI&#39;s storage artifact is useful but not yet a frozen cross-version schema.</p><div class="article-footer"><span>JETH language documentation</span><a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></div><nav class="pagination" aria-label="Documentation pages"><a class="pagination-link previous" href="../abi/index.html"><span>Previous</span><strong>Contract ABI specification</strong></a><a class="pagination-link next" href="../compiler-and-tooling/index.html"><span>Next</span><strong>Compiler, CLI, and tooling</strong></a></nav></article>
+      <nav class="page-toc" aria-label="On this page"><div class="toc-title">On this page</div><a class="toc-link depth-2" href="#slots-and-packing">Slots and packing</a><a class="toc-link depth-2" href="#fixed-arrays">Fixed arrays</a><a class="toc-link depth-2" href="#dynamic-arrays">Dynamic arrays</a><a class="toc-link depth-2" href="#mappings">Mappings</a><a class="toc-link depth-2" href="#structs">Structs</a><a class="toc-link depth-2" href="#dynamic-bytes-and-string">Dynamic bytes and string</a><a class="toc-link depth-2" href="#constants-and-immutables">Constants and immutables</a><a class="toc-link depth-2" href="#inheritance">Inheritance</a><a class="toc-link depth-2" href="#namespaced-proxy-and-diamond-storage">Namespaced proxy and diamond storage</a><a class="toc-link depth-2" href="#upgrade-checklist">Upgrade checklist</a></nav>
+    </main>
+  </div>
+  <div class="search-modal" hidden><button class="search-backdrop" type="button" aria-label="Close search"></button><div class="search-panel" role="dialog" aria-modal="true" aria-label="Search documentation"><div class="search-box"><span>⌕</span><input class="search-input" type="search" placeholder="Search JETH guides..." autocomplete="off"><button class="search-close" type="button">Esc</button></div><div class="search-results"><div class="search-empty">Start typing to search the book.</div></div></div></div>
+  <script src="../../assets/search-index.js"></script>
+  <script src="../../assets/book.js"></script>
+</body>
+</html>

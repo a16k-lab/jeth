@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Reference and composite types in the JETH language documentation.">
+  <meta name="theme-color" content="#11131a">
+  <meta property="og:image" content="../../assets/a16k-avatar-logo.png">
+  <title>Reference and composite types | JETH</title>
+  <link rel="icon" href="../../assets/jeth-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../../assets/book.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../../index.html" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span></a>
+    <nav class="top-nav" aria-label="Primary"><a class="is-active" href="../../index.html">Guides</a><a href="../../internals/compiler-and-tooling/index.html">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
+    <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
+  </header>
+  <div class="pre-release"><span>Pre-release</span> JETH is under active compiler and security review.</div>
+  <div class="book-shell">
+    <aside class="sidebar"><div class="sidebar-title">Guides</div><section class="sidebar-group"><h2>Guides</h2><a class="sidebar-link" href="../../index.html">JETH Documentation</a><a class="sidebar-link" href="../../guides/getting-started/index.html">Getting started</a><a class="sidebar-link" href="../../guides/language-tour/index.html">Language tour</a><a class="sidebar-link" href="../../guides/examples/index.html">Examples</a></section><section class="sidebar-group"><h2>Language</h2><a class="sidebar-link" href="../source-units/index.html">Source units and imports</a><a class="sidebar-link" href="../contract-structure/index.html">Contract structure</a><a class="sidebar-link" href="../types/index.html">Types</a><a class="sidebar-link" href="../value-types/index.html">Value types</a><a class="sidebar-link is-active" href="./index.html" aria-current="page">Reference and composite types</a><a class="sidebar-link" href="../data-locations/index.html">Data locations and copying</a><a class="sidebar-link" href="../expressions/index.html">Expressions and operators</a><a class="sidebar-link" href="../control-flow/index.html">Statements and control flow</a><a class="sidebar-link" href="../functions/index.html">Functions</a><a class="sidebar-link" href="../globals-and-builtins/index.html">Units, globals, and builtins</a><a class="sidebar-link" href="../jeth-features/index.html">JETH-specific features</a></section><section class="sidebar-group"><h2>Contracts</h2><a class="sidebar-link" href="../../contracts/inheritance/index.html">Constructors and inheritance</a><a class="sidebar-link" href="../../contracts/modifiers/index.html">Function modifiers</a><a class="sidebar-link" href="../../contracts/interfaces-and-calls/index.html">Interfaces and external calls</a><a class="sidebar-link" href="../../contracts/libraries/index.html">Libraries and using</a><a class="sidebar-link" href="../../contracts/events-and-errors/index.html">Events, errors, and panics</a></section><section class="sidebar-group"><h2>Internals</h2><a class="sidebar-link" href="../../internals/abi/index.html">Contract ABI specification</a><a class="sidebar-link" href="../../internals/storage-layout/index.html">Storage layout</a><a class="sidebar-link" href="../../internals/compiler-and-tooling/index.html">Compiler, CLI, and tooling</a><a class="sidebar-link" href="../../internals/artifacts/index.html">Contracts and artifacts</a></section><section class="sidebar-group"><h2>Advanced</h2><a class="sidebar-link" href="../../advanced/contract-creation-and-clones/index.html">Contract creation and clones</a><a class="sidebar-link" href="../../advanced/proxies-and-diamonds/index.html">Proxies, beacons, and diamonds</a></section><section class="sidebar-group"><h2>Security</h2><a class="sidebar-link" href="../../security/considerations/index.html">Security considerations</a><a class="sidebar-link" href="../../security/compiler-correctness/index.html">Compiler correctness model</a></section><section class="sidebar-group"><h2>Reference</h2><a class="sidebar-link" href="../../reference/cheatsheet/index.html">Syntax cheatsheet</a><a class="sidebar-link" href="../../reference/differences/index.html">Differences from TypeScript and Solidity</a><a class="sidebar-link" href="../../reference/diagnostics/index.html">Compiler diagnostics</a><a class="sidebar-link" href="../../reference/known-limitations/index.html">Supported features and limitations</a><a class="sidebar-link" href="../../reference/feature-matrix/index.html">Complete feature matrix</a></section><section class="sidebar-group"><h2>Project</h2><a class="sidebar-link" href="../../project/roadmap/index.html">Product roadmap</a><a class="sidebar-link" href="../../project/overview/index.html">Repository overview</a></section><a class="built-by" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></aside>
+    <main class="content-shell">
+      <article class="article"><div class="article-kicker">Language</div>
+<h1 id="reference-and-composite-types">Reference and composite types</h1>
+<p>Reference values can represent more than one EVM word or refer to storage, memory, or calldata. Their behavior depends on shape and location.</p>
+<h2 id="dynamic-bytes-and-strings">Dynamic bytes and strings<a class="heading-anchor" href="#dynamic-bytes-and-strings" aria-label="Link to Dynamic bytes and strings">#</a></h2>
+<p><code>bytes</code> is a dynamic byte sequence. <code>string</code> is an ABI string represented by its UTF-8 bytes. JETH does not provide JavaScript string objects.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> Text {
+  data: <span class="tok-type">bytes</span>;
+  name: <span class="tok-type">string</span>;
+
+  setName(next: <span class="tok-type">string</span>): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-keyword">this</span>.name = next;
+  }
+}</code></pre></div>
+<p>Supported operations include assignment, return, <code>.length</code>, indexing for bytes, storage <code>push</code>/<code>pop</code> where applicable, ABI encoding/decoding, hashing, calldata slicing, and concatenation.</p>
+<p>Storage uses Solidity&#39;s short/long representation. Values shorter than 32 bytes are stored in the header slot. Longer values use data slots beginning at the keccak hash of the header slot.</p>
+<h3 id="calldata-slices">Calldata slices<a class="heading-anchor" href="#calldata-slices" aria-label="Link to Calldata slices">#</a></h3>
+<p>Use <code>.slice(start, end)</code> for a zero-copy calldata sub-view. Either bound can use the supported omitted form:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">get</span> tail(data: <span class="tok-type">bytes</span>): <span class="tok-type">External</span>&lt;<span class="tok-type">bytes</span>&gt; {
+  <span class="tok-keyword">return</span> data.slice(<span class="tok-number">4n</span>);
+}
+
+<span class="tok-keyword">get</span> middle(data: <span class="tok-type">bytes</span>, start: <span class="tok-type">u256</span>, end: <span class="tok-type">u256</span>): <span class="tok-type">External</span>&lt;<span class="tok-type">bytes</span>&gt; {
+  <span class="tok-keyword">return</span> data.slice(start, end);
+}
+
+<span class="tok-keyword">get</span> argumentsOnly(): <span class="tok-type">External</span>&lt;<span class="tok-type">bytes</span>&gt; {
+  <span class="tok-keyword">return</span> <span class="tok-builtin">msg</span>.data.slice(<span class="tok-number">4n</span>);
+}</code></pre></div>
+<p>Slicing corresponds to Solidity&#39;s <code>data[start:end]</code>, which does not fit JETH&#39;s TypeScript-shaped parser. The bounds must satisfy <code>start &lt;= end &lt;= length</code>; an invalid range reverts with empty data. Slices can be returned, hashed, encoded, decoded, sliced again, or bound to a local calldata view.</p>
+<p>Only calldata <code>bytes</code> or <code>string</code> values are sliceable. This includes parameters, <code>msg.data</code>, calldata struct fields, and calldata array elements. Storage and memory values do not gain JavaScript-style <code>.slice()</code> behavior.</p>
+<h2 id="dynamic-arrays">Dynamic arrays<a class="heading-anchor" href="#dynamic-arrays" aria-label="Link to Dynamic arrays">#</a></h2>
+<p><code>T[]</code> is a dynamic array.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> List {
+  values: <span class="tok-type">u256</span>[];
+
+  add(value: <span class="tok-type">u256</span>): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-keyword">this</span>.values.push(value);
+  }
+
+  removeLast(): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-keyword">this</span>.values.pop();
+  }
+}</code></pre></div>
+<p>Supported operations include <code>.length</code>, index reads/writes, <code>push</code>, zero-value <code>push()</code>, <code>pop</code>, whole-value return/copy on supported paths, and nested access.</p>
+<p>Create a zero-initialized memory array with the JETH constructor form:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">let</span> values: <span class="tok-type">u256</span>[] = <span class="tok-keyword">new</span> Array&lt;<span class="tok-type">u256</span>&gt;(length);</code></pre></div>
+<p>The Solidity spelling <code>new T[](length)</code> does not fit the TypeScript parser and is not JETH syntax.</p>
+<p>An out-of-bounds index reverts with <code>Panic(0x32)</code>. Popping an empty storage array reverts with <code>Panic(0x31)</code>. Excessive memory allocation reverts with <code>Panic(0x41)</code>.</p>
+<h2 id="fixed-arrays">Fixed arrays<a class="heading-anchor" href="#fixed-arrays" aria-label="Link to Fixed arrays">#</a></h2>
+<p><code>Arr&lt;T, N&gt;</code> is a fixed-length array and corresponds to Solidity <code>T[N]</code>.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> C {
+  pair: <span class="tok-type">Arr</span>&lt;<span class="tok-type">u256</span>, <span class="tok-number">2</span>&gt;;
+}</code></pre></div>
+<p><code>.length</code> is the compile-time constant <code>N</code>. Runtime indexing is bounds-checked. A constant out-of-bounds index is a compile-time error.</p>
+<p>Fixed arrays can contain value or reference elements where the relevant location and consumer path is supported. Deep aggregate acceptance is intentionally shape-sensitive; check the known-limitations chapter for cleanly rejected paths.</p>
+<h2 id="mappings">Mappings<a class="heading-anchor" href="#mappings" aria-label="Link to Mappings">#</a></h2>
+<p><code>mapping&lt;K, V&gt;</code> is a storage-only key/value structure.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> Ledger {
+  balances: <span class="tok-type">mapping</span>&lt;<span class="tok-type">address</span>, <span class="tok-type">u256</span>&gt;;
+  allowances: <span class="tok-type">mapping</span>&lt;<span class="tok-type">address</span>, <span class="tok-type">mapping</span>&lt;<span class="tok-type">address</span>, <span class="tok-type">u256</span><span class="tok-operator">&gt;&gt;</span>;
+}</code></pre></div>
+<p>Mapping entries do not store keys or a length. A value slot is derived by hashing the canonical key word with the mapping base slot, recursively for nested mappings.</p>
+<p>Supported key families include integers, booleans, addresses, fixed bytes, and dynamic bytes/string keys on their documented paths. Values can be value types, arrays, strings/bytes, structs, and nested mappings where supported.</p>
+<p>A missing key reads as the zero value. A whole mapping cannot be copied, returned, deleted, or enumerated.</p>
+<h2 id="structs">Structs<a class="heading-anchor" href="#structs" aria-label="Link to Structs">#</a></h2>
+<p>Object-shaped type aliases declare structs:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">type</span> Position = {
+  owner: <span class="tok-type">address</span>;
+  size: <span class="tok-type">u128</span>;
+  active: <span class="tok-type">bool</span>;
+};
+
+<span class="tok-keyword">class</span> Book {
+  position: Position;
+
+  open(owner: <span class="tok-type">address</span>, size: <span class="tok-type">u128</span>): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-keyword">this</span>.position = Position(owner, size, <span class="tok-keyword">true</span>);
+  }
+}</code></pre></div>
+<p>Struct fields follow declaration order. Storage fields are packed according to Solidity rules. ABI structs are tuples.</p>
+<p>Struct values can be constructed positionally. Supported contexts also permit object literals and object spread:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">let</span> updated: Position = { ...old, size: nextSize };</code></pre></div>
+<p>A struct containing a mapping is storage-only. It cannot be constructed as a memory value, passed through the ABI, or returned.</p>
+<h2 id="nested-composites">Nested composites<a class="heading-anchor" href="#nested-composites" aria-label="Link to Nested composites">#</a></h2>
+<p>Composite types can be nested:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">type</span> Item = { id: <span class="tok-type">u256</span>; label: <span class="tok-type">string</span> };
+<span class="tok-keyword">type</span> Batch = { owner: <span class="tok-type">address</span>; items: Item[] };
+
+<span class="tok-keyword">class</span> C {
+  batches: <span class="tok-type">mapping</span>&lt;<span class="tok-type">u256</span>, Batch&gt;;
+  matrix: <span class="tok-type">u256</span>[][];
+  labels: <span class="tok-type">string</span>[];
+}</code></pre></div>
+<p>JETH&#39;s ABI codec recursively handles supported nested arrays, fixed arrays, structs, bytes, and strings. Storage access uses a unified path of fields, indices, and mapping keys.</p>
+<p>Not every location-to-location copy of every nested shape is enabled. A compiler diagnostic on such a shape is a deliberate safety gate, not permission to bypass the type system.</p>
+<h2 id="tuples">Tuples<a class="heading-anchor" href="#tuples" aria-label="Link to Tuples">#</a></h2>
+<p>Tuple syntax is used for multiple returns and destructuring:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code>pair(): [<span class="tok-type">u256</span>, <span class="tok-type">bool</span>] {
+  <span class="tok-keyword">return</span> [<span class="tok-number">7n</span>, <span class="tok-keyword">true</span>];
+}
+
+use(): <span class="tok-keyword">void</span> {
+  <span class="tok-keyword">let</span> [value, ok]: [<span class="tok-type">u256</span>, <span class="tok-type">bool</span>] = <span class="tok-keyword">this</span>.pair();
+  [value, ok] = [value + <span class="tok-number">1n</span>, !ok];
+}</code></pre></div>
+<p>Omitted destructuring positions discard their component:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">let</span> [value, , owner] = <span class="tok-keyword">this</span>.readThree();</code></pre></div>
+<p>The complete right side is evaluated before tuple assignment writes begin.</p><div class="article-footer"><span>JETH language documentation</span><a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></div><nav class="pagination" aria-label="Documentation pages"><a class="pagination-link previous" href="../value-types/index.html"><span>Previous</span><strong>Value types</strong></a><a class="pagination-link next" href="../data-locations/index.html"><span>Next</span><strong>Data locations and copying</strong></a></nav></article>
+      <nav class="page-toc" aria-label="On this page"><div class="toc-title">On this page</div><a class="toc-link depth-2" href="#dynamic-bytes-and-strings">Dynamic bytes and strings</a><a class="toc-link depth-3" href="#calldata-slices">Calldata slices</a><a class="toc-link depth-2" href="#dynamic-arrays">Dynamic arrays</a><a class="toc-link depth-2" href="#fixed-arrays">Fixed arrays</a><a class="toc-link depth-2" href="#mappings">Mappings</a><a class="toc-link depth-2" href="#structs">Structs</a><a class="toc-link depth-2" href="#nested-composites">Nested composites</a><a class="toc-link depth-2" href="#tuples">Tuples</a></nav>
+    </main>
+  </div>
+  <div class="search-modal" hidden><button class="search-backdrop" type="button" aria-label="Close search"></button><div class="search-panel" role="dialog" aria-modal="true" aria-label="Search documentation"><div class="search-box"><span>⌕</span><input class="search-input" type="search" placeholder="Search JETH guides..." autocomplete="off"><button class="search-close" type="button">Esc</button></div><div class="search-results"><div class="search-empty">Start typing to search the book.</div></div></div></div>
+  <script src="../../assets/search-index.js"></script>
+  <script src="../../assets/book.js"></script>
+</body>
+</html>

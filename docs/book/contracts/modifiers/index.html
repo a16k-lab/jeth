@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Function modifiers in the JETH language documentation.">
+  <meta name="theme-color" content="#11131a">
+  <meta property="og:image" content="../../assets/a16k-avatar-logo.png">
+  <title>Function modifiers | JETH</title>
+  <link rel="icon" href="../../assets/jeth-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../../assets/book.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../../index.html" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span></a>
+    <nav class="top-nav" aria-label="Primary"><a class="is-active" href="../../index.html">Guides</a><a href="../../internals/compiler-and-tooling/index.html">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
+    <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
+  </header>
+  <div class="pre-release"><span>Pre-release</span> JETH is under active compiler and security review.</div>
+  <div class="book-shell">
+    <aside class="sidebar"><div class="sidebar-title">Guides</div><section class="sidebar-group"><h2>Guides</h2><a class="sidebar-link" href="../../index.html">JETH Documentation</a><a class="sidebar-link" href="../../guides/getting-started/index.html">Getting started</a><a class="sidebar-link" href="../../guides/language-tour/index.html">Language tour</a><a class="sidebar-link" href="../../guides/examples/index.html">Examples</a></section><section class="sidebar-group"><h2>Language</h2><a class="sidebar-link" href="../../language/source-units/index.html">Source units and imports</a><a class="sidebar-link" href="../../language/contract-structure/index.html">Contract structure</a><a class="sidebar-link" href="../../language/types/index.html">Types</a><a class="sidebar-link" href="../../language/value-types/index.html">Value types</a><a class="sidebar-link" href="../../language/reference-types/index.html">Reference and composite types</a><a class="sidebar-link" href="../../language/data-locations/index.html">Data locations and copying</a><a class="sidebar-link" href="../../language/expressions/index.html">Expressions and operators</a><a class="sidebar-link" href="../../language/control-flow/index.html">Statements and control flow</a><a class="sidebar-link" href="../../language/functions/index.html">Functions</a><a class="sidebar-link" href="../../language/globals-and-builtins/index.html">Units, globals, and builtins</a><a class="sidebar-link" href="../../language/jeth-features/index.html">JETH-specific features</a></section><section class="sidebar-group"><h2>Contracts</h2><a class="sidebar-link" href="../inheritance/index.html">Constructors and inheritance</a><a class="sidebar-link is-active" href="./index.html" aria-current="page">Function modifiers</a><a class="sidebar-link" href="../interfaces-and-calls/index.html">Interfaces and external calls</a><a class="sidebar-link" href="../libraries/index.html">Libraries and using</a><a class="sidebar-link" href="../events-and-errors/index.html">Events, errors, and panics</a></section><section class="sidebar-group"><h2>Internals</h2><a class="sidebar-link" href="../../internals/abi/index.html">Contract ABI specification</a><a class="sidebar-link" href="../../internals/storage-layout/index.html">Storage layout</a><a class="sidebar-link" href="../../internals/compiler-and-tooling/index.html">Compiler, CLI, and tooling</a><a class="sidebar-link" href="../../internals/artifacts/index.html">Contracts and artifacts</a></section><section class="sidebar-group"><h2>Advanced</h2><a class="sidebar-link" href="../../advanced/contract-creation-and-clones/index.html">Contract creation and clones</a><a class="sidebar-link" href="../../advanced/proxies-and-diamonds/index.html">Proxies, beacons, and diamonds</a></section><section class="sidebar-group"><h2>Security</h2><a class="sidebar-link" href="../../security/considerations/index.html">Security considerations</a><a class="sidebar-link" href="../../security/compiler-correctness/index.html">Compiler correctness model</a></section><section class="sidebar-group"><h2>Reference</h2><a class="sidebar-link" href="../../reference/cheatsheet/index.html">Syntax cheatsheet</a><a class="sidebar-link" href="../../reference/differences/index.html">Differences from TypeScript and Solidity</a><a class="sidebar-link" href="../../reference/diagnostics/index.html">Compiler diagnostics</a><a class="sidebar-link" href="../../reference/known-limitations/index.html">Supported features and limitations</a><a class="sidebar-link" href="../../reference/feature-matrix/index.html">Complete feature matrix</a></section><section class="sidebar-group"><h2>Project</h2><a class="sidebar-link" href="../../project/roadmap/index.html">Product roadmap</a><a class="sidebar-link" href="../../project/overview/index.html">Repository overview</a></section><a class="built-by" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></aside>
+    <main class="content-shell">
+      <article class="article"><div class="article-kicker">Contracts</div>
+<h1 id="function-modifiers">Function modifiers</h1>
+<p>Modifiers wrap a function or constructor body with reusable checks and effects.</p>
+<h2 id="declaration">Declaration<a class="heading-anchor" href="#declaration" aria-label="Link to Declaration">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> Owned {
+  owner: <span class="tok-type">address</span>;
+
+  <span class="tok-decorator">@modifier</span>
+  onlyOwner() {
+    <span class="tok-builtin">require</span>(<span class="tok-builtin">msg</span>.sender <span class="tok-operator">==</span> <span class="tok-keyword">this</span>.owner, <span class="tok-string">&quot;not owner&quot;</span>);
+    _;
+  }
+}</code></pre></div>
+<p><code>_</code> is the placeholder for the wrapped inner body. The identifier is reserved inside modifier syntax.</p>
+<h2 id="application">Application<a class="heading-anchor" href="#application" aria-label="Link to Application">#</a></h2>
+<p>Apply a modifier by name:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-decorator">@onlyOwner</span>
+setOwner(next: <span class="tok-type">address</span>): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+  <span class="tok-keyword">this</span>.owner = next;
+}</code></pre></div>
+<p>Modifier arguments evaluate once before the modifier body uses them:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-decorator">@modifier</span>
+minimum(value: <span class="tok-type">u256</span>, min: <span class="tok-type">u256</span>) {
+  <span class="tok-builtin">require</span>(value <span class="tok-operator">&gt;=</span> min, <span class="tok-string">&quot;below minimum&quot;</span>);
+  _;
+}
+
+<span class="tok-decorator">@minimum</span>(amount, <span class="tok-number">10n</span>)
+deposit(amount: <span class="tok-type">u256</span>): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+  <span class="tok-keyword">this</span>.total <span class="tok-operator">+=</span> amount;
+}</code></pre></div>
+<h2 id="pre-code-and-post-code">Pre-code and post-code<a class="heading-anchor" href="#pre-code-and-post-code" aria-label="Link to Pre-code and post-code">#</a></h2>
+<p>Statements before <code>_</code> execute before the function body. Statements after <code>_</code> execute after every normal body completion, including an early body return.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-decorator">@modifier</span>
+countCalls() {
+  <span class="tok-keyword">this</span>.entered <span class="tok-operator">+=</span> <span class="tok-number">1n</span>;
+  _;
+  <span class="tok-keyword">this</span>.exited <span class="tok-operator">+=</span> <span class="tok-number">1n</span>;
+}</code></pre></div>
+<p>If the wrapped body reverts, the whole call reverts and post-code does not commit state.</p>
+<h2 id="multiple-modifiers">Multiple modifiers<a class="heading-anchor" href="#multiple-modifiers" aria-label="Link to Multiple modifiers">#</a></h2>
+<p>Modifiers nest leftmost-outermost:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-decorator">@outer</span>
+<span class="tok-decorator">@inner</span>
+run(): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+  <span class="tok-comment">// body</span>
+}</code></pre></div>
+<p>The conceptual order is <code>outer-pre</code>, <code>inner-pre</code>, body, <code>inner-post</code>, <code>outer-post</code>.</p>
+<h2 id="conditional-or-repeated-placeholders">Conditional or repeated placeholders<a class="heading-anchor" href="#conditional-or-repeated-placeholders" aria-label="Link to Conditional or repeated placeholders">#</a></h2>
+<p>A modifier can execute <code>_</code> conditionally or more than once on supported shapes. This changes whether and how often the wrapped body runs. Treat such modifiers as control-flow constructs, not only validation macros.</p>
+<h2 id="return-behavior">Return behavior<a class="heading-anchor" href="#return-behavior" aria-label="Link to Return behavior">#</a></h2>
+<p>A body <code>return</code> stores the return value, finishes the body layer, then runs modifier post-code before final ABI encoding.</p>
+<p>A bare <code>return;</code> in a modifier exits that modifier layer only. An enclosing modifier resumes after its own <code>_</code>. This distinction is important for nested modifiers.</p>
+<h2 id="constructor-modifiers">Constructor modifiers<a class="heading-anchor" href="#constructor-modifiers" aria-label="Link to Constructor modifiers">#</a></h2>
+<p>Modifiers can wrap constructors:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-decorator">@validOwner</span>(owner)
+constructor(owner: <span class="tok-type">address</span>) {
+  <span class="tok-keyword">this</span>.owner = owner;
+}</code></pre></div>
+<p>Constructor modifier execution participates in base/derived construction and immutable staging rules.</p>
+<h2 id="effects-and-type-checking">Effects and type checking<a class="heading-anchor" href="#effects-and-type-checking" aria-label="Link to Effects and type checking">#</a></h2>
+<p>Modifier effects contribute to the wrapped function&#39;s mutability. A modifier that writes storage cannot be hidden inside a read-only <code>get</code>.</p>
+<p>Declared but unapplied modifiers are still type-checked. Generic modifier bodies are validated against real reachable types and checked again at application sites.</p>
+<h2 id="nonreentrant"><code>@nonReentrant</code><a class="heading-anchor" href="#nonreentrant" aria-label="Link to `@nonReentrant`">#</a></h2>
+<p>JETH includes a built-in transient-storage guard:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-decorator">@nonReentrant</span>
+withdraw(amount: <span class="tok-type">u256</span>): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+  <span class="tok-comment">// checks</span>
+  <span class="tok-comment">// effects</span>
+  <span class="tok-comment">// interaction</span>
+}</code></pre></div>
+<p>It uses EIP-1153 transient storage, consumes no persistent storage slot, and reverts on guarded re-entry. It can protect state-mutating external entries.</p>
+<p>The guard does not replace checks-effects-interactions, authorization, invariant tests, or review. All guarded functions share the compiler-defined guard domain, so calling one guarded entry from another can intentionally reject.</p><div class="article-footer"><span>JETH language documentation</span><a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></div><nav class="pagination" aria-label="Documentation pages"><a class="pagination-link previous" href="../inheritance/index.html"><span>Previous</span><strong>Constructors and inheritance</strong></a><a class="pagination-link next" href="../interfaces-and-calls/index.html"><span>Next</span><strong>Interfaces and external calls</strong></a></nav></article>
+      <nav class="page-toc" aria-label="On this page"><div class="toc-title">On this page</div><a class="toc-link depth-2" href="#declaration">Declaration</a><a class="toc-link depth-2" href="#application">Application</a><a class="toc-link depth-2" href="#pre-code-and-post-code">Pre-code and post-code</a><a class="toc-link depth-2" href="#multiple-modifiers">Multiple modifiers</a><a class="toc-link depth-2" href="#conditional-or-repeated-placeholders">Conditional or repeated placeholders</a><a class="toc-link depth-2" href="#return-behavior">Return behavior</a><a class="toc-link depth-2" href="#constructor-modifiers">Constructor modifiers</a><a class="toc-link depth-2" href="#effects-and-type-checking">Effects and type checking</a><a class="toc-link depth-2" href="#nonreentrant">@nonReentrant</a></nav>
+    </main>
+  </div>
+  <div class="search-modal" hidden><button class="search-backdrop" type="button" aria-label="Close search"></button><div class="search-panel" role="dialog" aria-modal="true" aria-label="Search documentation"><div class="search-box"><span>⌕</span><input class="search-input" type="search" placeholder="Search JETH guides..." autocomplete="off"><button class="search-close" type="button">Esc</button></div><div class="search-results"><div class="search-empty">Start typing to search the book.</div></div></div></div>
+  <script src="../../assets/search-index.js"></script>
+  <script src="../../assets/book.js"></script>
+</body>
+</html>

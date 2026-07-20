@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Proxies, beacons, and diamonds in the JETH language documentation.">
+  <meta name="theme-color" content="#11131a">
+  <meta property="og:image" content="../../assets/a16k-avatar-logo.png">
+  <title>Proxies, beacons, and diamonds | JETH</title>
+  <link rel="icon" href="../../assets/jeth-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../../assets/book.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../../index.html" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span></a>
+    <nav class="top-nav" aria-label="Primary"><a class="is-active" href="../../index.html">Guides</a><a href="../../internals/compiler-and-tooling/index.html">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
+    <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
+  </header>
+  <div class="pre-release"><span>Pre-release</span> JETH is under active compiler and security review.</div>
+  <div class="book-shell">
+    <aside class="sidebar"><div class="sidebar-title">Guides</div><section class="sidebar-group"><h2>Guides</h2><a class="sidebar-link" href="../../index.html">JETH Documentation</a><a class="sidebar-link" href="../../guides/getting-started/index.html">Getting started</a><a class="sidebar-link" href="../../guides/language-tour/index.html">Language tour</a><a class="sidebar-link" href="../../guides/examples/index.html">Examples</a></section><section class="sidebar-group"><h2>Language</h2><a class="sidebar-link" href="../../language/source-units/index.html">Source units and imports</a><a class="sidebar-link" href="../../language/contract-structure/index.html">Contract structure</a><a class="sidebar-link" href="../../language/types/index.html">Types</a><a class="sidebar-link" href="../../language/value-types/index.html">Value types</a><a class="sidebar-link" href="../../language/reference-types/index.html">Reference and composite types</a><a class="sidebar-link" href="../../language/data-locations/index.html">Data locations and copying</a><a class="sidebar-link" href="../../language/expressions/index.html">Expressions and operators</a><a class="sidebar-link" href="../../language/control-flow/index.html">Statements and control flow</a><a class="sidebar-link" href="../../language/functions/index.html">Functions</a><a class="sidebar-link" href="../../language/globals-and-builtins/index.html">Units, globals, and builtins</a><a class="sidebar-link" href="../../language/jeth-features/index.html">JETH-specific features</a></section><section class="sidebar-group"><h2>Contracts</h2><a class="sidebar-link" href="../../contracts/inheritance/index.html">Constructors and inheritance</a><a class="sidebar-link" href="../../contracts/modifiers/index.html">Function modifiers</a><a class="sidebar-link" href="../../contracts/interfaces-and-calls/index.html">Interfaces and external calls</a><a class="sidebar-link" href="../../contracts/libraries/index.html">Libraries and using</a><a class="sidebar-link" href="../../contracts/events-and-errors/index.html">Events, errors, and panics</a></section><section class="sidebar-group"><h2>Internals</h2><a class="sidebar-link" href="../../internals/abi/index.html">Contract ABI specification</a><a class="sidebar-link" href="../../internals/storage-layout/index.html">Storage layout</a><a class="sidebar-link" href="../../internals/compiler-and-tooling/index.html">Compiler, CLI, and tooling</a><a class="sidebar-link" href="../../internals/artifacts/index.html">Contracts and artifacts</a></section><section class="sidebar-group"><h2>Advanced</h2><a class="sidebar-link" href="../contract-creation-and-clones/index.html">Contract creation and clones</a><a class="sidebar-link is-active" href="./index.html" aria-current="page">Proxies, beacons, and diamonds</a></section><section class="sidebar-group"><h2>Security</h2><a class="sidebar-link" href="../../security/considerations/index.html">Security considerations</a><a class="sidebar-link" href="../../security/compiler-correctness/index.html">Compiler correctness model</a></section><section class="sidebar-group"><h2>Reference</h2><a class="sidebar-link" href="../../reference/cheatsheet/index.html">Syntax cheatsheet</a><a class="sidebar-link" href="../../reference/differences/index.html">Differences from TypeScript and Solidity</a><a class="sidebar-link" href="../../reference/diagnostics/index.html">Compiler diagnostics</a><a class="sidebar-link" href="../../reference/known-limitations/index.html">Supported features and limitations</a><a class="sidebar-link" href="../../reference/feature-matrix/index.html">Complete feature matrix</a></section><section class="sidebar-group"><h2>Project</h2><a class="sidebar-link" href="../../project/roadmap/index.html">Product roadmap</a><a class="sidebar-link" href="../../project/overview/index.html">Repository overview</a></section><a class="built-by" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></aside>
+    <main class="content-shell">
+      <article class="article"><div class="article-kicker">Advanced</div>
+<h1 id="proxies-beacons-and-diamonds">Proxies, beacons, and diamonds</h1>
+<p>JETH provides compiler-supported deployment and upgrade patterns for EIP-1167 clones, ERC-1967 proxies, transparent proxies, UUPS implementations, beacon proxies, and EIP-2535 diamonds. These features generate routing and storage machinery, but authorization, initialization, storage compatibility, and deployment ordering remain application responsibilities.</p>
+<aside class="callout callout-danger"><div class="callout-label">DANGER</div><p>A proxy or diamond executes another contract&#39;s code in the proxy or diamond storage context. An incorrect implementation, facet, initializer, or upgrade authority can corrupt all application state.</p></aside>
+<h2 id="choosing-a-pattern">Choosing a pattern<a class="heading-anchor" href="#choosing-a-pattern" aria-label="Link to Choosing a pattern">#</a></h2>
+<div class="table-wrap"><table><thead><tr><th>Pattern</th><th>Upgrade authority lives in</th><th>Upgrade scope</th><th>Best fit</th></tr></thead><tbody><tr><td>EIP-1167 clone</td><td>nowhere in the clone</td><td>not upgradeable</td><td>many cheap instances of one implementation</td></tr><tr><td>Plain ERC-1967</td><td>user-written proxy method</td><td>one proxy</td><td>custom proxy administration</td></tr><tr><td>Transparent</td><td>generated admin branch</td><td>one proxy</td><td>strict admin/user call separation</td></tr><tr><td>UUPS</td><td>implementation</td><td>one proxy</td><td>small proxy with implementation-defined authorization</td></tr><tr><td>Beacon</td><td>shared beacon</td><td>every proxy using the beacon</td><td>coordinated fleet upgrades</td></tr><tr><td>Diamond</td><td>generated selector router</td><td>selected selectors</td><td>modular systems split across facets</td></tr></tbody></table></div>
+<p>All patterns require deployed code at implementation, beacon, or facet addresses. JETH checks code existence on the generated paths where the corresponding reference implementation does.</p>
+<h2 id="minimal-eip-1167-clones">Minimal EIP-1167 clones<a class="heading-anchor" href="#minimal-eip-1167-clones" aria-label="Link to Minimal EIP-1167 clones">#</a></h2>
+<p>Minimal clones contain a 45-byte runtime stub that delegates every call to one fixed implementation. Each clone has its own address, balance, and storage. The implementation&#39;s own storage is not used by calls through the clone.</p>
+<p>See <a href="../contract-creation-and-clones/index.html">Contract creation and clones</a> for the full CREATE and CREATE2 model, address formulas, initialization rules, immutable argument layout, collision behavior, failure paths, and production checklist.</p>
+<h3 id="clone-factory-and-implementation">Clone factory and implementation<a class="heading-anchor" href="#clone-factory-and-implementation" aria-label="Link to Clone factory and implementation">#</a></h3>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> AccountImplementation {
+  owner: <span class="tok-type">address</span>;
+  initialized: <span class="tok-type">bool</span>;
+
+  initialize(newOwner: <span class="tok-type">address</span>): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-builtin">require</span>(!<span class="tok-keyword">this</span>.initialized, <span class="tok-string">&quot;already initialized&quot;</span>);
+    <span class="tok-keyword">this</span>.initialized = <span class="tok-keyword">true</span>;
+    <span class="tok-keyword">this</span>.owner = newOwner;
+  }
+
+  <span class="tok-keyword">get</span> ownerOfClone(): <span class="tok-type">External</span>&lt;<span class="tok-type">address</span>&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.owner;
+  }
+}
+
+<span class="tok-keyword">class</span> AccountFactory {
+  create(implementation: <span class="tok-type">address</span>): <span class="tok-type">External</span>&lt;<span class="tok-type">address</span>&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-builtin">clone</span>(implementation);
+  }
+
+  createDeterministic(
+    implementation: <span class="tok-type">address</span>,
+    salt: <span class="tok-type">bytes32</span>,
+  ): <span class="tok-type">External</span>&lt;<span class="tok-type">address</span>&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-builtin">cloneDeterministic</span>(implementation, salt);
+  }
+
+  <span class="tok-keyword">get</span> predict(
+    implementation: <span class="tok-type">address</span>,
+    salt: <span class="tok-type">bytes32</span>,
+  ): <span class="tok-type">External</span>&lt;<span class="tok-type">address</span>&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-builtin">predictClone</span>(implementation, salt);
+  }
+}</code></pre></div>
+<p>Deployment flow:</p>
+<ol><li>Deploy <code>AccountImplementation</code> once.</li><li>Call <code>AccountFactory.create(implementation)</code>.</li><li>Call <code>initialize(owner)</code> on the returned clone address, using the implementation ABI.</li><li>Treat the clone address as the account. Calls write the clone&#39;s storage.</li></ol>
+<p><code>cloneDeterministic</code> uses <code>CREATE2</code>. <code>predictClone</code> returns the address for the factory address, implementation, and salt. A repeated deployment with the same inputs fails because the predicted address already contains code.</p>
+<h3 id="clone-immutable-arguments">Clone immutable arguments<a class="heading-anchor" href="#clone-immutable-arguments" aria-label="Link to Clone immutable arguments">#</a></h3>
+<p>JETH can append immutable argument bytes to the clone runtime. The implementation reads its current clone&#39;s appended tail through <code>cloneArgs()</code>:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> FeeAccountImplementation {
+  <span class="tok-keyword">get</span> feeBps(): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-builtin">cloneArgs</span>().decode(<span class="tok-type">u256</span>);
+  }
+}
+
+<span class="tok-keyword">class</span> FeeAccountFactory {
+  createWithFee(
+    implementation: <span class="tok-type">address</span>,
+    feeBps: <span class="tok-type">u256</span>,
+  ): <span class="tok-type">External</span>&lt;<span class="tok-type">address</span>&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-builtin">cloneWithArgs</span>(implementation, <span class="tok-builtin">abi</span>.encode(feeBps));
+  }
+
+  createDeterministicWithFee(
+    implementation: <span class="tok-type">address</span>,
+    salt: <span class="tok-type">bytes32</span>,
+    feeBps: <span class="tok-type">u256</span>,
+  ): <span class="tok-type">External</span>&lt;<span class="tok-type">address</span>&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-builtin">cloneDeterministicWithArgs</span>(
+      implementation,
+      salt,
+      <span class="tok-builtin">abi</span>.encode(feeBps),
+    );
+  }
+
+  <span class="tok-keyword">get</span> predictWithFee(
+    implementation: <span class="tok-type">address</span>,
+    salt: <span class="tok-type">bytes32</span>,
+    feeBps: <span class="tok-type">u256</span>,
+  ): <span class="tok-type">External</span>&lt;<span class="tok-type">address</span>&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-builtin">predictCloneWithArgs</span>(
+      implementation,
+      salt,
+      <span class="tok-builtin">abi</span>.encode(feeBps),
+    );
+  }
+}</code></pre></div>
+<p>The exact immutable argument bytes contribute to the deterministic address. <code>cloneArgs()</code> is meaningful only while code is executing through a compatible clone. Clone deployment mutates state and is rejected from a read-only method. Prediction, code inspection, and clone-argument reads are environment reads and therefore infer <code>view</code>, not <code>pure</code>.</p>
+<h2 id="plain-erc-1967-proxy">Plain ERC-1967 proxy<a class="heading-anchor" href="#plain-erc-1967-proxy" aria-label="Link to Plain ERC-1967 proxy">#</a></h2>
+<p><code>@proxy</code> generates a payable delegate fallback and uses the ERC-1967 implementation slot. The class may define its own administration functions but may not define ordinary state, <code>receive</code>, or <code>fallback</code> members.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> CounterV1 {
+  value: <span class="tok-type">u256</span>;
+  initialized: <span class="tok-type">bool</span>;
+
+  initialize(initialValue: <span class="tok-type">u256</span>): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-builtin">require</span>(!<span class="tok-keyword">this</span>.initialized, <span class="tok-string">&quot;already initialized&quot;</span>);
+    <span class="tok-keyword">this</span>.initialized = <span class="tok-keyword">true</span>;
+    <span class="tok-keyword">this</span>.value = initialValue;
+  }
+
+  increment(): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-keyword">this</span>.value <span class="tok-operator">+=</span> <span class="tok-number">1n</span>;
+  }
+
+  <span class="tok-keyword">get</span> current(): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.value;
+  }
+}
+
+<span class="tok-decorator">@proxy</span>
+<span class="tok-keyword">class</span> CounterProxy {
+  constructor(
+    implementation: <span class="tok-type">address</span>,
+    admin: <span class="tok-type">address</span>,
+    initialValue: <span class="tok-type">u256</span>,
+  ) {
+    proxyInit(
+      implementation,
+      admin,
+      <span class="tok-builtin">abi</span>.encodeWithSelector(<span class="tok-number">0xfe4b84dfn</span>, initialValue),
+    );
+  }
+
+  upgrade(
+    newImplementation: <span class="tok-type">address</span>,
+    migrationData: <span class="tok-type">bytes</span>,
+  ): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-builtin">require</span>(<span class="tok-builtin">msg</span>.sender <span class="tok-operator">==</span> proxyAdmin(), <span class="tok-string">&quot;not admin&quot;</span>);
+    upgradeProxy(newImplementation, migrationData);
+  }
+
+  <span class="tok-keyword">get</span> implementation(): <span class="tok-type">External</span>&lt;<span class="tok-type">address</span>&gt; {
+    <span class="tok-keyword">return</span> proxyImplementation();
+  }
+
+  <span class="tok-keyword">get</span> admin(): <span class="tok-type">External</span>&lt;<span class="tok-type">address</span>&gt; {
+    <span class="tok-keyword">return</span> proxyAdmin();
+  }
+}</code></pre></div>
+<p><code>0xfe4b84df</code> is <code>CounterV1.initialize(u256).selector</code>. Prefer producing selector values from compiler artifacts or a typed interface instead of copying a magic constant between projects.</p>
+<p><code>proxyInit</code> accepts either <code>(implementation, initData)</code> or <code>(implementation, admin, initData)</code>. It checks that the implementation contains code, stores the ERC-1967 slots, emits <code>Upgraded</code>, and delegatecalls nonempty initialization data. A failed initializer bubbles its revert data and the whole deployment reverts.</p>
+<p><code>upgradeProxy(newImplementation, data)</code> checks code, updates the implementation slot, emits <code>Upgraded</code>, and delegatecalls nonempty migration data. JETH does not authorize this builtin for you. The surrounding exposed method must perform the required ownership, role, governance, or timelock check.</p>
+<p>Interact with the deployed proxy using <code>CounterV1</code>&#39;s ABI. The proxy&#39;s own administration ABI is used only for the explicitly declared proxy methods.</p>
+<h2 id="transparent-proxy">Transparent proxy<a class="heading-anchor" href="#transparent-proxy" aria-label="Link to Transparent proxy">#</a></h2>
+<p><code>@proxy(&#39;transparent&#39;)</code> generates the transparent admin branch. The source class contains only its constructor:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-decorator">@proxy</span>(<span class="tok-string">&quot;transparent&quot;</span>)
+<span class="tok-keyword">class</span> TransparentCounterProxy {
+  constructor(
+    implementation: <span class="tok-type">address</span>,
+    admin: <span class="tok-type">address</span>,
+    initialValue: <span class="tok-type">u256</span>,
+  ) {
+    proxyInit(
+      implementation,
+      admin,
+      <span class="tok-builtin">abi</span>.encodeWithSelector(<span class="tok-number">0xfe4b84dfn</span>, initialValue),
+    );
+  }
+}</code></pre></div>
+<p>Routing depends on the caller:</p>
+<ul><li>the admin may call only <code>upgradeToAndCall(address,bytes)</code>;</li><li>any other admin call reverts with <code>ProxyDeniedAdminAccess()</code>;</li><li>a non-admin call always delegates to the implementation, including a call whose selector equals <code>upgradeToAndCall(address,bytes)</code>.</li></ul>
+<p>This caller-based routing prevents the admin from accidentally invoking an implementation function through the proxy. A transparent proxy cannot declare exposed methods, state fields, <code>receive</code>, or <code>fallback</code>. Use the generated <code>upgradeToAndCall</code> selector from the administrator account and use the implementation ABI from every normal account.</p>
+<h2 id="uups-proxy">UUPS proxy<a class="heading-anchor" href="#uups-proxy" aria-label="Link to UUPS proxy">#</a></h2>
+<p>UUPS keeps the proxy minimal and puts upgrade behavior in the implementation. Use a plain <code>@proxy</code> for routing and mark each compatible implementation with <code>@uups</code>.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-decorator">@uups</span>
+<span class="tok-keyword">class</span> VaultV1 {
+  owner: <span class="tok-type">address</span>;
+  assets: <span class="tok-type">u256</span>;
+
+  authorizeUpgrade(newImplementation: <span class="tok-type">address</span>): <span class="tok-keyword">void</span> {
+    <span class="tok-builtin">require</span>(<span class="tok-builtin">msg</span>.sender <span class="tok-operator">==</span> <span class="tok-keyword">this</span>.owner, <span class="tok-string">&quot;not authorized&quot;</span>);
+  }
+
+  initialize(initialOwner: <span class="tok-type">address</span>): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-builtin">require</span>(<span class="tok-keyword">this</span>.owner <span class="tok-operator">==</span> <span class="tok-type">address</span>(<span class="tok-number">0n</span>), <span class="tok-string">&quot;already initialized&quot;</span>);
+    <span class="tok-keyword">this</span>.owner = initialOwner;
+  }
+
+  deposit(amount: <span class="tok-type">u256</span>): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-keyword">this</span>.assets <span class="tok-operator">+=</span> amount;
+  }
+
+  <span class="tok-keyword">get</span> totalAssets(): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.assets;
+  }
+}
+
+<span class="tok-decorator">@proxy</span>
+<span class="tok-keyword">class</span> VaultProxy {
+  constructor(implementation: <span class="tok-type">address</span>, initialOwner: <span class="tok-type">address</span>) {
+    proxyInit(
+      implementation,
+      <span class="tok-builtin">abi</span>.encodeWithSelector(<span class="tok-number">0xc4d66de8n</span>, initialOwner),
+    );
+  }
+}</code></pre></div>
+<p>The <code>initialize(address)</code> selector is <code>0xc4d66de8</code>. A valid <code>@uups</code> implementation must declare exactly the internal gate <code>authorizeUpgrade(newImplementation: address): void</code>. JETH synthesizes:</p>
+<ul><li>payable <code>upgradeToAndCall(address,bytes)</code>;</li><li>read-only <code>proxiableUUID(): bytes32</code>.</li></ul>
+<p>Call <code>upgradeToAndCall</code> at the proxy address. The proxy delegates it into the current implementation, so authorization reads proxy storage and the upgrade writes the proxy&#39;s ERC-1967 implementation slot.</p>
+<p>Before updating the slot, the generated path calls the new implementation&#39;s <code>proxiableUUID()</code> and requires the ERC-1967 implementation-slot identifier. This rejects a target with no compatible UUPS surface or a wrong UUID. It does not prove that the new implementation preserves storage, authorization, or application invariants.</p>
+<p>Do not declare your own <code>upgradeToAndCall</code> or <code>proxiableUUID</code> on an <code>@uups</code> class. Do not combine <code>@uups</code> and <code>@proxy</code> on the same class.</p>
+<h2 id="beacon-and-beacon-proxy">Beacon and beacon proxy<a class="heading-anchor" href="#beacon-and-beacon-proxy" aria-label="Link to Beacon and beacon proxy">#</a></h2>
+<p>A beacon stores one current implementation for a fleet of proxies. Every beacon proxy asks the beacon for <code>implementation()</code> on each routed call.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-decorator">@beacon</span>
+<span class="tok-keyword">class</span> AccountBeacon {
+  constructor(implementation: <span class="tok-type">address</span>) {}
+}
+
+<span class="tok-decorator">@proxy</span>(<span class="tok-string">&quot;beacon&quot;</span>)
+<span class="tok-keyword">class</span> AccountBeaconProxy {
+  constructor(beacon: <span class="tok-type">address</span>, initialValue: <span class="tok-type">u256</span>) {
+    proxyInitBeacon(
+      beacon,
+      <span class="tok-builtin">abi</span>.encodeWithSelector(<span class="tok-number">0xfe4b84dfn</span>, initialValue),
+    );
+  }
+}</code></pre></div>
+<p>For <code>@beacon</code>, JETH generates:</p>
+<ul><li><code>owner(): address</code>;</li><li><code>implementation(): address</code>;</li><li>owner-gated <code>upgradeTo(address)</code>;</li><li><code>Upgraded(address)</code> events on construction and upgrade.</li></ul>
+<p>The beacon owner is the beacon deployment caller. The constructor&#39;s implementation must contain code. The user-written beacon class contains only the empty constructor and cannot declare state, inheritance, special entries, or methods that collide with the generated surface.</p>
+<p><code>proxyInitBeacon(beacon, initData)</code> stores the ERC-1967 beacon slot, emits <code>BeaconUpgraded</code>, resolves the current implementation, and delegatecalls nonempty initialization data. <code>proxyBeacon()</code> reads the stored beacon address.</p>
+<p>Deployment flow:</p>
+<ol><li>Deploy the implementation.</li><li>Deploy <code>AccountBeacon(implementation)</code> from the intended owner account.</li><li>Deploy one or more <code>AccountBeaconProxy(beacon, initialValue)</code> instances.</li><li>Interact with each proxy through the implementation ABI.</li><li>Call <code>AccountBeacon.upgradeTo(newImplementation)</code> as the beacon owner.</li><li>Verify every dependent proxy against populated, independent state.</li></ol>
+<p>One beacon upgrade changes routing for every proxy using that beacon. This is the defining benefit and the primary blast-radius risk.</p>
+<h2 id="namespaced-storage-for-delegatecalled-code">Namespaced storage for delegatecalled code<a class="heading-anchor" href="#namespaced-storage-for-delegatecalled-code" aria-label="Link to Namespaced storage for delegatecalled code">#</a></h2>
+<p>Facets and other modular delegatecall targets should use collision-resistant namespaced state. JETH&#39;s <code>@storage(&quot;namespace&quot;)</code> uses the ERC-7201 location:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>text</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="text"><code>keccak256(abi.encode(uint256(keccak256(bytes(namespace))) - 1)) &amp; ~0xff</code></pre></div>
+<p>Fields with the same namespace share one logical struct and follow declaration order and packing inside that namespace. Different namespaces are isolated. Ordinary fields still use sequential contract storage and should not be used for facet-owned state.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-decorator">@facet</span>
+<span class="tok-keyword">class</span> CounterFacet {
+  <span class="tok-decorator">@storage</span>(<span class="tok-string">&quot;app.counter&quot;</span>) count: <span class="tok-type">u256</span>;
+  <span class="tok-decorator">@storage</span>(<span class="tok-string">&quot;app.counter&quot;</span>) lastWriter: <span class="tok-type">address</span>;
+
+  increment(): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-keyword">this</span>.count <span class="tok-operator">+=</span> <span class="tok-number">1n</span>;
+    <span class="tok-keyword">this</span>.lastWriter = <span class="tok-builtin">msg</span>.sender;
+  }
+
+  <span class="tok-keyword">get</span> current(): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.count;
+  }
+
+  <span class="tok-keyword">get</span> writer(): <span class="tok-type">External</span>&lt;<span class="tok-type">address</span>&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.lastWriter;
+  }
+}</code></pre></div>
+<p>Namespace strings are permanent storage identifiers. Renaming one creates a new storage region and makes the old values unreachable through the renamed fields. All facet versions sharing a namespace must preserve compatible field order and types.</p>
+<h2 id="eip-2535-diamonds">EIP-2535 diamonds<a class="heading-anchor" href="#eip-2535-diamonds" aria-label="Link to EIP-2535 diamonds">#</a></h2>
+<p><code>@diamond</code> generates the selector router, cut operation, loupe, ERC-165 support, ownership, initialization, and finalization surface. Facets are separately deployed <code>@facet</code> contracts whose exposed function selectors are installed by a cut.</p>
+<h3 id="diamond-models">Diamond models<a class="heading-anchor" href="#diamond-models" aria-label="Link to Diamond models">#</a></h3>
+<div class="table-wrap"><table><thead><tr><th>Declaration</th><th>Storage compatibility</th><th>Ownership and fallback behavior</th></tr></thead><tbody><tr><td><code>@diamond</code> or <code>@diamond(&quot;array&quot;)</code></td><td>diamond-1/diamond-3 array model</td><td>direct ownership transfer; unknown selector reverts</td></tr><tr><td><code>@diamond(&quot;packed&quot;)</code></td><td>diamond-2 packed selectors, eight per word</td><td>direct ownership transfer; unknown selector reverts</td></tr><tr><td><code>@diamond(&quot;solidstate&quot;)</code></td><td>Solidstate v0.0.61 namespaces</td><td>two-step ownership and configurable default fallback</td></tr></tbody></table></div>
+<p>Choose the model for compatibility with an existing deployment or toolchain. The models are not storage-compatible with each other. Do not change a deployed diamond&#39;s model.</p>
+<h3 id="declaring-a-diamond">Declaring a diamond<a class="heading-anchor" href="#declaring-a-diamond" aria-label="Link to Declaring a diamond">#</a></h3>
+<p>Array and packed diamonds use <code>diamondInit(owner)</code>:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-decorator">@diamond</span>(<span class="tok-string">&quot;array&quot;</span>)
+<span class="tok-keyword">class</span> ApplicationDiamond {
+  constructor(initialOwner: <span class="tok-type">address</span>) {
+    diamondInit(initialOwner);
+  }
+}</code></pre></div>
+<p>Solidstate uses its matching initializer:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-decorator">@diamond</span>(<span class="tok-string">&quot;solidstate&quot;</span>)
+<span class="tok-keyword">class</span> SolidstateApplication {
+  constructor(initialOwner: <span class="tok-type">address</span>) {
+    diamondInitSolidstate(initialOwner);
+  }
+}</code></pre></div>
+<p>The source diamond contains only its constructor. JETH rejects user-declared fields, methods, events, errors, modifiers, inheritance, <code>receive</code>, and <code>fallback</code> because the complete surface is synthesized. A class cannot be both <code>@diamond</code> and <code>@facet</code>, and one source file cannot declare multiple diamonds.</p>
+<h3 id="generated-diamond-abi">Generated diamond ABI<a class="heading-anchor" href="#generated-diamond-abi" aria-label="Link to Generated diamond ABI">#</a></h3>
+<p>Every model provides:</p>
+<div class="table-wrap"><table><thead><tr><th>Function</th><th>Purpose</th></tr></thead><tbody><tr><td><code>diamondCut(FacetCut[],address,bytes)</code></td><td>add, replace, or remove selectors and optionally run initialization</td></tr><tr><td><code>facets()</code></td><td>return every installed facet and its selectors</td></tr><tr><td><code>facetFunctionSelectors(address)</code></td><td>return selectors installed for one facet</td></tr><tr><td><code>facetAddresses()</code></td><td>return installed facet addresses</td></tr><tr><td><code>facetAddress(bytes4)</code></td><td>resolve one selector</td></tr><tr><td><code>supportsInterface(bytes4)</code></td><td>query registered interface support</td></tr><tr><td><code>owner()</code></td><td>return the upgrade owner</td></tr><tr><td><code>transferOwnership(address)</code></td><td>transfer or nominate ownership, depending on model</td></tr><tr><td><code>freezeDiamond()</code></td><td>permanently disable future cuts</td></tr><tr><td><code>isFrozen()</code></td><td>report finalization state</td></tr></tbody></table></div>
+<p>The Solidstate model additionally provides <code>nomineeOwner()</code>, <code>acceptOwnership()</code>, <code>getFallbackAddress()</code>, and owner-gated <code>setFallbackAddress(address)</code>. On a selector miss, it delegates to the configured fallback address when nonzero. The array and packed models revert on a selector miss.</p>
+<h3 id="installing-facet-selectors">Installing facet selectors<a class="heading-anchor" href="#installing-facet-selectors" aria-label="Link to Installing facet selectors">#</a></h3>
+<p><code>FacetCut</code> has this ABI shape:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">type</span> FacetCut = {
+  facetAddress: <span class="tok-type">address</span>;
+  action: <span class="tok-type">u8</span>;
+  functionSelectors: <span class="tok-type">bytes4</span>[];
+};</code></pre></div>
+<p>Action values are:</p>
+<div class="table-wrap"><table><thead><tr><th>Value</th><th>Action</th><th>Required facet address</th></tr></thead><tbody><tr><td><code>0</code></td><td>add selectors that do not exist</td><td>deployed facet address</td></tr><tr><td><code>1</code></td><td>replace selectors that exist</td><td>new deployed facet address</td></tr><tr><td><code>2</code></td><td>remove selectors that exist</td><td>zero address</td></tr></tbody></table></div>
+<p>For the <code>CounterFacet</code> example, an add cut contains the deployed facet address and the selectors of <code>increment()</code>, <code>current()</code>, and <code>writer()</code>. Submit it to <code>diamondCut(cuts, address(0n), bytes(&quot;&quot;))</code> from the diamond owner. After the cut, call the diamond address with the <code>CounterFacet</code> ABI. The router delegatecalls the facet and the <code>app.counter</code> fields are stored at the diamond address.</p>
+<p>Selectors for a cut should come from compiler-produced ABIs or qualified <code>.selector</code> expressions. Do not derive selectors from display names or return types.</p>
+<h3 id="cut-initialization">Cut initialization<a class="heading-anchor" href="#cut-initialization" aria-label="Link to Cut initialization">#</a></h3>
+<p>The second and third <code>diamondCut</code> arguments optionally run one initialization delegatecall after the selector changes:</p>
+<ul><li>use <code>address(0n)</code> and empty bytes to skip initialization;</li><li>otherwise <code>_init</code> must contain code;</li><li><code>_calldata</code> is delegatecalled into <code>_init</code> in diamond storage context;</li><li>initialization failure reverts the complete cut and bubbles revert data.</li></ul>
+<p>An initializer is arbitrary delegatecalled code. Protect it against replay when appropriate, use namespaced storage, and include it in the storage and security review.</p>
+<h3 id="loupe-and-routing-checks">Loupe and routing checks<a class="heading-anchor" href="#loupe-and-routing-checks" aria-label="Link to Loupe and routing checks">#</a></h3>
+<p>After every cut, verify at minimum:</p>
+<ol><li><code>facetAddress(selector)</code> equals the intended facet;</li><li><code>facetFunctionSelectors(facet)</code> contains exactly the expected set;</li><li><code>facetAddresses()</code> contains no stale address;</li><li>each installed selector succeeds through the diamond address;</li><li>removed selectors revert or reach only an intentionally configured Solidstate fallback;</li><li>the owner and registered interface IDs remain correct.</li></ol>
+<p>Add, replace, and remove use model-specific storage algorithms. Their observable ordering can affect loupe output and raw storage, so an upgrade test should compare complete selector sets rather than only one successful call.</p>
+<h2 id="finalizing-a-diamond">Finalizing a diamond<a class="heading-anchor" href="#finalizing-a-diamond" aria-label="Link to Finalizing a diamond">#</a></h2>
+<p>Every diamond starts upgradeable. The owner can call <code>freezeDiamond()</code> to set a permanent flag that makes later <code>diamondCut</code> calls revert. Existing selector routing remains active.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">interface</span> DiamondFinalization {
+  freezeDiamond(): <span class="tok-keyword">void</span>;
+  isFrozen(): <span class="tok-type">View</span>&lt;<span class="tok-type">bool</span>&gt;;
+}
+
+<span class="tok-keyword">class</span> Finalizer {
+  finalize(diamond: <span class="tok-type">address</span>): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    DiamondFinalization(diamond).freezeDiamond();
+    <span class="tok-builtin">require</span>(DiamondFinalization(diamond).isFrozen(), <span class="tok-string">&quot;freeze failed&quot;</span>);
+  }
+}</code></pre></div>
+<p>Finalization is irreversible through the generated surface. Before freezing, install every required selector, validate loupe output, complete initialization, test recovery procedures, and confirm there is no alternate privileged path in a facet or Solidstate fallback.</p>
+<h2 id="storage-compatibility-rules">Storage compatibility rules<a class="heading-anchor" href="#storage-compatibility-rules" aria-label="Link to Storage compatibility rules">#</a></h2>
+<p>An implementation upgrade must preserve the proxy-visible layout:</p>
+<ul><li>do not reorder, remove, or change existing state fields;</li><li>append compatible fields after existing fields;</li><li>preserve inheritance order and packing assumptions;</li><li>preserve initializer guards and authorization state;</li><li>do not reuse ERC-1967 implementation, admin, or beacon slots.</li></ul>
+<p>A facet upgrade must preserve every namespace it uses:</p>
+<ul><li>keep the exact namespace string;</li><li>keep existing field order, widths, and recursive shapes;</li><li>coordinate fields shared by multiple facets;</li><li>never use the diamond router&#39;s internal namespaces;</li><li>review default fallback code as a full-storage delegate target.</li></ul>
+<p>Implementation constructors initialize only implementation storage. Proxy or diamond state must be initialized through a delegatecall initializer.</p>
+<h2 id="production-deployment-checklist">Production deployment checklist<a class="heading-anchor" href="#production-deployment-checklist" aria-label="Link to Production deployment checklist">#</a></h2>
+<p>Before deployment or upgrade:</p>
+<ol><li>pin the JETH revision, solc 0.8.35, EVM target, optimizer settings, and source hashes;</li><li>deploy and verify every implementation, beacon, facet, and initializer;</li><li>record implementation, admin, beacon, owner, and namespace expectations;</li><li>encode initialization from the intended ABI and test replay protection;</li><li>diff storage layouts against the deployed version;</li><li>test the upgrade with populated state, not only an empty deployment;</li><li>verify events, returndata, revert bubbling, and raw reserved slots;</li><li>verify every proxy or diamond through its delegated ABI;</li><li>test unauthorized, malformed, zero-address, and no-code targets;</li><li>test rollback or incident response before transferring production control;</li><li>place authority behind reviewed governance, multisig, or timelock policy;</li><li>obtain an independent audit of application logic and the exact generated pattern used by the selected compiler release.</li></ol>
+<p>Generated upgrade machinery reduces boilerplate. It does not make an upgrade, initializer, storage layout, facet set, or governance process safe by itself.</p><div class="article-footer"><span>JETH language documentation</span><a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></div><nav class="pagination" aria-label="Documentation pages"><a class="pagination-link previous" href="../contract-creation-and-clones/index.html"><span>Previous</span><strong>Contract creation and clones</strong></a><a class="pagination-link next" href="../../security/considerations/index.html"><span>Next</span><strong>Security considerations</strong></a></nav></article>
+      <nav class="page-toc" aria-label="On this page"><div class="toc-title">On this page</div><a class="toc-link depth-2" href="#choosing-a-pattern">Choosing a pattern</a><a class="toc-link depth-2" href="#minimal-eip-1167-clones">Minimal EIP-1167 clones</a><a class="toc-link depth-3" href="#clone-factory-and-implementation">Clone factory and implementation</a><a class="toc-link depth-3" href="#clone-immutable-arguments">Clone immutable arguments</a><a class="toc-link depth-2" href="#plain-erc-1967-proxy">Plain ERC-1967 proxy</a><a class="toc-link depth-2" href="#transparent-proxy">Transparent proxy</a><a class="toc-link depth-2" href="#uups-proxy">UUPS proxy</a><a class="toc-link depth-2" href="#beacon-and-beacon-proxy">Beacon and beacon proxy</a><a class="toc-link depth-2" href="#namespaced-storage-for-delegatecalled-code">Namespaced storage for delegatecalled code</a><a class="toc-link depth-2" href="#eip-2535-diamonds">EIP-2535 diamonds</a><a class="toc-link depth-3" href="#diamond-models">Diamond models</a><a class="toc-link depth-3" href="#declaring-a-diamond">Declaring a diamond</a><a class="toc-link depth-3" href="#generated-diamond-abi">Generated diamond ABI</a><a class="toc-link depth-3" href="#installing-facet-selectors">Installing facet selectors</a><a class="toc-link depth-3" href="#cut-initialization">Cut initialization</a><a class="toc-link depth-3" href="#loupe-and-routing-checks">Loupe and routing checks</a><a class="toc-link depth-2" href="#finalizing-a-diamond">Finalizing a diamond</a><a class="toc-link depth-2" href="#storage-compatibility-rules">Storage compatibility rules</a><a class="toc-link depth-2" href="#production-deployment-checklist">Production deployment checklist</a></nav>
+    </main>
+  </div>
+  <div class="search-modal" hidden><button class="search-backdrop" type="button" aria-label="Close search"></button><div class="search-panel" role="dialog" aria-modal="true" aria-label="Search documentation"><div class="search-box"><span>⌕</span><input class="search-input" type="search" placeholder="Search JETH guides..." autocomplete="off"><button class="search-close" type="button">Esc</button></div><div class="search-results"><div class="search-empty">Start typing to search the book.</div></div></div></div>
+  <script src="../../assets/search-index.js"></script>
+  <script src="../../assets/book.js"></script>
+</body>
+</html>

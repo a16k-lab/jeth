@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Contract creation and clones in the JETH language documentation.">
+  <meta name="theme-color" content="#11131a">
+  <meta property="og:image" content="../../assets/a16k-avatar-logo.png">
+  <title>Contract creation and clones | JETH</title>
+  <link rel="icon" href="../../assets/jeth-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../../assets/book.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../../index.html" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span></a>
+    <nav class="top-nav" aria-label="Primary"><a class="is-active" href="../../index.html">Guides</a><a href="../../internals/compiler-and-tooling/index.html">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
+    <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
+  </header>
+  <div class="pre-release"><span>Pre-release</span> JETH is under active compiler and security review.</div>
+  <div class="book-shell">
+    <aside class="sidebar"><div class="sidebar-title">Guides</div><section class="sidebar-group"><h2>Guides</h2><a class="sidebar-link" href="../../index.html">JETH Documentation</a><a class="sidebar-link" href="../../guides/getting-started/index.html">Getting started</a><a class="sidebar-link" href="../../guides/language-tour/index.html">Language tour</a><a class="sidebar-link" href="../../guides/examples/index.html">Examples</a></section><section class="sidebar-group"><h2>Language</h2><a class="sidebar-link" href="../../language/source-units/index.html">Source units and imports</a><a class="sidebar-link" href="../../language/contract-structure/index.html">Contract structure</a><a class="sidebar-link" href="../../language/types/index.html">Types</a><a class="sidebar-link" href="../../language/value-types/index.html">Value types</a><a class="sidebar-link" href="../../language/reference-types/index.html">Reference and composite types</a><a class="sidebar-link" href="../../language/data-locations/index.html">Data locations and copying</a><a class="sidebar-link" href="../../language/expressions/index.html">Expressions and operators</a><a class="sidebar-link" href="../../language/control-flow/index.html">Statements and control flow</a><a class="sidebar-link" href="../../language/functions/index.html">Functions</a><a class="sidebar-link" href="../../language/globals-and-builtins/index.html">Units, globals, and builtins</a><a class="sidebar-link" href="../../language/jeth-features/index.html">JETH-specific features</a></section><section class="sidebar-group"><h2>Contracts</h2><a class="sidebar-link" href="../../contracts/inheritance/index.html">Constructors and inheritance</a><a class="sidebar-link" href="../../contracts/modifiers/index.html">Function modifiers</a><a class="sidebar-link" href="../../contracts/interfaces-and-calls/index.html">Interfaces and external calls</a><a class="sidebar-link" href="../../contracts/libraries/index.html">Libraries and using</a><a class="sidebar-link" href="../../contracts/events-and-errors/index.html">Events, errors, and panics</a></section><section class="sidebar-group"><h2>Internals</h2><a class="sidebar-link" href="../../internals/abi/index.html">Contract ABI specification</a><a class="sidebar-link" href="../../internals/storage-layout/index.html">Storage layout</a><a class="sidebar-link" href="../../internals/compiler-and-tooling/index.html">Compiler, CLI, and tooling</a><a class="sidebar-link" href="../../internals/artifacts/index.html">Contracts and artifacts</a></section><section class="sidebar-group"><h2>Advanced</h2><a class="sidebar-link is-active" href="./index.html" aria-current="page">Contract creation and clones</a><a class="sidebar-link" href="../proxies-and-diamonds/index.html">Proxies, beacons, and diamonds</a></section><section class="sidebar-group"><h2>Security</h2><a class="sidebar-link" href="../../security/considerations/index.html">Security considerations</a><a class="sidebar-link" href="../../security/compiler-correctness/index.html">Compiler correctness model</a></section><section class="sidebar-group"><h2>Reference</h2><a class="sidebar-link" href="../../reference/cheatsheet/index.html">Syntax cheatsheet</a><a class="sidebar-link" href="../../reference/differences/index.html">Differences from TypeScript and Solidity</a><a class="sidebar-link" href="../../reference/diagnostics/index.html">Compiler diagnostics</a><a class="sidebar-link" href="../../reference/known-limitations/index.html">Supported features and limitations</a><a class="sidebar-link" href="../../reference/feature-matrix/index.html">Complete feature matrix</a></section><section class="sidebar-group"><h2>Project</h2><a class="sidebar-link" href="../../project/roadmap/index.html">Product roadmap</a><a class="sidebar-link" href="../../project/overview/index.html">Repository overview</a></section><a class="built-by" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></aside>
+    <main class="content-shell">
+      <article class="article"><div class="article-kicker">Advanced</div>
+<h1 id="contract-creation-and-clones">Contract creation and clones</h1>
+<p>JETH supports contract creation from inside a contract through structured EIP-1167 clone builtins. A clone is a small contract that delegates every call to a fixed implementation while keeping its own address, balance, and storage.</p>
+<p>This chapter explains the EVM <code>CREATE</code> and <code>CREATE2</code> behavior used by those builtins, deterministic addresses, initialization, immutable arguments, failure behavior, and the boundary of JETH&#39;s current deployment surface.</p>
+<aside class="callout callout-important"><div class="callout-label">IMPORTANT</div><p>JETH does not currently expose arbitrary <code>new Contract(...)</code>, raw init-code deployment, or user-level <code>CREATE</code> and <code>CREATE2</code>. The clone builtins are the supported way for one JETH contract to deploy another contract.</p></aside>
+<h2 id="supported-builtins">Supported builtins<a class="heading-anchor" href="#supported-builtins" aria-label="Link to Supported builtins">#</a></h2>
+<div class="table-wrap"><table><thead><tr><th>JETH expression</th><th>EVM operation</th><th>Result</th><th>Effect</th></tr></thead><tbody><tr><td><code>clone(implementation)</code></td><td><code>CREATE</code></td><td>clone address</td><td>writes state</td></tr><tr><td><code>cloneDeterministic(implementation, salt)</code></td><td><code>CREATE2</code></td><td>clone address</td><td>writes state</td></tr><tr><td><code>cloneWithArgs(implementation, args)</code></td><td><code>CREATE</code></td><td>clone address</td><td>writes state</td></tr><tr><td><code>cloneDeterministicWithArgs(implementation, salt, args)</code></td><td><code>CREATE2</code></td><td>clone address</td><td>writes state</td></tr><tr><td><code>predictClone(implementation, salt)</code></td><td>address calculation only</td><td>predicted address</td><td>reads the environment</td></tr><tr><td><code>predictCloneWithArgs(implementation, salt, args)</code></td><td>address calculation only</td><td>predicted address</td><td>reads the environment</td></tr><tr><td><code>cloneArgs()</code></td><td>reads the executing contract&#39;s code tail</td><td><code>bytes</code></td><td>reads the environment</td></tr><tr><td><code>isContract(account)</code></td><td>checks <code>EXTCODESIZE</code></td><td><code>bool</code></td><td>reads the environment</td></tr></tbody></table></div>
+<p>The deployment builtins are allowed in nonpayable and payable methods. They are rejected in read-only methods because contract creation changes EVM state. Prediction, <code>cloneArgs()</code>, and <code>isContract(...)</code> are allowed in a <code>get</code> method, but not in a <code>static</code> method, because they inspect the current EVM environment.</p>
+<p>The parameter types are exact:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>text</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="text"><code>implementation: address
+salt:           bytes32
+args:           bytes
+result:         address</code></pre></div>
+<p>An implementation supplied as <code>u160</code> or <code>bytes20</code> can be converted to an address. Prefer an explicit <code>address(...)</code> conversion at trust boundaries.</p>
+<h2 id="creation-code-and-runtime-code">Creation code and runtime code<a class="heading-anchor" href="#creation-code-and-runtime-code" aria-label="Link to Creation code and runtime code">#</a></h2>
+<p>Every EVM deployment has two different bytecode values:</p>
+<ol><li>Creation code, also called init code, executes only during deployment.</li><li>Runtime code is returned by the creation code and stored at the new address.</li></ol>
+<p>The plain JETH clone creation code returns this canonical 45-byte EIP-1167 runtime:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>text</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="text"><code>363d3d373d3d3d363d73
+&lt;20-byte implementation address&gt;
+5af43d82803e903d91602b57fd5bf3</code></pre></div>
+<p>The runtime copies calldata, delegates the call to the embedded implementation, and returns or reverts with the implementation&#39;s returndata. It does not contain application storage or constructor logic.</p>
+<p>The JETH clone builtins call <code>CREATE</code> or <code>CREATE2</code> with a value of zero. They do not forward the factory call&#39;s <code>msg.value</code> into the new clone. Fund the clone in a later payable call if the application needs an initial balance.</p>
+<h2 id="create-clones">CREATE clones<a class="heading-anchor" href="#create-clones" aria-label="Link to CREATE clones">#</a></h2>
+<p><code>clone(implementation)</code> and <code>cloneWithArgs(implementation, args)</code> use <code>CREATE</code>. The resulting address depends on the creating factory address and that factory&#39;s creation nonce. In conceptual form:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>text</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="text"><code>address = last20(keccak256(rlp([factoryAddress, factoryCreationNonce])))</code></pre></div>
+<p>Two successive <code>clone(implementation)</code> calls from the same factory therefore produce different addresses even though their runtime bytecode is identical. JETH has no <code>predictClone</code> form for CREATE because prediction would also require tracking the factory&#39;s creation nonce and every intervening creation.</p>
+<p>Use CREATE clones when the exact address is not needed before deployment and the factory can return or emit the address after creation.</p>
+<h2 id="create2-clones">CREATE2 clones<a class="heading-anchor" href="#create2-clones" aria-label="Link to CREATE2 clones">#</a></h2>
+<p><code>cloneDeterministic(...)</code> and <code>cloneDeterministicWithArgs(...)</code> use <code>CREATE2</code>. The address is independent of the factory&#39;s creation nonce and is calculated as:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>text</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="text"><code>address = last20(
+  keccak256(
+    0xff ++ factoryAddress ++ salt ++ keccak256(exactCreationCode)
+  )
+)</code></pre></div>
+<p>Four inputs are therefore important:</p>
+<ul><li>the factory address;</li><li>the 32-byte salt;</li><li>the implementation address embedded in the creation code;</li><li>the immutable argument bytes, when present.</li></ul>
+<p>Changing the factory, implementation, or immutable bytes changes the predicted address even when the same salt is reused. Ordinary initializer calldata sent after deployment is not part of the address calculation.</p>
+<p><code>predictClone(...)</code> and <code>predictCloneWithArgs(...)</code> use <code>address(this)</code> as the factory address. Call prediction on the same deployed factory that will perform the deployment. Running the same method on another factory produces another address.</p>
+<h2 id="complete-factory-with-atomic-initialization">Complete factory with atomic initialization<a class="heading-anchor" href="#complete-factory-with-atomic-initialization" aria-label="Link to Complete factory with atomic initialization">#</a></h2>
+<p>The safest common flow is to check the implementation, deploy the clone, and initialize it in the same transaction. This removes the interval in which a third party could initialize an unclaimed clone.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">interface</span> CloneAccount {
+  initialize(owner: <span class="tok-type">address</span>): <span class="tok-keyword">void</span>;
+  owner(): <span class="tok-type">View</span>&lt;<span class="tok-type">address</span>&gt;;
+}
+
+<span class="tok-keyword">class</span> AccountImplementation {
+  currentOwner: <span class="tok-type">address</span>;
+  initialized: <span class="tok-type">bool</span>;
+
+  initialize(owner: <span class="tok-type">address</span>): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-builtin">require</span>(!<span class="tok-keyword">this</span>.initialized, <span class="tok-string">&quot;already initialized&quot;</span>);
+    <span class="tok-builtin">require</span>(owner <span class="tok-operator">!=</span> <span class="tok-type">address</span>(<span class="tok-number">0n</span>), <span class="tok-string">&quot;zero owner&quot;</span>);
+    <span class="tok-keyword">this</span>.initialized = <span class="tok-keyword">true</span>;
+    <span class="tok-keyword">this</span>.currentOwner = owner;
+  }
+
+  <span class="tok-keyword">get</span> owner(): <span class="tok-type">External</span>&lt;<span class="tok-type">address</span>&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.currentOwner;
+  }
+}
+
+<span class="tok-keyword">class</span> AccountCloneFactory {
+  Created: <span class="tok-type">event</span>&lt;{
+    instance: <span class="tok-type">indexed</span>&lt;<span class="tok-type">address</span>&gt;;
+    implementation: <span class="tok-type">indexed</span>&lt;<span class="tok-type">address</span>&gt;;
+    owner: <span class="tok-type">address</span>;
+    salt: <span class="tok-type">bytes32</span>;
+  }&gt;;
+
+  create(
+    implementation: <span class="tok-type">address</span>,
+    owner: <span class="tok-type">address</span>,
+  ): <span class="tok-type">External</span>&lt;<span class="tok-type">address</span>&gt; {
+    <span class="tok-builtin">require</span>(<span class="tok-builtin">isContract</span>(implementation), <span class="tok-string">&quot;implementation has no code&quot;</span>);
+    <span class="tok-keyword">const</span> instance: <span class="tok-type">address</span> = <span class="tok-builtin">clone</span>(implementation);
+    CloneAccount(instance).initialize(owner);
+    emit(Created(instance, implementation, owner, <span class="tok-type">bytes32</span>(<span class="tok-number">0n</span>)));
+    <span class="tok-keyword">return</span> instance;
+  }
+
+  createDeterministic(
+    implementation: <span class="tok-type">address</span>,
+    owner: <span class="tok-type">address</span>,
+    userSalt: <span class="tok-type">bytes32</span>,
+  ): <span class="tok-type">External</span>&lt;<span class="tok-type">address</span>&gt; {
+    <span class="tok-builtin">require</span>(<span class="tok-builtin">isContract</span>(implementation), <span class="tok-string">&quot;implementation has no code&quot;</span>);
+    <span class="tok-keyword">const</span> salt: <span class="tok-type">bytes32</span> = <span class="tok-builtin">keccak256</span>(<span class="tok-builtin">abi</span>.encode(<span class="tok-builtin">msg</span>.sender, userSalt));
+    <span class="tok-keyword">const</span> instance: <span class="tok-type">address</span> = <span class="tok-builtin">cloneDeterministic</span>(implementation, salt);
+    CloneAccount(instance).initialize(owner);
+    emit(Created(instance, implementation, owner, salt));
+    <span class="tok-keyword">return</span> instance;
+  }
+
+  <span class="tok-keyword">get</span> predictDeterministic(
+    implementation: <span class="tok-type">address</span>,
+    caller: <span class="tok-type">address</span>,
+    userSalt: <span class="tok-type">bytes32</span>,
+  ): <span class="tok-type">External</span>&lt;<span class="tok-type">address</span>&gt; {
+    <span class="tok-keyword">const</span> salt: <span class="tok-type">bytes32</span> = <span class="tok-builtin">keccak256</span>(<span class="tok-builtin">abi</span>.encode(caller, userSalt));
+    <span class="tok-keyword">return</span> <span class="tok-builtin">predictClone</span>(implementation, salt);
+  }
+}</code></pre></div>
+<p>Compile this source as a multi-contract unit. Deploy <code>AccountImplementation</code> once, deploy <code>AccountCloneFactory</code>, then call either factory method with the implementation address. Call the returned clone through the implementation ABI, or through the <code>CloneAccount</code> interface from another JETH contract.</p>
+<p>The deterministic method namespaces the user salt with a caller address. This prevents unrelated callers from claiming the same caller-specific salt through that factory. The prediction method accepts the intended caller explicitly so off-chain software and other contracts can calculate the same address.</p>
+<p>The initializer has its own replay guard. Without it, anyone could call <code>initialize</code> again and replace the owner after deployment.</p>
+<h2 id="what-executes-through-a-clone">What executes through a clone<a class="heading-anchor" href="#what-executes-through-a-clone" aria-label="Link to What executes through a clone">#</a></h2>
+<p>The clone uses <code>DELEGATECALL</code>, so execution combines the clone&#39;s context with the implementation&#39;s code:</p>
+<div class="table-wrap"><table><thead><tr><th>Property during an implementation method</th><th>Value</th></tr></thead><tbody><tr><td><code>address(this)</code></td><td>clone address</td></tr><tr><td>storage reads and writes</td><td>clone storage</td></tr><tr><td>current balance</td><td>clone balance</td></tr><tr><td><code>msg.sender</code></td><td>caller of the clone</td></tr><tr><td><code>msg.value</code></td><td>value sent to the clone call</td></tr><tr><td>executing logic</td><td>implementation runtime code</td></tr></tbody></table></div>
+<p>Each clone has independent storage. Calling the implementation directly uses the implementation&#39;s own storage and is a different execution context.</p>
+<p>The implementation&#39;s constructor runs only when the implementation is deployed. It does not run for a clone. Storage field initializers and constructor storage writes affect the implementation account, not the clone. A clone starts with zeroed storage and must use a guarded initializer or derive read-only configuration from clone arguments.</p>
+<p>Implementation immutables are embedded in the implementation runtime and are therefore shared by every clone that delegates to that implementation. They are not per-clone values.</p>
+<h2 id="immutable-clone-arguments">Immutable clone arguments<a class="heading-anchor" href="#immutable-clone-arguments" aria-label="Link to Immutable clone arguments">#</a></h2>
+<p>Immutable clone arguments are bytes appended to the clone&#39;s runtime code. They are useful for per-clone configuration that never changes and does not need a storage slot.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> FeeAccountImplementation {
+  <span class="tok-keyword">get</span> config(): <span class="tok-type">External</span>&lt;[<span class="tok-type">address</span>, <span class="tok-type">u256</span>]&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-builtin">cloneArgs</span>().decode([<span class="tok-type">address</span>, <span class="tok-type">u256</span>]);
+  }
+}
+
+<span class="tok-keyword">class</span> FeeAccountCloneFactory {
+  create(
+    implementation: <span class="tok-type">address</span>,
+    owner: <span class="tok-type">address</span>,
+    feeBps: <span class="tok-type">u256</span>,
+  ): <span class="tok-type">External</span>&lt;<span class="tok-type">address</span>&gt; {
+    <span class="tok-builtin">require</span>(<span class="tok-builtin">isContract</span>(implementation), <span class="tok-string">&quot;implementation has no code&quot;</span>);
+    <span class="tok-builtin">require</span>(feeBps <span class="tok-operator">&lt;=</span> <span class="tok-number">10000n</span>, <span class="tok-string">&quot;fee too high&quot;</span>);
+    <span class="tok-keyword">return</span> <span class="tok-builtin">cloneWithArgs</span>(implementation, <span class="tok-builtin">abi</span>.encode(owner, feeBps));
+  }
+
+  createDeterministic(
+    implementation: <span class="tok-type">address</span>,
+    salt: <span class="tok-type">bytes32</span>,
+    owner: <span class="tok-type">address</span>,
+    feeBps: <span class="tok-type">u256</span>,
+  ): <span class="tok-type">External</span>&lt;<span class="tok-type">address</span>&gt; {
+    <span class="tok-builtin">require</span>(<span class="tok-builtin">isContract</span>(implementation), <span class="tok-string">&quot;implementation has no code&quot;</span>);
+    <span class="tok-builtin">require</span>(feeBps <span class="tok-operator">&lt;=</span> <span class="tok-number">10000n</span>, <span class="tok-string">&quot;fee too high&quot;</span>);
+    <span class="tok-keyword">const</span> args: <span class="tok-type">bytes</span> = <span class="tok-builtin">abi</span>.encode(owner, feeBps);
+    <span class="tok-keyword">return</span> <span class="tok-builtin">cloneDeterministicWithArgs</span>(implementation, salt, args);
+  }
+
+  <span class="tok-keyword">get</span> predictDeterministic(
+    implementation: <span class="tok-type">address</span>,
+    salt: <span class="tok-type">bytes32</span>,
+    owner: <span class="tok-type">address</span>,
+    feeBps: <span class="tok-type">u256</span>,
+  ): <span class="tok-type">External</span>&lt;<span class="tok-type">address</span>&gt; {
+    <span class="tok-keyword">const</span> args: <span class="tok-type">bytes</span> = <span class="tok-builtin">abi</span>.encode(owner, feeBps);
+    <span class="tok-keyword">return</span> <span class="tok-builtin">predictCloneWithArgs</span>(implementation, salt, args);
+  }
+}</code></pre></div>
+<p>The runtime layout is:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>text</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="text"><code>[45-byte EIP-1167 runtime][exact argument bytes]</code></pre></div>
+<p>The creation code for an argument-bearing clone returns both regions. The exact argument bytes contribute to the CREATE2 init-code hash, so prediction and deployment must use byte-for-byte identical encoding and argument order.</p>
+<p><code>cloneArgs()</code> copies the executing contract&#39;s code after byte offset <code>0x2d</code> and returns that tail as <code>bytes</code>. It does not authenticate, validate, or assign a schema to the bytes. Decode them with the same schema used by the factory.</p>
+<aside class="callout callout-warning"><div class="callout-label">WARNING</div><p><code>cloneArgs()</code> is only meaningful while the implementation is executing through a compatible clone. Calling the same getter directly on the implementation can return unrelated code bytes or fail because the implementation itself does not have the clone runtime layout.</p></aside>
+<p>Clone arguments are public contract code, not secret data. They are immutable because deployed runtime code is immutable under the normal EVM model, not because JETH stores them in immutable state variables.</p>
+<p>Argument length also increases deployed code size. Excessive argument data can cross the target EVM&#39;s contract-code limit and make creation fail.</p>
+<h2 id="implementation-validation">Implementation validation<a class="heading-anchor" href="#implementation-validation" aria-label="Link to Implementation validation">#</a></h2>
+<p>The clone deployment builtins do not require the implementation address to have code. This matches the minimal clone construction model: the address is embedded in the runtime whether or not it currently contains a contract.</p>
+<p>For ordinary factories, validate before deployment:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-builtin">require</span>(<span class="tok-builtin">isContract</span>(implementation), <span class="tok-string">&quot;implementation has no code&quot;</span>);</code></pre></div>
+<p><code>isContract(...)</code> is an instantaneous code-size check. It is false for an EOA, an unused address, and a contract while its constructor is still running. It is not proof that the code is trusted, implements the expected ABI, preserves a storage layout, or will exist forever. Pin or govern allowed implementation addresses according to the application&#39;s threat model.</p>
+<h2 id="deployment-failure-and-collisions">Deployment failure and collisions<a class="heading-anchor" href="#deployment-failure-and-collisions" aria-label="Link to Deployment failure and collisions">#</a></h2>
+<p>The clone helpers revert with empty revert data when the underlying CREATE or CREATE2 operation returns the zero address. Common causes include:</p>
+<ul><li>the deterministic address already has code or a creation nonce;</li><li>the creation code exceeds an EVM resource or code-size limit;</li><li>the factory lacks enough gas for deployment;</li><li>another protocol-level creation rule rejects the deployment.</li></ul>
+<p>Calling <code>cloneDeterministic</code> twice from the same factory with the same implementation and salt attempts to use the same address, so the second call reverts. For the argument-bearing form, the argument bytes are also part of the identity.</p>
+<p>Prediction does not reserve an address. If an unrestricted public factory uses caller-provided salts, another transaction can call that factory first. Bind the salt to the intended caller or another unique namespace, enforce authorization, and initialize in the same transaction as deployment.</p>
+<p>Do not treat a predicted address as a deployed contract until code exists there. Funds sent to a counterfactual address before deployment can become inaccessible if the intended creation can no longer succeed.</p>
+<h2 id="create-versus-create2-decision">CREATE versus CREATE2 decision<a class="heading-anchor" href="#create-versus-create2-decision" aria-label="Link to CREATE versus CREATE2 decision">#</a></h2>
+<div class="table-wrap"><table><thead><tr><th>Requirement</th><th>Use</th></tr></thead><tbody><tr><td>cheapest simple sequential factory deployment</td><td><code>clone(...)</code></td></tr><tr><td>address must be known before deployment</td><td><code>cloneDeterministic(...)</code></td></tr><tr><td>per-clone read-only configuration in code</td><td>a <code>WithArgs</code> variant</td></tr><tr><td>mutable per-clone state</td><td>guarded initializer and clone storage</td></tr><tr><td>arbitrary constructor logic or arbitrary init code</td><td>not currently supported from JETH contract source</td></tr></tbody></table></div>
+<p>CREATE2 does not make a clone upgradeable. The implementation address is fixed inside the EIP-1167 runtime. To change logic, deploy a different clone or choose an explicitly upgradeable proxy pattern.</p>
+<h2 id="jeth-and-solidity-comparison">JETH and Solidity comparison<a class="heading-anchor" href="#jeth-and-solidity-comparison" aria-label="Link to JETH and Solidity comparison">#</a></h2>
+<div class="table-wrap"><table><thead><tr><th>Task</th><th>JETH</th><th>Solidity</th></tr></thead><tbody><tr><td>deploy a plain EIP-1167 clone</td><td><code>clone(implementation)</code></td><td>a clone library or assembly using CREATE</td></tr><tr><td>deploy a deterministic clone</td><td><code>cloneDeterministic(implementation, salt)</code></td><td>a clone library or assembly using CREATE2</td></tr><tr><td>predict a deterministic clone</td><td><code>predictClone(...)</code></td><td>library helper or explicit formula</td></tr><tr><td>attach immutable clone bytes</td><td><code>cloneWithArgs(...)</code> variants</td><td>compatible clone library or custom creation code</td></tr><tr><td>read immutable clone bytes</td><td><code>cloneArgs()</code></td><td>code-copy helper or compatible library</td></tr><tr><td>deploy an arbitrary contract type</td><td>not supported inside JETH source</td><td><code>new C(args)</code></td></tr><tr><td>deploy arbitrary init code</td><td>not supported inside JETH source</td><td>inline assembly CREATE/CREATE2</td></tr><tr><td>send value during clone creation</td><td>not supported by current clone builtins</td><td>possible through selected library overloads or assembly</td></tr></tbody></table></div>
+<p>The following Solidity-shaped operation is a clean JETH compile-time rejection:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> Factory {
+  create(): <span class="tok-type">External</span>&lt;<span class="tok-type">address</span>&gt; {
+    <span class="tok-comment">// JETH023: object/contract construction is not supported.</span>
+    <span class="tok-keyword">const</span> instance = <span class="tok-keyword">new</span> Child();
+    <span class="tok-keyword">return</span> <span class="tok-type">address</span>(instance);
+  }
+}
+
+<span class="tok-keyword">class</span> Child {}</code></pre></div>
+<p>This restriction is a deliberate language boundary, not a statement that the EVM lacks general contract creation. JETH currently exposes the audited clone construction path and keeps arbitrary deployment gated.</p>
+<h2 id="production-checklist">Production checklist<a class="heading-anchor" href="#production-checklist" aria-label="Link to Production checklist">#</a></h2>
+<ul><li>Deploy and verify the intended implementation first.</li><li>Reject a code-less implementation and enforce any allowlist or version policy.</li><li>Keep implementation storage layout compatible with the clone&#39;s expected state.</li><li>Never rely on implementation constructor writes as clone initialization.</li><li>Guard every initializer against replay.</li><li>Deploy and initialize atomically.</li><li>Namespace or authorize user-provided salts.</li><li>Use the same factory, implementation, salt, and argument bytes for prediction.</li><li>Treat immutable arguments as public and validate them before deployment.</li><li>Remember that clone creation forwards zero value.</li><li>Test collision, malformed initialization, direct implementation calls, and implementation failure paths.</li><li>Record the clone, implementation, factory, salt, argument encoding, and source version in deployment artifacts.</li></ul>
+<p>For upgradeable routing, beacon fleets, and diamonds, continue with <a href="../proxies-and-diamonds/index.html">Proxies, beacons, and diamonds</a>.</p><div class="article-footer"><span>JETH language documentation</span><a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></div><nav class="pagination" aria-label="Documentation pages"><a class="pagination-link previous" href="../../internals/artifacts/index.html"><span>Previous</span><strong>Contracts and artifacts</strong></a><a class="pagination-link next" href="../proxies-and-diamonds/index.html"><span>Next</span><strong>Proxies, beacons, and diamonds</strong></a></nav></article>
+      <nav class="page-toc" aria-label="On this page"><div class="toc-title">On this page</div><a class="toc-link depth-2" href="#supported-builtins">Supported builtins</a><a class="toc-link depth-2" href="#creation-code-and-runtime-code">Creation code and runtime code</a><a class="toc-link depth-2" href="#create-clones">CREATE clones</a><a class="toc-link depth-2" href="#create2-clones">CREATE2 clones</a><a class="toc-link depth-2" href="#complete-factory-with-atomic-initialization">Complete factory with atomic initialization</a><a class="toc-link depth-2" href="#what-executes-through-a-clone">What executes through a clone</a><a class="toc-link depth-2" href="#immutable-clone-arguments">Immutable clone arguments</a><a class="toc-link depth-2" href="#implementation-validation">Implementation validation</a><a class="toc-link depth-2" href="#deployment-failure-and-collisions">Deployment failure and collisions</a><a class="toc-link depth-2" href="#create-versus-create2-decision">CREATE versus CREATE2 decision</a><a class="toc-link depth-2" href="#jeth-and-solidity-comparison">JETH and Solidity comparison</a><a class="toc-link depth-2" href="#production-checklist">Production checklist</a></nav>
+    </main>
+  </div>
+  <div class="search-modal" hidden><button class="search-backdrop" type="button" aria-label="Close search"></button><div class="search-panel" role="dialog" aria-modal="true" aria-label="Search documentation"><div class="search-box"><span>⌕</span><input class="search-input" type="search" placeholder="Search JETH guides..." autocomplete="off"><button class="search-close" type="button">Esc</button></div><div class="search-results"><div class="search-empty">Start typing to search the book.</div></div></div></div>
+  <script src="../../assets/search-index.js"></script>
+  <script src="../../assets/book.js"></script>
+</body>
+</html>

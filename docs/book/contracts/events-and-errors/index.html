@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Events, errors, and panics in the JETH language documentation.">
+  <meta name="theme-color" content="#11131a">
+  <meta property="og:image" content="../../assets/a16k-avatar-logo.png">
+  <title>Events, errors, and panics | JETH</title>
+  <link rel="icon" href="../../assets/jeth-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../../assets/book.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../../index.html" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span></a>
+    <nav class="top-nav" aria-label="Primary"><a class="is-active" href="../../index.html">Guides</a><a href="../../internals/compiler-and-tooling/index.html">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
+    <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
+  </header>
+  <div class="pre-release"><span>Pre-release</span> JETH is under active compiler and security review.</div>
+  <div class="book-shell">
+    <aside class="sidebar"><div class="sidebar-title">Guides</div><section class="sidebar-group"><h2>Guides</h2><a class="sidebar-link" href="../../index.html">JETH Documentation</a><a class="sidebar-link" href="../../guides/getting-started/index.html">Getting started</a><a class="sidebar-link" href="../../guides/language-tour/index.html">Language tour</a><a class="sidebar-link" href="../../guides/examples/index.html">Examples</a></section><section class="sidebar-group"><h2>Language</h2><a class="sidebar-link" href="../../language/source-units/index.html">Source units and imports</a><a class="sidebar-link" href="../../language/contract-structure/index.html">Contract structure</a><a class="sidebar-link" href="../../language/types/index.html">Types</a><a class="sidebar-link" href="../../language/value-types/index.html">Value types</a><a class="sidebar-link" href="../../language/reference-types/index.html">Reference and composite types</a><a class="sidebar-link" href="../../language/data-locations/index.html">Data locations and copying</a><a class="sidebar-link" href="../../language/expressions/index.html">Expressions and operators</a><a class="sidebar-link" href="../../language/control-flow/index.html">Statements and control flow</a><a class="sidebar-link" href="../../language/functions/index.html">Functions</a><a class="sidebar-link" href="../../language/globals-and-builtins/index.html">Units, globals, and builtins</a><a class="sidebar-link" href="../../language/jeth-features/index.html">JETH-specific features</a></section><section class="sidebar-group"><h2>Contracts</h2><a class="sidebar-link" href="../inheritance/index.html">Constructors and inheritance</a><a class="sidebar-link" href="../modifiers/index.html">Function modifiers</a><a class="sidebar-link" href="../interfaces-and-calls/index.html">Interfaces and external calls</a><a class="sidebar-link" href="../libraries/index.html">Libraries and using</a><a class="sidebar-link is-active" href="./index.html" aria-current="page">Events, errors, and panics</a></section><section class="sidebar-group"><h2>Internals</h2><a class="sidebar-link" href="../../internals/abi/index.html">Contract ABI specification</a><a class="sidebar-link" href="../../internals/storage-layout/index.html">Storage layout</a><a class="sidebar-link" href="../../internals/compiler-and-tooling/index.html">Compiler, CLI, and tooling</a><a class="sidebar-link" href="../../internals/artifacts/index.html">Contracts and artifacts</a></section><section class="sidebar-group"><h2>Advanced</h2><a class="sidebar-link" href="../../advanced/contract-creation-and-clones/index.html">Contract creation and clones</a><a class="sidebar-link" href="../../advanced/proxies-and-diamonds/index.html">Proxies, beacons, and diamonds</a></section><section class="sidebar-group"><h2>Security</h2><a class="sidebar-link" href="../../security/considerations/index.html">Security considerations</a><a class="sidebar-link" href="../../security/compiler-correctness/index.html">Compiler correctness model</a></section><section class="sidebar-group"><h2>Reference</h2><a class="sidebar-link" href="../../reference/cheatsheet/index.html">Syntax cheatsheet</a><a class="sidebar-link" href="../../reference/differences/index.html">Differences from TypeScript and Solidity</a><a class="sidebar-link" href="../../reference/diagnostics/index.html">Compiler diagnostics</a><a class="sidebar-link" href="../../reference/known-limitations/index.html">Supported features and limitations</a><a class="sidebar-link" href="../../reference/feature-matrix/index.html">Complete feature matrix</a></section><section class="sidebar-group"><h2>Project</h2><a class="sidebar-link" href="../../project/roadmap/index.html">Product roadmap</a><a class="sidebar-link" href="../../project/overview/index.html">Repository overview</a></section><a class="built-by" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></aside>
+    <main class="content-shell">
+      <article class="article"><div class="article-kicker">Contracts</div>
+<h1 id="events-errors-and-panics">Events, errors, and panics</h1>
+<p>Events write EVM logs. Errors and panics revert execution and roll back state.</p>
+<h2 id="event-declarations">Event declarations<a class="heading-anchor" href="#event-declarations" aria-label="Link to Event declarations">#</a></h2>
+<p>Declare an event at file scope:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">type</span> Transfer = <span class="tok-type">event</span>&lt;{
+  <span class="tok-keyword">from</span>: <span class="tok-type">indexed</span>&lt;<span class="tok-type">address</span>&gt;;
+  to: <span class="tok-type">indexed</span>&lt;<span class="tok-type">address</span>&gt;;
+  value: <span class="tok-type">u256</span>;
+}&gt;;</code></pre></div>
+<p>Or as a contract member:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> Token {
+  Transfer: <span class="tok-type">event</span>&lt;{
+    <span class="tok-keyword">from</span>: <span class="tok-type">indexed</span>&lt;<span class="tok-type">address</span>&gt;;
+    to: <span class="tok-type">indexed</span>&lt;<span class="tok-type">address</span>&gt;;
+    value: <span class="tok-type">u256</span>;
+  }&gt;;
+}</code></pre></div>
+<h2 id="emitting-events">Emitting events<a class="heading-anchor" href="#emitting-events" aria-label="Link to Emitting events">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code>emit(Transfer(<span class="tok-builtin">msg</span>.sender, recipient, amount));</code></pre></div>
+<p>A member event can also be emitted through <code>this</code> with named arguments:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code>emit(<span class="tok-keyword">this</span>.Transfer({
+  <span class="tok-keyword">from</span>: <span class="tok-builtin">msg</span>.sender,
+  to: recipient,
+  value: amount,
+}));</code></pre></div>
+<p>Named fields must match the declaration exactly. They are reordered to the declared ABI order before encoding.</p>
+<p>For a non-anonymous event, topic 0 is the keccak hash of the canonical event signature. Indexed value parameters occupy topics. Non-indexed parameters are ABI-encoded in the log data.</p>
+<p>Indexed dynamic bytes/string values and supported indexed aggregates are hashed according to their Solidity-compatible indexed encoding instead of being stored directly in a topic.</p>
+<p>Emitting a log is a state-changing effect and is not allowed in a pure/view function.</p>
+<h2 id="anonymous-events">Anonymous events<a class="heading-anchor" href="#anonymous-events" aria-label="Link to Anonymous events">#</a></h2>
+<p>Use the supported <code>@anonymous</code> declaration form to omit the signature topic. Anonymous events can use the EVM topic capacity for indexed arguments, but are harder to distinguish by event signature.</p>
+<h2 id="error-declarations">Error declarations<a class="heading-anchor" href="#error-declarations" aria-label="Link to Error declarations">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">type</span> InsufficientBalance = <span class="tok-type">error</span>&lt;{
+  available: <span class="tok-type">u256</span>;
+  required: <span class="tok-type">u256</span>;
+}&gt;;</code></pre></div>
+<p>Revert with the error:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">if</span> (available &lt; amount) {
+  <span class="tok-builtin">revert</span>(InsufficientBalance(available, amount));
+}</code></pre></div>
+<p>A member error supports named construction through <code>this</code>:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">if</span> (available &lt; amount) {
+  <span class="tok-builtin">revert</span>(<span class="tok-keyword">this</span>.InsufficientBalance({
+    available: available,
+    required: amount,
+  }));
+}</code></pre></div>
+<p><code>throw</code> is accepted only as custom-error sugar:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">throw</span> <span class="tok-keyword">this</span>.InsufficientBalance({
+  available: available,
+  required: amount,
+});</code></pre></div>
+<p>It produces the same revert payload as the corresponding <code>revert(...)</code>. JETH does not support JavaScript <code>throw</code> values, <code>new Error(...)</code>, or arbitrary exceptions.</p>
+<p>The payload begins with the first four bytes of the canonical error signature hash, followed by ABI-encoded arguments.</p>
+<h2 id="require"><code>require</code><a class="heading-anchor" href="#require" aria-label="Link to `require`">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-builtin">require</span>(condition);
+<span class="tok-builtin">require</span>(condition, <span class="tok-string">&quot;message&quot;</span>);
+<span class="tok-builtin">require</span>(condition, Unauthorized(<span class="tok-builtin">msg</span>.sender));</code></pre></div>
+<p>No reason produces empty revert data. A string reason uses <code>Error(string)</code>. Custom error arguments use the error selector and ABI encoding.</p>
+<p>Custom-error arguments follow the compiler&#39;s Solidity parity evaluation rules. Do not put state-changing or reverting expressions in error arguments.</p>
+<h2 id="revert"><code>revert</code><a class="heading-anchor" href="#revert" aria-label="Link to `revert`">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-builtin">revert</span>();
+<span class="tok-builtin">revert</span>(<span class="tok-string">&quot;disabled&quot;</span>);
+<span class="tok-builtin">revert</span>(Unauthorized(<span class="tok-builtin">msg</span>.sender));
+<span class="tok-builtin">revertWith</span>(rawData);</code></pre></div>
+<p><code>revertWith</code> is useful for exact bubbling of returndata from another contract.</p>
+<h2 id="assert-and-panic-codes"><code>assert</code> and panic codes<a class="heading-anchor" href="#assert-and-panic-codes" aria-label="Link to `assert` and panic codes">#</a></h2>
+<p><code>assert</code> represents an invariant. A false assertion reverts with <code>Panic(uint256)</code> code <code>0x01</code>.</p>
+<p>Common runtime panic codes include:</p>
+<div class="table-wrap"><table><thead><tr><th>Code</th><th>Meaning</th></tr></thead><tbody><tr><td><code>0x01</code></td><td>Failed assertion</td></tr><tr><td><code>0x11</code></td><td>Arithmetic overflow or underflow</td></tr><tr><td><code>0x12</code></td><td>Division or modulo by zero</td></tr><tr><td><code>0x21</code></td><td>Invalid enum conversion</td></tr><tr><td><code>0x31</code></td><td>Pop from an empty array</td></tr><tr><td><code>0x32</code></td><td>Array or bytes index out of bounds</td></tr><tr><td><code>0x41</code></td><td>Excessive or overflowing memory allocation</td></tr></tbody></table></div>
+<p>Use custom errors for expected application failures and assertions for internal conditions that should be unreachable.</p>
+<h2 id="abi-entries">ABI entries<a class="heading-anchor" href="#abi-entries" aria-label="Link to ABI entries">#</a></h2>
+<p>Events and custom errors appear in generated ABI JSON with their parameters and indexed flags. Consumers should use the compiler artifact rather than reconstruct the ABI from source text.</p><div class="article-footer"><span>JETH language documentation</span><a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></div><nav class="pagination" aria-label="Documentation pages"><a class="pagination-link previous" href="../libraries/index.html"><span>Previous</span><strong>Libraries and using</strong></a><a class="pagination-link next" href="../../internals/abi/index.html"><span>Next</span><strong>Contract ABI specification</strong></a></nav></article>
+      <nav class="page-toc" aria-label="On this page"><div class="toc-title">On this page</div><a class="toc-link depth-2" href="#event-declarations">Event declarations</a><a class="toc-link depth-2" href="#emitting-events">Emitting events</a><a class="toc-link depth-2" href="#anonymous-events">Anonymous events</a><a class="toc-link depth-2" href="#error-declarations">Error declarations</a><a class="toc-link depth-2" href="#require">require</a><a class="toc-link depth-2" href="#revert">revert</a><a class="toc-link depth-2" href="#assert-and-panic-codes">assert and panic codes</a><a class="toc-link depth-2" href="#abi-entries">ABI entries</a></nav>
+    </main>
+  </div>
+  <div class="search-modal" hidden><button class="search-backdrop" type="button" aria-label="Close search"></button><div class="search-panel" role="dialog" aria-modal="true" aria-label="Search documentation"><div class="search-box"><span>⌕</span><input class="search-input" type="search" placeholder="Search JETH guides..." autocomplete="off"><button class="search-close" type="button">Esc</button></div><div class="search-results"><div class="search-empty">Start typing to search the book.</div></div></div></div>
+  <script src="../../assets/search-index.js"></script>
+  <script src="../../assets/book.js"></script>
+</body>
+</html>

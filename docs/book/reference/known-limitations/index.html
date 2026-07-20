@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Supported features and limitations in the JETH language documentation.">
+  <meta name="theme-color" content="#11131a">
+  <meta property="og:image" content="../../assets/a16k-avatar-logo.png">
+  <title>Supported features and limitations | JETH</title>
+  <link rel="icon" href="../../assets/jeth-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../../assets/book.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../../index.html" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span></a>
+    <nav class="top-nav" aria-label="Primary"><a class="is-active" href="../../index.html">Guides</a><a href="../../internals/compiler-and-tooling/index.html">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
+    <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
+  </header>
+  <div class="pre-release"><span>Pre-release</span> JETH is under active compiler and security review.</div>
+  <div class="book-shell">
+    <aside class="sidebar"><div class="sidebar-title">Guides</div><section class="sidebar-group"><h2>Guides</h2><a class="sidebar-link" href="../../index.html">JETH Documentation</a><a class="sidebar-link" href="../../guides/getting-started/index.html">Getting started</a><a class="sidebar-link" href="../../guides/language-tour/index.html">Language tour</a><a class="sidebar-link" href="../../guides/examples/index.html">Examples</a></section><section class="sidebar-group"><h2>Language</h2><a class="sidebar-link" href="../../language/source-units/index.html">Source units and imports</a><a class="sidebar-link" href="../../language/contract-structure/index.html">Contract structure</a><a class="sidebar-link" href="../../language/types/index.html">Types</a><a class="sidebar-link" href="../../language/value-types/index.html">Value types</a><a class="sidebar-link" href="../../language/reference-types/index.html">Reference and composite types</a><a class="sidebar-link" href="../../language/data-locations/index.html">Data locations and copying</a><a class="sidebar-link" href="../../language/expressions/index.html">Expressions and operators</a><a class="sidebar-link" href="../../language/control-flow/index.html">Statements and control flow</a><a class="sidebar-link" href="../../language/functions/index.html">Functions</a><a class="sidebar-link" href="../../language/globals-and-builtins/index.html">Units, globals, and builtins</a><a class="sidebar-link" href="../../language/jeth-features/index.html">JETH-specific features</a></section><section class="sidebar-group"><h2>Contracts</h2><a class="sidebar-link" href="../../contracts/inheritance/index.html">Constructors and inheritance</a><a class="sidebar-link" href="../../contracts/modifiers/index.html">Function modifiers</a><a class="sidebar-link" href="../../contracts/interfaces-and-calls/index.html">Interfaces and external calls</a><a class="sidebar-link" href="../../contracts/libraries/index.html">Libraries and using</a><a class="sidebar-link" href="../../contracts/events-and-errors/index.html">Events, errors, and panics</a></section><section class="sidebar-group"><h2>Internals</h2><a class="sidebar-link" href="../../internals/abi/index.html">Contract ABI specification</a><a class="sidebar-link" href="../../internals/storage-layout/index.html">Storage layout</a><a class="sidebar-link" href="../../internals/compiler-and-tooling/index.html">Compiler, CLI, and tooling</a><a class="sidebar-link" href="../../internals/artifacts/index.html">Contracts and artifacts</a></section><section class="sidebar-group"><h2>Advanced</h2><a class="sidebar-link" href="../../advanced/contract-creation-and-clones/index.html">Contract creation and clones</a><a class="sidebar-link" href="../../advanced/proxies-and-diamonds/index.html">Proxies, beacons, and diamonds</a></section><section class="sidebar-group"><h2>Security</h2><a class="sidebar-link" href="../../security/considerations/index.html">Security considerations</a><a class="sidebar-link" href="../../security/compiler-correctness/index.html">Compiler correctness model</a></section><section class="sidebar-group"><h2>Reference</h2><a class="sidebar-link" href="../cheatsheet/index.html">Syntax cheatsheet</a><a class="sidebar-link" href="../differences/index.html">Differences from TypeScript and Solidity</a><a class="sidebar-link" href="../diagnostics/index.html">Compiler diagnostics</a><a class="sidebar-link is-active" href="./index.html" aria-current="page">Supported features and limitations</a><a class="sidebar-link" href="../feature-matrix/index.html">Complete feature matrix</a></section><section class="sidebar-group"><h2>Project</h2><a class="sidebar-link" href="../../project/roadmap/index.html">Product roadmap</a><a class="sidebar-link" href="../../project/overview/index.html">Repository overview</a></section><a class="built-by" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></aside>
+    <main class="content-shell">
+      <article class="article"><div class="article-kicker">Reference</div>
+<h1 id="supported-features-and-known-limitations">Supported features and known limitations</h1>
+<p>JETH&#39;s language surface is intentionally evidence-driven. A source shape is accepted only when its analyzer and backend path are supported.</p>
+<aside class="callout callout-warning"><div class="callout-label">WARNING</div><p>A type being supported in one location or operation does not imply every copy, call, return, assignment, hash, or ABI path for that type is supported.</p></aside>
+<h2 id="authoritative-matrix">Authoritative matrix<a class="heading-anchor" href="#authoritative-matrix" aria-label="Link to Authoritative matrix">#</a></h2>
+<p>The exhaustive current list is maintained in <a href="../feature-matrix/index.html">SUPPORTED.md</a>. It includes supported shapes, deliberate diagnostics, safer malformed-calldata deviations, and historical parity notes.</p>
+<h2 id="important-current-gates">Important current gates<a class="heading-anchor" href="#important-current-gates" aria-label="Link to Important current gates">#</a></h2>
+<p>Representative clean rejections include:</p>
+<ul><li>selected element access into a dynamic-array field of a calldata struct;</li><li>selected aggregate parameters/returns through internal calls;</li><li>some memory structs containing dynamic-array fields;</li><li>memory/calldata struct-to-storage copies containing a dynamic array with a fixed-inner value-array level;</li><li>selected whole fixed-array element assignments;</li><li>selected static calldata aggregates inside multi-value returns;</li><li>ternaries over dynamic storage aggregates;</li><li>selected nested packed dynamic-array paths;</li><li>remaining pointer-headed memory/decode shapes;</li><li>arbitrary <code>new Contract(...)</code> and raw init-code CREATE/CREATE2 deployment beyond the structured EIP-1167 clone builtins;</li><li>artifact/CLI presentation gaps such as tuple component JSON and source maps.</li></ul>
+<p>The exact diagnostic and compiler revision matter. This summary should not be used as an admission predicate.</p>
+<h2 id="why-support-is-path-specific">Why support is path-specific<a class="heading-anchor" href="#why-support-is-path-specific" aria-label="Link to Why support is path-specific">#</a></h2>
+<p>The same source type can have different runtime representations in storage, memory, and calldata. Returning a value, assigning it, hashing it, passing it to an internal function, and storing it can require different transcodes and aliasing behavior.</p>
+<p>Therefore:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>text</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="text"><code>type supported in one operation
+does not imply
+every operation over that type is supported</code></pre></div>
+<h2 id="workarounds">Workarounds<a class="heading-anchor" href="#workarounds" aria-label="Link to Workarounds">#</a></h2>
+<p>Safe workarounds are explicit and local:</p>
+<ul><li>read or write supported leaf fields instead of an unsupported whole-value copy;</li><li>move shared logic to a supported internal helper signature;</li><li>select a dynamic storage branch before performing the aggregate operation;</li><li>use a storage source where storage-to-storage copy is supported;</li><li>encode/decode through a documented supported ABI path;</li><li>split a large shape into smaller supported fields.</li></ul>
+<p>Never use a workaround that depends on guessed memory offsets or storage slots.</p>
+<h3 id="unsupported-whole-value-copy-and-safe-redesign">Unsupported whole-value copy and safe redesign<a class="heading-anchor" href="#unsupported-whole-value-copy-and-safe-redesign" aria-label="Link to Unsupported whole-value copy and safe redesign">#</a></h3>
+<p>This shape is intentionally rejected because it contains a dynamic array whose element is a fixed-size value array:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-comment">// Expected JETH470-style compile error.</span>
+<span class="tok-keyword">type</span> NestedPairs = {
+  tag: <span class="tok-type">u256</span>;
+  pairs: <span class="tok-type">Arr</span>&lt;<span class="tok-type">u256</span>, <span class="tok-number">2</span>&gt;[];
+};
+
+<span class="tok-keyword">class</span> RejectedPairs {
+  value: NestedPairs;
+
+  setValue(input: NestedPairs): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-keyword">this</span>.value = input;
+  }
+}</code></pre></div>
+<p>When changing the application schema is acceptable, flatten the pair data into a supported dynamic value array and preserve the pair invariant explicitly:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> FlatPairs {
+  tag: <span class="tok-type">u256</span>;
+  values: <span class="tok-type">u256</span>[];
+
+  replace(newTag: <span class="tok-type">u256</span>, flatValues: <span class="tok-type">u256</span>[]): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-builtin">require</span>(flatValues.length % <span class="tok-number">2n</span> <span class="tok-operator">==</span> <span class="tok-number">0n</span>, <span class="tok-string">&quot;incomplete pair&quot;</span>);
+    <span class="tok-keyword">this</span>.tag = newTag;
+    <span class="tok-keyword">this</span>.values = flatValues;
+  }
+
+  <span class="tok-keyword">get</span> pairCount(): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.values.length / <span class="tok-number">2n</span>;
+  }
+
+  <span class="tok-keyword">get</span> pairValue(pairIndex: <span class="tok-type">u256</span>, side: <span class="tok-type">u256</span>): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+    <span class="tok-builtin">require</span>(side &lt; <span class="tok-number">2n</span>, <span class="tok-string">&quot;invalid side&quot;</span>);
+    <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.values[pairIndex * <span class="tok-number">2n</span> + side];
+  }
+}</code></pre></div>
+<p>This is a schema change, not a representation trick. Existing protocols should not silently substitute it for an established ABI.</p>
+<h2 id="permanently-excluded-features">Permanently excluded features<a class="heading-anchor" href="#permanently-excluded-features" aria-label="Link to Permanently excluded features">#</a></h2>
+<p>JavaScript runtime features without a clear EVM meaning remain rejected. This includes floating-point <code>number</code>, <code>any</code>, async/await, generators, closures, regular expressions, <code>eval</code>, implicit coercion, and prototype behavior.</p>
+<h2 id="versioning">Versioning<a class="heading-anchor" href="#versioning" aria-label="Link to Versioning">#</a></h2>
+<p>The accepted set can grow as ORs are safely lifted. It must not silently shrink or change semantics in a stable release without a documented compatibility decision.</p><div class="article-footer"><span>JETH language documentation</span><a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></div><nav class="pagination" aria-label="Documentation pages"><a class="pagination-link previous" href="../diagnostics/index.html"><span>Previous</span><strong>Compiler diagnostics</strong></a><a class="pagination-link next" href="../feature-matrix/index.html"><span>Next</span><strong>Complete feature matrix</strong></a></nav></article>
+      <nav class="page-toc" aria-label="On this page"><div class="toc-title">On this page</div><a class="toc-link depth-2" href="#authoritative-matrix">Authoritative matrix</a><a class="toc-link depth-2" href="#important-current-gates">Important current gates</a><a class="toc-link depth-2" href="#why-support-is-path-specific">Why support is path-specific</a><a class="toc-link depth-2" href="#workarounds">Workarounds</a><a class="toc-link depth-3" href="#unsupported-whole-value-copy-and-safe-redesign">Unsupported whole-value copy and safe redesign</a><a class="toc-link depth-2" href="#permanently-excluded-features">Permanently excluded features</a><a class="toc-link depth-2" href="#versioning">Versioning</a></nav>
+    </main>
+  </div>
+  <div class="search-modal" hidden><button class="search-backdrop" type="button" aria-label="Close search"></button><div class="search-panel" role="dialog" aria-modal="true" aria-label="Search documentation"><div class="search-box"><span>⌕</span><input class="search-input" type="search" placeholder="Search JETH guides..." autocomplete="off"><button class="search-close" type="button">Esc</button></div><div class="search-results"><div class="search-empty">Start typing to search the book.</div></div></div></div>
+  <script src="../../assets/search-index.js"></script>
+  <script src="../../assets/book.js"></script>
+</body>
+</html>

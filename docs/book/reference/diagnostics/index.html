@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Compiler diagnostics in the JETH language documentation.">
+  <meta name="theme-color" content="#11131a">
+  <meta property="og:image" content="../../assets/a16k-avatar-logo.png">
+  <title>Compiler diagnostics | JETH</title>
+  <link rel="icon" href="../../assets/jeth-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../../assets/book.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../../index.html" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span></a>
+    <nav class="top-nav" aria-label="Primary"><a class="is-active" href="../../index.html">Guides</a><a href="../../internals/compiler-and-tooling/index.html">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
+    <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
+  </header>
+  <div class="pre-release"><span>Pre-release</span> JETH is under active compiler and security review.</div>
+  <div class="book-shell">
+    <aside class="sidebar"><div class="sidebar-title">Guides</div><section class="sidebar-group"><h2>Guides</h2><a class="sidebar-link" href="../../index.html">JETH Documentation</a><a class="sidebar-link" href="../../guides/getting-started/index.html">Getting started</a><a class="sidebar-link" href="../../guides/language-tour/index.html">Language tour</a><a class="sidebar-link" href="../../guides/examples/index.html">Examples</a></section><section class="sidebar-group"><h2>Language</h2><a class="sidebar-link" href="../../language/source-units/index.html">Source units and imports</a><a class="sidebar-link" href="../../language/contract-structure/index.html">Contract structure</a><a class="sidebar-link" href="../../language/types/index.html">Types</a><a class="sidebar-link" href="../../language/value-types/index.html">Value types</a><a class="sidebar-link" href="../../language/reference-types/index.html">Reference and composite types</a><a class="sidebar-link" href="../../language/data-locations/index.html">Data locations and copying</a><a class="sidebar-link" href="../../language/expressions/index.html">Expressions and operators</a><a class="sidebar-link" href="../../language/control-flow/index.html">Statements and control flow</a><a class="sidebar-link" href="../../language/functions/index.html">Functions</a><a class="sidebar-link" href="../../language/globals-and-builtins/index.html">Units, globals, and builtins</a><a class="sidebar-link" href="../../language/jeth-features/index.html">JETH-specific features</a></section><section class="sidebar-group"><h2>Contracts</h2><a class="sidebar-link" href="../../contracts/inheritance/index.html">Constructors and inheritance</a><a class="sidebar-link" href="../../contracts/modifiers/index.html">Function modifiers</a><a class="sidebar-link" href="../../contracts/interfaces-and-calls/index.html">Interfaces and external calls</a><a class="sidebar-link" href="../../contracts/libraries/index.html">Libraries and using</a><a class="sidebar-link" href="../../contracts/events-and-errors/index.html">Events, errors, and panics</a></section><section class="sidebar-group"><h2>Internals</h2><a class="sidebar-link" href="../../internals/abi/index.html">Contract ABI specification</a><a class="sidebar-link" href="../../internals/storage-layout/index.html">Storage layout</a><a class="sidebar-link" href="../../internals/compiler-and-tooling/index.html">Compiler, CLI, and tooling</a><a class="sidebar-link" href="../../internals/artifacts/index.html">Contracts and artifacts</a></section><section class="sidebar-group"><h2>Advanced</h2><a class="sidebar-link" href="../../advanced/contract-creation-and-clones/index.html">Contract creation and clones</a><a class="sidebar-link" href="../../advanced/proxies-and-diamonds/index.html">Proxies, beacons, and diamonds</a></section><section class="sidebar-group"><h2>Security</h2><a class="sidebar-link" href="../../security/considerations/index.html">Security considerations</a><a class="sidebar-link" href="../../security/compiler-correctness/index.html">Compiler correctness model</a></section><section class="sidebar-group"><h2>Reference</h2><a class="sidebar-link" href="../cheatsheet/index.html">Syntax cheatsheet</a><a class="sidebar-link" href="../differences/index.html">Differences from TypeScript and Solidity</a><a class="sidebar-link is-active" href="./index.html" aria-current="page">Compiler diagnostics</a><a class="sidebar-link" href="../known-limitations/index.html">Supported features and limitations</a><a class="sidebar-link" href="../feature-matrix/index.html">Complete feature matrix</a></section><section class="sidebar-group"><h2>Project</h2><a class="sidebar-link" href="../../project/roadmap/index.html">Product roadmap</a><a class="sidebar-link" href="../../project/overview/index.html">Repository overview</a></section><a class="built-by" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></aside>
+    <main class="content-shell">
+      <article class="article"><div class="article-kicker">Reference</div>
+<h1 id="compiler-diagnostics">Compiler diagnostics</h1>
+<p>JETH diagnostics identify source spans and use codes such as <code>JETH470</code>.</p>
+<h2 id="reading-a-diagnostic">Reading a diagnostic<a class="heading-anchor" href="#reading-a-diagnostic" aria-label="Link to Reading a diagnostic">#</a></h2>
+<p>A diagnostic normally contains:</p>
+<ul><li>a stable-looking code;</li><li>source file and span;</li><li>a human explanation;</li><li>sometimes the supported alternative or reason for a safety gate.</li></ul>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>text</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="text"><code>file.jeth:line:column JETH470 copy to storage not supported for this shape</code></pre></div>
+<p>The public machine-readable diagnostic schema and code stability policy are not yet frozen. Tooling should not parse human prose as a permanent API.</p>
+<h2 id="diagnostic-categories">Diagnostic categories<a class="heading-anchor" href="#diagnostic-categories" aria-label="Link to Diagnostic categories">#</a></h2>
+<p>Diagnostics cover:</p>
+<ul><li>unsupported TypeScript syntax;</li><li>reserved or duplicate declarations;</li><li>unknown names and members;</li><li>type mismatch and invalid conversion;</li><li>visibility/mutability/payability violations;</li><li>invalid inheritance, override, interface, or library structure;</li><li>ABI, calldata, memory, or storage shape restrictions;</li><li>unsupported copy/aliasing paths;</li><li>constructor, immutable, or modifier rules;</li><li>call and return arity;</li><li>constant evaluation and range errors;</li><li>backend soundness guards.</li></ul>
+<h2 id="examples">Examples<a class="heading-anchor" href="#examples" aria-label="Link to Examples">#</a></h2>
+<p>An invalid implicit narrowing is rejected at the conversion site:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-comment">// Expected compile error: a u256 is not implicitly narrowed to u8.</span>
+<span class="tok-keyword">class</span> NarrowingError {
+  <span class="tok-keyword">get</span> set(value: <span class="tok-type">u256</span>): <span class="tok-type">External</span>&lt;<span class="tok-type">u8</span>&gt; {
+    <span class="tok-keyword">return</span> value;
+  }
+}</code></pre></div>
+<p>Make the policy explicit only when the range is known and checked:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> CheckedNarrowing {
+  <span class="tok-keyword">get</span> narrow(value: <span class="tok-type">u256</span>): <span class="tok-type">External</span>&lt;<span class="tok-type">u8</span>&gt; {
+    <span class="tok-builtin">require</span>(value <span class="tok-operator">&lt;=</span> <span class="tok-type">u256</span>(<span class="tok-keyword">type</span>(<span class="tok-type">u8</span>).max), <span class="tok-string">&quot;out of range&quot;</span>);
+    <span class="tok-keyword">return</span> <span class="tok-type">u8</span>(value);
+  }
+}</code></pre></div>
+<p>An unsupported storage transcode is a safety gate, not a request to bypass the type system:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-comment">// Expected JETH470-style compile error: this whole-value copy is unsupported.</span>
+<span class="tok-keyword">type</span> Payload = {
+  values: <span class="tok-type">Arr</span>&lt;<span class="tok-type">u256</span>, <span class="tok-number">2</span>&gt;[];
+};
+
+<span class="tok-keyword">class</span> UnsupportedCopy {
+  payload: Payload;
+
+  setPayload(input: Payload): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-keyword">this</span>.payload = input;
+  }
+}</code></pre></div>
+<p>The diagnostic is emitted before bytecode generation because accepting this shape without a proven transcode would risk a miscompile.</p>
+<h2 id="clean-rejection-is-intentional">Clean rejection is intentional<a class="heading-anchor" href="#clean-rejection-is-intentional" aria-label="Link to Clean rejection is intentional">#</a></h2>
+<p>A &quot;not supported&quot; diagnostic is preferable to accepted source that would produce wrong bytes. Do not suppress or work around such an error by changing types until the resulting semantics are understood.</p>
+<h2 id="filing-a-compiler-issue">Filing a compiler issue<a class="heading-anchor" href="#filing-a-compiler-issue" aria-label="Link to Filing a compiler issue">#</a></h2>
+<p>Include:</p>
+<ol><li>exact JETH revision/version;</li><li>exact Node and solc versions;</li><li>minimal JETH source;</li><li>Solidity mirror when applicable;</li><li>full diagnostic or runtime bytes;</li><li>deploy/call inputs;</li><li>expected and actual return/revert/log/storage data;</li><li>deterministic seed for generated failures.</li></ol>
+<p>Classify whether the report is a possible MC, OA, OR, diagnostic-quality issue, or flake. The compiler team should confirm the classification from executable evidence.</p><div class="article-footer"><span>JETH language documentation</span><a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></div><nav class="pagination" aria-label="Documentation pages"><a class="pagination-link previous" href="../differences/index.html"><span>Previous</span><strong>Differences from TypeScript and Solidity</strong></a><a class="pagination-link next" href="../known-limitations/index.html"><span>Next</span><strong>Supported features and limitations</strong></a></nav></article>
+      <nav class="page-toc" aria-label="On this page"><div class="toc-title">On this page</div><a class="toc-link depth-2" href="#reading-a-diagnostic">Reading a diagnostic</a><a class="toc-link depth-2" href="#diagnostic-categories">Diagnostic categories</a><a class="toc-link depth-2" href="#examples">Examples</a><a class="toc-link depth-2" href="#clean-rejection-is-intentional">Clean rejection is intentional</a><a class="toc-link depth-2" href="#filing-a-compiler-issue">Filing a compiler issue</a></nav>
+    </main>
+  </div>
+  <div class="search-modal" hidden><button class="search-backdrop" type="button" aria-label="Close search"></button><div class="search-panel" role="dialog" aria-modal="true" aria-label="Search documentation"><div class="search-box"><span>⌕</span><input class="search-input" type="search" placeholder="Search JETH guides..." autocomplete="off"><button class="search-close" type="button">Esc</button></div><div class="search-results"><div class="search-empty">Start typing to search the book.</div></div></div></div>
+  <script src="../../assets/search-index.js"></script>
+  <script src="../../assets/book.js"></script>
+</body>
+</html>

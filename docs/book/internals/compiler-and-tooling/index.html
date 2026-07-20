@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Compiler, CLI, and tooling in the JETH language documentation.">
+  <meta name="theme-color" content="#11131a">
+  <meta property="og:image" content="../../assets/a16k-avatar-logo.png">
+  <title>Compiler, CLI, and tooling | JETH</title>
+  <link rel="icon" href="../../assets/jeth-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../../assets/book.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../../index.html" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span></a>
+    <nav class="top-nav" aria-label="Primary"><a class="is-active" href="../../index.html">Guides</a><a href="./index.html">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
+    <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
+  </header>
+  <div class="pre-release"><span>Pre-release</span> JETH is under active compiler and security review.</div>
+  <div class="book-shell">
+    <aside class="sidebar"><div class="sidebar-title">Guides</div><section class="sidebar-group"><h2>Guides</h2><a class="sidebar-link" href="../../index.html">JETH Documentation</a><a class="sidebar-link" href="../../guides/getting-started/index.html">Getting started</a><a class="sidebar-link" href="../../guides/language-tour/index.html">Language tour</a><a class="sidebar-link" href="../../guides/examples/index.html">Examples</a></section><section class="sidebar-group"><h2>Language</h2><a class="sidebar-link" href="../../language/source-units/index.html">Source units and imports</a><a class="sidebar-link" href="../../language/contract-structure/index.html">Contract structure</a><a class="sidebar-link" href="../../language/types/index.html">Types</a><a class="sidebar-link" href="../../language/value-types/index.html">Value types</a><a class="sidebar-link" href="../../language/reference-types/index.html">Reference and composite types</a><a class="sidebar-link" href="../../language/data-locations/index.html">Data locations and copying</a><a class="sidebar-link" href="../../language/expressions/index.html">Expressions and operators</a><a class="sidebar-link" href="../../language/control-flow/index.html">Statements and control flow</a><a class="sidebar-link" href="../../language/functions/index.html">Functions</a><a class="sidebar-link" href="../../language/globals-and-builtins/index.html">Units, globals, and builtins</a><a class="sidebar-link" href="../../language/jeth-features/index.html">JETH-specific features</a></section><section class="sidebar-group"><h2>Contracts</h2><a class="sidebar-link" href="../../contracts/inheritance/index.html">Constructors and inheritance</a><a class="sidebar-link" href="../../contracts/modifiers/index.html">Function modifiers</a><a class="sidebar-link" href="../../contracts/interfaces-and-calls/index.html">Interfaces and external calls</a><a class="sidebar-link" href="../../contracts/libraries/index.html">Libraries and using</a><a class="sidebar-link" href="../../contracts/events-and-errors/index.html">Events, errors, and panics</a></section><section class="sidebar-group"><h2>Internals</h2><a class="sidebar-link" href="../abi/index.html">Contract ABI specification</a><a class="sidebar-link" href="../storage-layout/index.html">Storage layout</a><a class="sidebar-link is-active" href="./index.html" aria-current="page">Compiler, CLI, and tooling</a><a class="sidebar-link" href="../artifacts/index.html">Contracts and artifacts</a></section><section class="sidebar-group"><h2>Advanced</h2><a class="sidebar-link" href="../../advanced/contract-creation-and-clones/index.html">Contract creation and clones</a><a class="sidebar-link" href="../../advanced/proxies-and-diamonds/index.html">Proxies, beacons, and diamonds</a></section><section class="sidebar-group"><h2>Security</h2><a class="sidebar-link" href="../../security/considerations/index.html">Security considerations</a><a class="sidebar-link" href="../../security/compiler-correctness/index.html">Compiler correctness model</a></section><section class="sidebar-group"><h2>Reference</h2><a class="sidebar-link" href="../../reference/cheatsheet/index.html">Syntax cheatsheet</a><a class="sidebar-link" href="../../reference/differences/index.html">Differences from TypeScript and Solidity</a><a class="sidebar-link" href="../../reference/diagnostics/index.html">Compiler diagnostics</a><a class="sidebar-link" href="../../reference/known-limitations/index.html">Supported features and limitations</a><a class="sidebar-link" href="../../reference/feature-matrix/index.html">Complete feature matrix</a></section><section class="sidebar-group"><h2>Project</h2><a class="sidebar-link" href="../../project/roadmap/index.html">Product roadmap</a><a class="sidebar-link" href="../../project/overview/index.html">Repository overview</a></section><a class="built-by" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></aside>
+    <main class="content-shell">
+      <article class="article"><div class="article-kicker">Internals</div>
+<h1 id="compiler-cli-and-tooling">Compiler, CLI, and tooling</h1>
+<p>Built by <a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer">@a16k-lab</a>.</p>
+<p>The JETH compiler accepts source text, validates and analyzes it, emits Yul and ABI metadata, then asks solc to optimize and assemble bytecode.</p>
+<h2 id="current-requirements">Current requirements<a class="heading-anchor" href="#current-requirements" aria-label="Link to Current requirements">#</a></h2>
+<ul><li>Node.js 22</li><li>npm dependencies from the repository lockfile</li><li>the bundled <code>solc</code> JavaScript package</li></ul>
+<p>JETH is currently a private pre-release package. Use the repository command until the public package and standalone binary are released.</p>
+<h2 id="command-line">Command line<a class="heading-anchor" href="#command-line" aria-label="Link to Command line">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>text</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="text"><code>jethc &lt;file.jeth&gt; [options]</code></pre></div>
+<p>Run through npm:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>bash</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="bash"><code>npm run jethc -- examples/Counter.jeth --abi --bin --layout</code></pre></div>
+<p>Current options:</p>
+<div class="table-wrap"><table><thead><tr><th>Option</th><th>Behavior</th></tr></thead><tbody><tr><td><code>--yul</code></td><td>Print generated Yul</td></tr><tr><td><code>--abi</code></td><td>Print ABI JSON</td></tr><tr><td><code>--bin</code></td><td>Print creation and runtime bytecode</td></tr><tr><td><code>--layout</code></td><td>Print storage layout</td></tr><tr><td><code>-o &lt;dir&gt;</code></td><td>Write basic artifacts to a directory</td></tr><tr><td><code>-h</code>, <code>--help</code></td><td>Print usage and solc version</td></tr></tbody></table></div>
+<p>Without an output flag, the CLI prints a compilation summary.</p>
+<h2 id="current-output-files">Current output files<a class="heading-anchor" href="#current-output-files" aria-label="Link to Current output files">#</a></h2>
+<p>With <code>-o build/</code>, the CLI writes:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>text</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="text"><code>Contract.abi.json
+Contract.bin
+Contract.runtime.bin
+Contract.yul</code></pre></div>
+<p>Hex bytecode files do not include a <code>0x</code> prefix. The output schema is not yet a frozen public artifact standard.</p>
+<h2 id="compiler-api">Compiler API<a class="heading-anchor" href="#compiler-api" aria-label="Link to Compiler API">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">import</span> { compile } <span class="tok-keyword">from</span> <span class="tok-string">&quot;./src/compile.js&quot;</span>;
+
+<span class="tok-keyword">const</span> result = compile(source, {
+  fileName: <span class="tok-string">&quot;Counter.jeth&quot;</span>,
+  evmVersion: <span class="tok-string">&quot;cancun&quot;</span>,
+});</code></pre></div>
+<p><code>CompileOptions</code> supports:</p>
+<div class="table-wrap"><table><thead><tr><th>Field</th><th>Meaning</th></tr></thead><tbody><tr><td><code>fileName</code></td><td>Entry file name used in diagnostics and imports</td></tr><tr><td><code>evmVersion</code></td><td>solc EVM target, default <code>cancun</code></td></tr><tr><td><code>sources</code></td><td>Multi-file path-to-source map for imports</td></tr></tbody></table></div>
+<p><code>CompileResult</code> contains:</p>
+<div class="table-wrap"><table><thead><tr><th>Field</th><th>Meaning</th></tr></thead><tbody><tr><td><code>contractName</code></td><td>Selected artifact name</td></tr><tr><td><code>abi</code></td><td>ABI items emitted by JETH</td></tr><tr><td><code>creationBytecode</code></td><td>Creation bytecode, hex without <code>0x</code></td></tr><tr><td><code>runtimeBytecode</code></td><td>Runtime bytecode, hex without <code>0x</code></td></tr><tr><td><code>yul</code></td><td>Generated Yul source</td></tr><tr><td><code>storageLayout</code></td><td>Name/type/slot/offset entries</td></tr><tr><td><code>ir</code></td><td>Typed compiler IR</td></tr><tr><td><code>diagnostics</code></td><td>Nonfatal diagnostics</td></tr><tr><td><code>libraries</code></td><td>Separately deployable external libraries when present</td></tr><tr><td><code>linkReferences</code></td><td>Library placeholder positions when present</td></tr><tr><td><code>contracts</code></td><td>All artifacts for a multi-contract source unit</td></tr></tbody></table></div>
+<p>For a multi-contract file, singular fields describe the first deployable contract and <code>contracts</code> holds artifacts in document order.</p>
+<h2 id="multi-file-api">Multi-file API<a class="heading-anchor" href="#multi-file-api" aria-label="Link to Multi-file API">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">const</span> result = compile(entrySource, {
+  fileName: <span class="tok-string">&quot;src/App.jeth&quot;</span>,
+  sources: {
+    <span class="tok-string">&quot;src/App.jeth&quot;</span>: entrySource,
+    <span class="tok-string">&quot;src/Ownable.jeth&quot;</span>: ownableSource,
+    <span class="tok-string">&quot;src/Math.jeth&quot;</span>: mathSource,
+  },
+});</code></pre></div>
+<p>Import paths resolve against this source map. Diagnostics are remapped to the original source file and span.</p>
+<h2 id="diagnostics">Diagnostics<a class="heading-anchor" href="#diagnostics" aria-label="Link to Diagnostics">#</a></h2>
+<p>Compilation failures throw <code>CompileError</code> with structured diagnostics:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">try</span> {
+  <span class="tok-keyword">const</span> result = compile(source, { fileName: <span class="tok-string">&quot;C.jeth&quot;</span> });
+} <span class="tok-keyword">catch</span> (<span class="tok-type">error</span>) {
+  <span class="tok-keyword">if</span> (<span class="tok-type">error</span> instanceof CompileError) {
+    <span class="tok-keyword">for</span> (<span class="tok-keyword">const</span> diagnostic <span class="tok-keyword">of</span> <span class="tok-type">error</span>.diagnostics) {
+      <span class="tok-comment">// severity, code, message, file, line, column, length</span>
+    }
+  }
+}</code></pre></div>
+<p>Use <code>formatDiagnostics</code> for terminal output. Tooling should prefer structured fields over parsing formatted text.</p>
+<h2 id="pipeline">Pipeline<a class="heading-anchor" href="#pipeline" aria-label="Link to Pipeline">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>text</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="text"><code>.jeth source
+  -&gt; TypeScript syntax tree
+  -&gt; legacy-syntax and subset validation
+  -&gt; import bundling and declaration routing
+  -&gt; type resolution and semantic analysis
+  -&gt; effect/mutability inference
+  -&gt; Solidity-compatible storage planning
+  -&gt; typed JETH IR
+  -&gt; ABI generation
+  -&gt; Yul generation
+  -&gt; solc optimizer, stack scheduler, and assembler
+  -&gt; bytecode and link references</code></pre></div>
+<p>The ABI is generated from JETH IR because solc only sees the generated Yul.</p>
+<h2 id="backend-settings">Backend settings<a class="heading-anchor" href="#backend-settings" aria-label="Link to Backend settings">#</a></h2>
+<p>The current backend invokes solc in Yul mode with optimization enabled, 200 runs, Yul optimization enabled, and the selected EVM version. The default target is Cancun.</p>
+<p>These settings are part of the current compiler behavior but are not yet exposed as a complete stable CLI configuration surface.</p>
+<h2 id="compile-cache">Compile cache<a class="heading-anchor" href="#compile-cache" aria-label="Link to Compile cache">#</a></h2>
+<p>Set <code>JETH_COMPILE_CACHE=1</code> to enable the development Yul-to-bytecode cache:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>bash</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="bash"><code>export JETH_COMPILE_CACHE=1
+npm test</code></pre></div>
+<p>The cache key includes full Yul, contract name, EVM version, solc version, and a cache-format version. Only successful compilations are cached. A read/write failure falls back to a fresh solc compile.</p>
+<p>The normal CLI does not enable the cache automatically.</p>
+<h2 id="development-checks">Development checks<a class="heading-anchor" href="#development-checks" aria-label="Link to Development checks">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>bash</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="bash"><code>npm run build
+npm test
+npm run format:check</code></pre></div>
+<p>Compiler changes should add a focused regression test. Solidity-overlapping behavior should be checked at deploy and runtime, not compilation alone. The full suite should also pass with shuffled test-file order.</p>
+<h2 id="planned-production-cli">Planned production CLI<a class="heading-anchor" href="#planned-production-cli" aria-label="Link to Planned production CLI">#</a></h2>
+<p>A stable public toolchain still needs:</p>
+<ul><li>project configuration and filesystem import discovery;</li><li>multi-file CLI builds and contract selection;</li><li>standard JSON input/output;</li><li>stable machine-readable diagnostics and exit codes;</li><li>source maps and source-level traces;</li><li>deterministic artifact manifests and build-info files;</li><li>optimizer and EVM-target controls;</li><li>incremental/watch builds;</li><li>package publication and standalone binaries;</li><li>Foundry/Hardhat integration, deployment, linking, and verification;</li><li>LSP and editor tooling.</li></ul><div class="article-footer"><span>JETH language documentation</span><a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></div><nav class="pagination" aria-label="Documentation pages"><a class="pagination-link previous" href="../storage-layout/index.html"><span>Previous</span><strong>Storage layout</strong></a><a class="pagination-link next" href="../artifacts/index.html"><span>Next</span><strong>Contracts and artifacts</strong></a></nav></article>
+      <nav class="page-toc" aria-label="On this page"><div class="toc-title">On this page</div><a class="toc-link depth-2" href="#current-requirements">Current requirements</a><a class="toc-link depth-2" href="#command-line">Command line</a><a class="toc-link depth-2" href="#current-output-files">Current output files</a><a class="toc-link depth-2" href="#compiler-api">Compiler API</a><a class="toc-link depth-2" href="#multi-file-api">Multi-file API</a><a class="toc-link depth-2" href="#diagnostics">Diagnostics</a><a class="toc-link depth-2" href="#pipeline">Pipeline</a><a class="toc-link depth-2" href="#backend-settings">Backend settings</a><a class="toc-link depth-2" href="#compile-cache">Compile cache</a><a class="toc-link depth-2" href="#development-checks">Development checks</a><a class="toc-link depth-2" href="#planned-production-cli">Planned production CLI</a></nav>
+    </main>
+  </div>
+  <div class="search-modal" hidden><button class="search-backdrop" type="button" aria-label="Close search"></button><div class="search-panel" role="dialog" aria-modal="true" aria-label="Search documentation"><div class="search-box"><span>⌕</span><input class="search-input" type="search" placeholder="Search JETH guides..." autocomplete="off"><button class="search-close" type="button">Esc</button></div><div class="search-results"><div class="search-empty">Start typing to search the book.</div></div></div></div>
+  <script src="../../assets/search-index.js"></script>
+  <script src="../../assets/book.js"></script>
+</body>
+</html>

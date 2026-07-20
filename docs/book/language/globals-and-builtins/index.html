@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Units, globals, and builtins in the JETH language documentation.">
+  <meta name="theme-color" content="#11131a">
+  <meta property="og:image" content="../../assets/a16k-avatar-logo.png">
+  <title>Units, globals, and builtins | JETH</title>
+  <link rel="icon" href="../../assets/jeth-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../../assets/book.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../../index.html" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span></a>
+    <nav class="top-nav" aria-label="Primary"><a class="is-active" href="../../index.html">Guides</a><a href="../../internals/compiler-and-tooling/index.html">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
+    <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
+  </header>
+  <div class="pre-release"><span>Pre-release</span> JETH is under active compiler and security review.</div>
+  <div class="book-shell">
+    <aside class="sidebar"><div class="sidebar-title">Guides</div><section class="sidebar-group"><h2>Guides</h2><a class="sidebar-link" href="../../index.html">JETH Documentation</a><a class="sidebar-link" href="../../guides/getting-started/index.html">Getting started</a><a class="sidebar-link" href="../../guides/language-tour/index.html">Language tour</a><a class="sidebar-link" href="../../guides/examples/index.html">Examples</a></section><section class="sidebar-group"><h2>Language</h2><a class="sidebar-link" href="../source-units/index.html">Source units and imports</a><a class="sidebar-link" href="../contract-structure/index.html">Contract structure</a><a class="sidebar-link" href="../types/index.html">Types</a><a class="sidebar-link" href="../value-types/index.html">Value types</a><a class="sidebar-link" href="../reference-types/index.html">Reference and composite types</a><a class="sidebar-link" href="../data-locations/index.html">Data locations and copying</a><a class="sidebar-link" href="../expressions/index.html">Expressions and operators</a><a class="sidebar-link" href="../control-flow/index.html">Statements and control flow</a><a class="sidebar-link" href="../functions/index.html">Functions</a><a class="sidebar-link is-active" href="./index.html" aria-current="page">Units, globals, and builtins</a><a class="sidebar-link" href="../jeth-features/index.html">JETH-specific features</a></section><section class="sidebar-group"><h2>Contracts</h2><a class="sidebar-link" href="../../contracts/inheritance/index.html">Constructors and inheritance</a><a class="sidebar-link" href="../../contracts/modifiers/index.html">Function modifiers</a><a class="sidebar-link" href="../../contracts/interfaces-and-calls/index.html">Interfaces and external calls</a><a class="sidebar-link" href="../../contracts/libraries/index.html">Libraries and using</a><a class="sidebar-link" href="../../contracts/events-and-errors/index.html">Events, errors, and panics</a></section><section class="sidebar-group"><h2>Internals</h2><a class="sidebar-link" href="../../internals/abi/index.html">Contract ABI specification</a><a class="sidebar-link" href="../../internals/storage-layout/index.html">Storage layout</a><a class="sidebar-link" href="../../internals/compiler-and-tooling/index.html">Compiler, CLI, and tooling</a><a class="sidebar-link" href="../../internals/artifacts/index.html">Contracts and artifacts</a></section><section class="sidebar-group"><h2>Advanced</h2><a class="sidebar-link" href="../../advanced/contract-creation-and-clones/index.html">Contract creation and clones</a><a class="sidebar-link" href="../../advanced/proxies-and-diamonds/index.html">Proxies, beacons, and diamonds</a></section><section class="sidebar-group"><h2>Security</h2><a class="sidebar-link" href="../../security/considerations/index.html">Security considerations</a><a class="sidebar-link" href="../../security/compiler-correctness/index.html">Compiler correctness model</a></section><section class="sidebar-group"><h2>Reference</h2><a class="sidebar-link" href="../../reference/cheatsheet/index.html">Syntax cheatsheet</a><a class="sidebar-link" href="../../reference/differences/index.html">Differences from TypeScript and Solidity</a><a class="sidebar-link" href="../../reference/diagnostics/index.html">Compiler diagnostics</a><a class="sidebar-link" href="../../reference/known-limitations/index.html">Supported features and limitations</a><a class="sidebar-link" href="../../reference/feature-matrix/index.html">Complete feature matrix</a></section><section class="sidebar-group"><h2>Project</h2><a class="sidebar-link" href="../../project/roadmap/index.html">Product roadmap</a><a class="sidebar-link" href="../../project/overview/index.html">Repository overview</a></section><a class="built-by" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></aside>
+    <main class="content-shell">
+      <article class="article"><div class="article-kicker">Language</div>
+<h1 id="units-globals-and-builtins">Units, globals, and builtins</h1>
+<p>JETH exposes EVM execution context and compiler-provided functions. Access affects inferred mutability.</p>
+<h2 id="value-and-time-units">Value and time units<a class="heading-anchor" href="#value-and-time-units" aria-label="Link to Value and time units">#</a></h2>
+<p>JETH does not currently expose Solidity-style numeric suffix expressions such as <code>1 ether</code> or <code>2 days</code> through its TypeScript-shaped syntax. Represent values in explicit base units or use reviewed named constants and branded types:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">type</span> Wei = <span class="tok-type">Brand</span>&lt;<span class="tok-type">u256</span>&gt;;
+
+<span class="tok-keyword">class</span> Units {
+  <span class="tok-keyword">static</span> ONE_ETHER: <span class="tok-type">u256</span> = <span class="tok-number">1000000000000000000n</span>;
+  <span class="tok-keyword">static</span> ONE_DAY_SECONDS: <span class="tok-type">u256</span> = <span class="tok-number">86400n</span>;
+}</code></pre></div>
+<p>Names such as <code>wei</code>, <code>ether</code>, and time-unit keywords remain reserved so ordinary declarations cannot create misleading alternatives.</p>
+<h2 id="message-globals">Message globals<a class="heading-anchor" href="#message-globals" aria-label="Link to Message globals">#</a></h2>
+<div class="table-wrap"><table><thead><tr><th>Expression</th><th>Type</th><th>Meaning</th></tr></thead><tbody><tr><td><code>msg.sender</code></td><td><code>address</code></td><td>Immediate caller</td></tr><tr><td><code>msg.value</code></td><td><code>u256</code></td><td>Wei sent with the call</td></tr><tr><td><code>msg.sig</code></td><td><code>bytes4</code></td><td>First four calldata bytes</td></tr><tr><td><code>msg.data</code></td><td><code>bytes</code></td><td>Complete calldata view</td></tr></tbody></table></div>
+<p><code>msg.value</code> is only available in payable contexts. <code>msg.data</code> includes the selector and supports length, indexing, supported slicing, copying, hashing, and decoding.</p>
+<h2 id="transaction-globals">Transaction globals<a class="heading-anchor" href="#transaction-globals" aria-label="Link to Transaction globals">#</a></h2>
+<div class="table-wrap"><table><thead><tr><th>Expression</th><th>Type</th><th>Meaning</th></tr></thead><tbody><tr><td><code>tx.origin</code></td><td><code>address</code></td><td>Original transaction sender</td></tr></tbody></table></div>
+<p>Do not use <code>tx.origin</code> for authorization. A malicious intermediary can preserve the origin while changing the immediate caller.</p>
+<h2 id="block-globals">Block globals<a class="heading-anchor" href="#block-globals" aria-label="Link to Block globals">#</a></h2>
+<p>Supported block data includes:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-builtin">block</span>.timestamp
+<span class="tok-builtin">block</span>.number
+<span class="tok-builtin">block</span>.chainid
+<span class="tok-builtin">block</span>.coinbase
+<span class="tok-builtin">block</span>.basefee
+<span class="tok-builtin">block</span>.gaslimit
+<span class="tok-builtin">block</span>.prevrandao
+<span class="tok-builtin">block</span>.difficulty</code></pre></div>
+<p><code>block.difficulty</code> maps to post-merge prevrandao semantics on the configured EVM target. Block producers can influence some fields within protocol constraints; do not treat timestamp or prevrandao as an unbiasable randomness source.</p>
+<h2 id="address-and-code-globals">Address and code globals<a class="heading-anchor" href="#address-and-code-globals" aria-label="Link to Address and code globals">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-type">address</span>(<span class="tok-keyword">this</span>)
+account.balance
+account.code
+account.codehash
+<span class="tok-builtin">isContract</span>(account)</code></pre></div>
+<p>Code length is not a reliable proof that an address is permanently an EOA. Contracts under construction have no deployed runtime code, and account code can change under protocol/account behavior.</p>
+<h2 id="contract-creation-and-clone-builtins">Contract creation and clone builtins<a class="heading-anchor" href="#contract-creation-and-clone-builtins" aria-label="Link to Contract creation and clone builtins">#</a></h2>
+<p>JETH exposes structured EIP-1167 deployment rather than arbitrary user-level CREATE or CREATE2:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-builtin">clone</span>(implementation)
+<span class="tok-builtin">cloneDeterministic</span>(implementation, salt)
+<span class="tok-builtin">cloneWithArgs</span>(implementation, args)
+<span class="tok-builtin">cloneDeterministicWithArgs</span>(implementation, salt, args)
+<span class="tok-builtin">predictClone</span>(implementation, salt)
+<span class="tok-builtin">predictCloneWithArgs</span>(implementation, salt, args)
+<span class="tok-builtin">cloneArgs</span>()</code></pre></div>
+<p>The four deployment helpers create state and are not allowed in read-only methods. Prediction and argument reads inspect the EVM environment. They are allowed in <code>get</code> methods, but not in <code>static</code> methods. See <a href="../../advanced/contract-creation-and-clones/index.html">Contract creation and clones</a> for address formulas, exact runtime layout, initialization, collisions, and failure behavior.</p>
+<h2 id="gas-and-block-history">Gas and block history<a class="heading-anchor" href="#gas-and-block-history" aria-label="Link to Gas and block history">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-builtin">gasleft</span>()
+<span class="tok-builtin">blockhash</span>(number)
+<span class="tok-builtin">blobhash</span>(index)</code></pre></div>
+<p>These expose the corresponding EVM operations and protocol limitations.</p>
+<h2 id="hash-functions">Hash functions<a class="heading-anchor" href="#hash-functions" aria-label="Link to Hash functions">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-builtin">keccak256</span>(data)
+<span class="tok-builtin">sha256</span>(data)
+<span class="tok-builtin">ripemd160</span>(data)</code></pre></div>
+<p>Inputs must have a supported dynamic bytes representation. Convert or ABI-pack other values explicitly.</p>
+<h2 id="modular-arithmetic">Modular arithmetic<a class="heading-anchor" href="#modular-arithmetic" aria-label="Link to Modular arithmetic">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-builtin">addmod</span>(a, b, modulus)
+<span class="tok-builtin">mulmod</span>(a, b, modulus)</code></pre></div>
+<p>A zero modulus follows the compiler&#39;s Solidity-compatible panic behavior rather than silently relying on the raw opcode&#39;s zero result.</p>
+<h2 id="abi-helpers">ABI helpers<a class="heading-anchor" href="#abi-helpers" aria-label="Link to ABI helpers">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-builtin">abi</span>.encode(a, b)
+<span class="tok-builtin">abi</span>.encodePacked(a, b)
+<span class="tok-builtin">abi</span>.encodeWithSelector(selector, a, b)
+<span class="tok-builtin">abi</span>.encodeWithSignature(<span class="tok-string">&quot;f(uint256)&quot;</span>, value)
+<span class="tok-builtin">abi</span>.decode(data, <span class="tok-type">u256</span>)
+data.decode([<span class="tok-type">u256</span>, <span class="tok-type">address</span>])</code></pre></div>
+<p>Standard encoding uses ABI head/tail layout. Packed encoding concatenates the packed representations and can be ambiguous when more than one dynamic value is included. Do not use ambiguous packed encodings for signatures or collision- sensitive hashing.</p>
+<h2 id="signatures-and-crypto">Signatures and crypto<a class="heading-anchor" href="#signatures-and-crypto" aria-label="Link to Signatures and crypto">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-builtin">ecrecover</span>(hash, v, r, s)
+<span class="tok-builtin">recover</span>(hash, signature)
+<span class="tok-builtin">recover</span>(hash, v, r, s)
+<span class="tok-builtin">tryRecover</span>(hash, signature)</code></pre></div>
+<p>Raw <code>ecrecover</code> matches the EVM/Solidity precompile behavior and can return the zero address on failure. The safe recovery helpers enforce the documented signature-length, low-s, and nonzero-signer rules.</p>
+<p>Signature verification must also include domain separation, chain/application context, nonce or replay protection, expiry where applicable, and the intended signer semantics.</p>
+<h2 id="other-precompiles">Other precompiles<a class="heading-anchor" href="#other-precompiles" aria-label="Link to Other precompiles">#</a></h2>
+<p>JETH exposes typed helpers for supported modular exponentiation, bn256, pairing, BLAKE2f, and point-evaluation paths. Each helper has strict input and failure rules. Consult the feature matrix and tests before using a niche precompile in production.</p>
+<h2 id="type-information">Type information<a class="heading-anchor" href="#type-information" aria-label="Link to Type information">#</a></h2>
+<p><code>type(T).min</code> and <code>type(T).max</code> expose integer bounds where supported. Function <code>.selector</code> exposes the canonical selector of an unambiguous ABI function.</p>
+<h2 id="concatenation-and-templates">Concatenation and templates<a class="heading-anchor" href="#concatenation-and-templates" aria-label="Link to Concatenation and templates">#</a></h2>
+<p>Supported <code>string.concat</code> and <code>bytes.concat</code> forms concatenate dynamic values. Template literals are accepted only as documented string-concatenation sugar; they are not JavaScript template evaluation.</p><div class="article-footer"><span>JETH language documentation</span><a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></div><nav class="pagination" aria-label="Documentation pages"><a class="pagination-link previous" href="../functions/index.html"><span>Previous</span><strong>Functions</strong></a><a class="pagination-link next" href="../jeth-features/index.html"><span>Next</span><strong>JETH-specific features</strong></a></nav></article>
+      <nav class="page-toc" aria-label="On this page"><div class="toc-title">On this page</div><a class="toc-link depth-2" href="#value-and-time-units">Value and time units</a><a class="toc-link depth-2" href="#message-globals">Message globals</a><a class="toc-link depth-2" href="#transaction-globals">Transaction globals</a><a class="toc-link depth-2" href="#block-globals">Block globals</a><a class="toc-link depth-2" href="#address-and-code-globals">Address and code globals</a><a class="toc-link depth-2" href="#contract-creation-and-clone-builtins">Contract creation and clone builtins</a><a class="toc-link depth-2" href="#gas-and-block-history">Gas and block history</a><a class="toc-link depth-2" href="#hash-functions">Hash functions</a><a class="toc-link depth-2" href="#modular-arithmetic">Modular arithmetic</a><a class="toc-link depth-2" href="#abi-helpers">ABI helpers</a><a class="toc-link depth-2" href="#signatures-and-crypto">Signatures and crypto</a><a class="toc-link depth-2" href="#other-precompiles">Other precompiles</a><a class="toc-link depth-2" href="#type-information">Type information</a><a class="toc-link depth-2" href="#concatenation-and-templates">Concatenation and templates</a></nav>
+    </main>
+  </div>
+  <div class="search-modal" hidden><button class="search-backdrop" type="button" aria-label="Close search"></button><div class="search-panel" role="dialog" aria-modal="true" aria-label="Search documentation"><div class="search-box"><span>⌕</span><input class="search-input" type="search" placeholder="Search JETH guides..." autocomplete="off"><button class="search-close" type="button">Esc</button></div><div class="search-results"><div class="search-empty">Start typing to search the book.</div></div></div></div>
+  <script src="../../assets/search-index.js"></script>
+  <script src="../../assets/book.js"></script>
+</body>
+</html>

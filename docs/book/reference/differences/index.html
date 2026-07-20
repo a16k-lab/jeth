@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Differences from TypeScript and Solidity in the JETH language documentation.">
+  <meta name="theme-color" content="#11131a">
+  <meta property="og:image" content="../../assets/a16k-avatar-logo.png">
+  <title>Differences from TypeScript and Solidity | JETH</title>
+  <link rel="icon" href="../../assets/jeth-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../../assets/book.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../../index.html" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span></a>
+    <nav class="top-nav" aria-label="Primary"><a class="is-active" href="../../index.html">Guides</a><a href="../../internals/compiler-and-tooling/index.html">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
+    <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
+  </header>
+  <div class="pre-release"><span>Pre-release</span> JETH is under active compiler and security review.</div>
+  <div class="book-shell">
+    <aside class="sidebar"><div class="sidebar-title">Guides</div><section class="sidebar-group"><h2>Guides</h2><a class="sidebar-link" href="../../index.html">JETH Documentation</a><a class="sidebar-link" href="../../guides/getting-started/index.html">Getting started</a><a class="sidebar-link" href="../../guides/language-tour/index.html">Language tour</a><a class="sidebar-link" href="../../guides/examples/index.html">Examples</a></section><section class="sidebar-group"><h2>Language</h2><a class="sidebar-link" href="../../language/source-units/index.html">Source units and imports</a><a class="sidebar-link" href="../../language/contract-structure/index.html">Contract structure</a><a class="sidebar-link" href="../../language/types/index.html">Types</a><a class="sidebar-link" href="../../language/value-types/index.html">Value types</a><a class="sidebar-link" href="../../language/reference-types/index.html">Reference and composite types</a><a class="sidebar-link" href="../../language/data-locations/index.html">Data locations and copying</a><a class="sidebar-link" href="../../language/expressions/index.html">Expressions and operators</a><a class="sidebar-link" href="../../language/control-flow/index.html">Statements and control flow</a><a class="sidebar-link" href="../../language/functions/index.html">Functions</a><a class="sidebar-link" href="../../language/globals-and-builtins/index.html">Units, globals, and builtins</a><a class="sidebar-link" href="../../language/jeth-features/index.html">JETH-specific features</a></section><section class="sidebar-group"><h2>Contracts</h2><a class="sidebar-link" href="../../contracts/inheritance/index.html">Constructors and inheritance</a><a class="sidebar-link" href="../../contracts/modifiers/index.html">Function modifiers</a><a class="sidebar-link" href="../../contracts/interfaces-and-calls/index.html">Interfaces and external calls</a><a class="sidebar-link" href="../../contracts/libraries/index.html">Libraries and using</a><a class="sidebar-link" href="../../contracts/events-and-errors/index.html">Events, errors, and panics</a></section><section class="sidebar-group"><h2>Internals</h2><a class="sidebar-link" href="../../internals/abi/index.html">Contract ABI specification</a><a class="sidebar-link" href="../../internals/storage-layout/index.html">Storage layout</a><a class="sidebar-link" href="../../internals/compiler-and-tooling/index.html">Compiler, CLI, and tooling</a><a class="sidebar-link" href="../../internals/artifacts/index.html">Contracts and artifacts</a></section><section class="sidebar-group"><h2>Advanced</h2><a class="sidebar-link" href="../../advanced/contract-creation-and-clones/index.html">Contract creation and clones</a><a class="sidebar-link" href="../../advanced/proxies-and-diamonds/index.html">Proxies, beacons, and diamonds</a></section><section class="sidebar-group"><h2>Security</h2><a class="sidebar-link" href="../../security/considerations/index.html">Security considerations</a><a class="sidebar-link" href="../../security/compiler-correctness/index.html">Compiler correctness model</a></section><section class="sidebar-group"><h2>Reference</h2><a class="sidebar-link" href="../cheatsheet/index.html">Syntax cheatsheet</a><a class="sidebar-link is-active" href="./index.html" aria-current="page">Differences from TypeScript and Solidity</a><a class="sidebar-link" href="../diagnostics/index.html">Compiler diagnostics</a><a class="sidebar-link" href="../known-limitations/index.html">Supported features and limitations</a><a class="sidebar-link" href="../feature-matrix/index.html">Complete feature matrix</a></section><section class="sidebar-group"><h2>Project</h2><a class="sidebar-link" href="../../project/roadmap/index.html">Product roadmap</a><a class="sidebar-link" href="../../project/overview/index.html">Repository overview</a></section><a class="built-by" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></aside>
+    <main class="content-shell">
+      <article class="article"><div class="article-kicker">Reference</div>
+<h1 id="differences-from-typescript-and-solidity">Differences from TypeScript and Solidity</h1>
+<p>JETH uses TypeScript-shaped syntax but EVM semantics. It also intentionally differs from Solidity source syntax in several ergonomic areas.</p>
+<h2 id="typescript-syntax-not-typescript-runtime">TypeScript syntax, not TypeScript runtime<a class="heading-anchor" href="#typescript-syntax-not-typescript-runtime" aria-label="Link to TypeScript syntax, not TypeScript runtime">#</a></h2>
+<div class="table-wrap"><table><thead><tr><th>TypeScript intuition</th><th>JETH behavior</th></tr></thead><tbody><tr><td><code>number</code> and floating point</td><td>Rejected</td></tr><tr><td><code>1</code> numeric literal</td><td>Rejected; use <code>1n</code></td></tr><tr><td>String <code>+</code> concatenation</td><td>Rejected; use concat helpers</td></tr><tr><td>Truthy/falsy conditions</td><td>Rejected; condition must be <code>bool</code></td></tr><tr><td>Dynamic objects</td><td>No runtime object model</td></tr><tr><td><code>undefined</code> or <code>null</code></td><td>No runtime value</td></tr><tr><td>Exceptions with <code>throw</code></td><td>Use EVM revert forms</td></tr><tr><td>async/await</td><td>Rejected</td></tr><tr><td>Closures and captured variables</td><td>Rejected</td></tr><tr><td>Prototype methods</td><td>No prototype runtime</td></tr><tr><td>Garbage collection</td><td>No managed runtime</td></tr></tbody></table></div>
+<h2 id="jeth-spelling-versus-solidity">JETH spelling versus Solidity<a class="heading-anchor" href="#jeth-spelling-versus-solidity" aria-label="Link to JETH spelling versus Solidity">#</a></h2>
+<div class="table-wrap"><table><thead><tr><th>Concept</th><th>JETH</th><th>Solidity equivalent</th></tr></thead><tbody><tr><td>Contract</td><td><code>class C</code></td><td><code>contract C</code></td></tr><tr><td>Abstract contract</td><td><code>abstract class C</code></td><td><code>abstract contract C</code></td></tr><tr><td>Library</td><td><code>static class L</code></td><td><code>library L</code></td></tr><tr><td>Struct</td><td><code>type P = { x: u256 }</code></td><td><code>struct P { uint256 x; }</code></td></tr><tr><td>Unsigned integer</td><td><code>u256</code></td><td><code>uint256</code></td></tr><tr><td>Signed integer</td><td><code>i128</code></td><td><code>int128</code></td></tr><tr><td>Fixed array</td><td><code>Arr&lt;T, N&gt;</code></td><td><code>T[N]</code></td></tr><tr><td>Mapping</td><td><code>mapping&lt;K, V&gt;</code></td><td><code>mapping(K =&gt; V)</code></td></tr><tr><td>External function</td><td><code>f(): External&lt;T&gt;</code></td><td><code>function f() external returns (T)</code></td></tr><tr><td>Payable function</td><td><code>f(): Payable&lt;T&gt;</code></td><td><code>function f() external payable returns (T)</code></td></tr><tr><td>Public getter</td><td><code>x: Visible&lt;T&gt;</code></td><td><code>T public x</code></td></tr><tr><td>Internal method</td><td>ordinary method</td><td><code>internal</code> function</td></tr><tr><td>Private member</td><td><code>#name</code></td><td><code>private</code> member</td></tr><tr><td>Constant</td><td><code>static K: T = value</code></td><td><code>T constant K = value</code></td></tr><tr><td>Immutable</td><td><code>static K: T;</code></td><td><code>T immutable K</code></td></tr><tr><td>Interface view</td><td><code>f(): View&lt;T&gt;</code></td><td><code>function f() external view returns (T)</code></td></tr></tbody></table></div>
+<h2 id="mutability">Mutability<a class="heading-anchor" href="#mutability" aria-label="Link to Mutability">#</a></h2>
+<p>Solidity asks the author to write <code>pure</code> and <code>view</code>. JETH infers them from the body and transitive calls. Interfaces still declare mutability because they have no body.</p>
+<h3 id="compared-example">Compared example<a class="heading-anchor" href="#compared-example" aria-label="Link to Compared example">#</a></h3>
+<p>JETH:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> Balance {
+  amount: <span class="tok-type">u256</span>;
+
+  <span class="tok-keyword">get</span> read(): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.amount;
+  }
+}</code></pre></div>
+<p>Solidity:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>solidity</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="solidity"><code>contract Balance {
+    uint256 amount;
+
+    function read() external view returns (uint256) {
+        return amount;
+    }
+}</code></pre></div>
+<p>JETH infers <code>view</code> from the storage read. The exposed JETH getter still uses <code>get</code> to declare its read-only contract.</p>
+<h2 id="visibility">Visibility<a class="heading-anchor" href="#visibility" aria-label="Link to Visibility">#</a></h2>
+<p>JETH exposes only methods wrapped in <code>External&lt;T&gt;</code>/<code>Payable&lt;T&gt;</code> and fields wrapped in <code>Visible&lt;T&gt;</code>. Ordinary methods are internal. This is narrower than Solidity&#39;s several visibility keywords.</p>
+<p>JETH private members use <code>#</code> and stay scoped to their declaring class:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> Vault {
+  <span class="tok-private">#assets</span>: <span class="tok-type">u256</span>;
+
+  <span class="tok-private">#fee</span>(value: <span class="tok-type">u256</span>): <span class="tok-type">u256</span> {
+    <span class="tok-keyword">return</span> value / <span class="tok-number">100n</span>;
+  }
+
+  <span class="tok-keyword">get</span> quote(value: <span class="tok-type">u256</span>): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+    <span class="tok-keyword">return</span> value - <span class="tok-keyword">this</span>.<span class="tok-private">#fee</span>(value);
+  }
+}</code></pre></div>
+<p>The Solidity equivalent spells the same visibility explicitly:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>solidity</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="solidity"><code>contract Vault {
+    uint256 private assets;
+
+    function fee(uint256 value) private pure returns (uint256) {
+        return value / 100;
+    }
+
+    function quote(uint256 value) external pure returns (uint256) {
+        return value - fee(value);
+    }
+}</code></pre></div>
+<h2 id="jeth-only-compile-time-features">JETH-only compile-time features<a class="heading-anchor" href="#jeth-only-compile-time-features" aria-label="Link to JETH-only compile-time features">#</a></h2>
+<ul><li>branded newtypes;</li><li>struct spread;</li><li>array <code>for...of</code>;</li><li>default and named internal arguments;</li><li>exhaustive <code>switch</code>;</li><li>monomorphized internal generics;</li><li>built-in transient <code>@nonReentrant</code>.</li></ul>
+<h2 id="evaluation-and-arithmetic">Evaluation and arithmetic<a class="heading-anchor" href="#evaluation-and-arithmetic" aria-label="Link to Evaluation and arithmetic">#</a></h2>
+<p>JETH follows its Solidity target for checked arithmetic, panic codes, short-circuiting, and observable evaluation order. Do not infer behavior from JavaScript evaluation or coercion.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> Arithmetic {
+  <span class="tok-keyword">get</span> add(u: <span class="tok-type">u8</span>, v: <span class="tok-type">u8</span>): <span class="tok-type">External</span>&lt;<span class="tok-type">u8</span>&gt; {
+    <span class="tok-keyword">return</span> u + v;
+  }
+
+  <span class="tok-keyword">get</span> wrap(u: <span class="tok-type">u8</span>, v: <span class="tok-type">u8</span>): <span class="tok-type">External</span>&lt;<span class="tok-type">u8</span>&gt; {
+    <span class="tok-keyword">unchecked</span>: {
+      <span class="tok-keyword">return</span> u + v;
+    }
+  }
+}</code></pre></div>
+<p><code>add(255, 1)</code> panics with arithmetic code <code>0x11</code>. <code>wrap(255, 1)</code> returns zero. This is EVM integer behavior, not JavaScript number behavior.</p>
+<h2 id="safer-malformed-calldata-behavior">Safer malformed-calldata behavior<a class="heading-anchor" href="#safer-malformed-calldata-behavior" aria-label="Link to Safer malformed-calldata behavior">#</a></h2>
+<p>For honest ABI-encoded inputs, supported paths target Solidity parity. JETH intentionally rejects a few malformed, noncanonical offset/length forms earlier than solc. Both implementations fail the call, but revert data can differ.</p>
+<h2 id="deliberate-exclusions">Deliberate exclusions<a class="heading-anchor" href="#deliberate-exclusions" aria-label="Link to Deliberate exclusions">#</a></h2>
+<p>Some Solidity features or aggregate paths remain cleanly gated. Some JavaScript features are permanently excluded because they lack a sound on-chain meaning. See known limitations and the complete supported matrix.</p><div class="article-footer"><span>JETH language documentation</span><a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></div><nav class="pagination" aria-label="Documentation pages"><a class="pagination-link previous" href="../cheatsheet/index.html"><span>Previous</span><strong>Syntax cheatsheet</strong></a><a class="pagination-link next" href="../diagnostics/index.html"><span>Next</span><strong>Compiler diagnostics</strong></a></nav></article>
+      <nav class="page-toc" aria-label="On this page"><div class="toc-title">On this page</div><a class="toc-link depth-2" href="#typescript-syntax-not-typescript-runtime">TypeScript syntax, not TypeScript runtime</a><a class="toc-link depth-2" href="#jeth-spelling-versus-solidity">JETH spelling versus Solidity</a><a class="toc-link depth-2" href="#mutability">Mutability</a><a class="toc-link depth-3" href="#compared-example">Compared example</a><a class="toc-link depth-2" href="#visibility">Visibility</a><a class="toc-link depth-2" href="#jeth-only-compile-time-features">JETH-only compile-time features</a><a class="toc-link depth-2" href="#evaluation-and-arithmetic">Evaluation and arithmetic</a><a class="toc-link depth-2" href="#safer-malformed-calldata-behavior">Safer malformed-calldata behavior</a><a class="toc-link depth-2" href="#deliberate-exclusions">Deliberate exclusions</a></nav>
+    </main>
+  </div>
+  <div class="search-modal" hidden><button class="search-backdrop" type="button" aria-label="Close search"></button><div class="search-panel" role="dialog" aria-modal="true" aria-label="Search documentation"><div class="search-box"><span>⌕</span><input class="search-input" type="search" placeholder="Search JETH guides..." autocomplete="off"><button class="search-close" type="button">Esc</button></div><div class="search-results"><div class="search-empty">Start typing to search the book.</div></div></div></div>
+  <script src="../../assets/search-index.js"></script>
+  <script src="../../assets/book.js"></script>
+</body>
+</html>

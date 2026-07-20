@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Interfaces and external calls in the JETH language documentation.">
+  <meta name="theme-color" content="#11131a">
+  <meta property="og:image" content="../../assets/a16k-avatar-logo.png">
+  <title>Interfaces and external calls | JETH</title>
+  <link rel="icon" href="../../assets/jeth-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../../assets/book.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../../index.html" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span></a>
+    <nav class="top-nav" aria-label="Primary"><a class="is-active" href="../../index.html">Guides</a><a href="../../internals/compiler-and-tooling/index.html">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
+    <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
+  </header>
+  <div class="pre-release"><span>Pre-release</span> JETH is under active compiler and security review.</div>
+  <div class="book-shell">
+    <aside class="sidebar"><div class="sidebar-title">Guides</div><section class="sidebar-group"><h2>Guides</h2><a class="sidebar-link" href="../../index.html">JETH Documentation</a><a class="sidebar-link" href="../../guides/getting-started/index.html">Getting started</a><a class="sidebar-link" href="../../guides/language-tour/index.html">Language tour</a><a class="sidebar-link" href="../../guides/examples/index.html">Examples</a></section><section class="sidebar-group"><h2>Language</h2><a class="sidebar-link" href="../../language/source-units/index.html">Source units and imports</a><a class="sidebar-link" href="../../language/contract-structure/index.html">Contract structure</a><a class="sidebar-link" href="../../language/types/index.html">Types</a><a class="sidebar-link" href="../../language/value-types/index.html">Value types</a><a class="sidebar-link" href="../../language/reference-types/index.html">Reference and composite types</a><a class="sidebar-link" href="../../language/data-locations/index.html">Data locations and copying</a><a class="sidebar-link" href="../../language/expressions/index.html">Expressions and operators</a><a class="sidebar-link" href="../../language/control-flow/index.html">Statements and control flow</a><a class="sidebar-link" href="../../language/functions/index.html">Functions</a><a class="sidebar-link" href="../../language/globals-and-builtins/index.html">Units, globals, and builtins</a><a class="sidebar-link" href="../../language/jeth-features/index.html">JETH-specific features</a></section><section class="sidebar-group"><h2>Contracts</h2><a class="sidebar-link" href="../inheritance/index.html">Constructors and inheritance</a><a class="sidebar-link" href="../modifiers/index.html">Function modifiers</a><a class="sidebar-link is-active" href="./index.html" aria-current="page">Interfaces and external calls</a><a class="sidebar-link" href="../libraries/index.html">Libraries and using</a><a class="sidebar-link" href="../events-and-errors/index.html">Events, errors, and panics</a></section><section class="sidebar-group"><h2>Internals</h2><a class="sidebar-link" href="../../internals/abi/index.html">Contract ABI specification</a><a class="sidebar-link" href="../../internals/storage-layout/index.html">Storage layout</a><a class="sidebar-link" href="../../internals/compiler-and-tooling/index.html">Compiler, CLI, and tooling</a><a class="sidebar-link" href="../../internals/artifacts/index.html">Contracts and artifacts</a></section><section class="sidebar-group"><h2>Advanced</h2><a class="sidebar-link" href="../../advanced/contract-creation-and-clones/index.html">Contract creation and clones</a><a class="sidebar-link" href="../../advanced/proxies-and-diamonds/index.html">Proxies, beacons, and diamonds</a></section><section class="sidebar-group"><h2>Security</h2><a class="sidebar-link" href="../../security/considerations/index.html">Security considerations</a><a class="sidebar-link" href="../../security/compiler-correctness/index.html">Compiler correctness model</a></section><section class="sidebar-group"><h2>Reference</h2><a class="sidebar-link" href="../../reference/cheatsheet/index.html">Syntax cheatsheet</a><a class="sidebar-link" href="../../reference/differences/index.html">Differences from TypeScript and Solidity</a><a class="sidebar-link" href="../../reference/diagnostics/index.html">Compiler diagnostics</a><a class="sidebar-link" href="../../reference/known-limitations/index.html">Supported features and limitations</a><a class="sidebar-link" href="../../reference/feature-matrix/index.html">Complete feature matrix</a></section><section class="sidebar-group"><h2>Project</h2><a class="sidebar-link" href="../../project/roadmap/index.html">Product roadmap</a><a class="sidebar-link" href="../../project/overview/index.html">Repository overview</a></section><a class="built-by" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></aside>
+    <main class="content-shell">
+      <article class="article"><div class="article-kicker">Contracts</div>
+<h1 id="interfaces-and-external-calls">Interfaces and external calls</h1>
+<p>Interfaces describe contract-to-contract ABI calls. Low-level address calls are available when the callee schema is unknown or raw returndata is required.</p>
+<h2 id="interface-declarations">Interface declarations<a class="heading-anchor" href="#interface-declarations" aria-label="Link to Interface declarations">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">interface</span> Oracle {
+  price(asset: <span class="tok-type">address</span>): <span class="tok-type">View</span>&lt;<span class="tok-type">u256</span>&gt;;
+  decimals(): <span class="tok-type">Pure</span>&lt;<span class="tok-type">u8</span>&gt;;
+  update(data: <span class="tok-type">bytes</span>): <span class="tok-type">Payable</span>&lt;<span class="tok-keyword">void</span>&gt;;
+}</code></pre></div>
+<p>Interface methods have no body, so mutability cannot be inferred. Use the supported interface return wrappers to state <code>pure</code>, <code>view</code>, nonpayable, or payable behavior.</p>
+<p>Interfaces can extend other interfaces. Overloads are allowed when canonical parameter signatures differ. Events and custom errors may also be declared in an interface; they do not contribute to its EIP-165 interface ID.</p>
+<h2 id="selectors-and-interface-ids">Selectors and interface IDs<a class="heading-anchor" href="#selectors-and-interface-ids" aria-label="Link to Selectors and interface IDs">#</a></h2>
+<p>Use a type-qualified member for a function selector:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">let</span> selector: <span class="tok-type">bytes4</span> = Oracle.price.selector;</code></pre></div>
+<p>For a directly declared contract member, <code>ContractName.method.selector</code> and <code>this.method.selector</code> are supported. Internal methods have no ABI selector. An overloaded name is rejected when the source context does not identify exactly one signature.</p>
+<p><code>type(I).interfaceId</code> returns the XOR of the selectors declared directly by interface <code>I</code>:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">interface</span> IERC165 {
+  supportsInterface(id: <span class="tok-type">bytes4</span>): <span class="tok-type">View</span>&lt;<span class="tok-type">bool</span>&gt;;
+}
+
+<span class="tok-keyword">class</span> C {
+  <span class="tok-keyword">get</span> erc165Id(): <span class="tok-type">External</span>&lt;<span class="tok-type">bytes4</span>&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-keyword">type</span>(IERC165).interfaceId;
+  }
+}</code></pre></div>
+<p>As in Solidity, inherited interface methods are excluded from the derived interface&#39;s own <code>interfaceId</code>. Query each layer when implementing an inheritance chain. <code>type(...).interfaceId</code> is valid for interfaces, not contract, enum, or integer types.</p>
+<h2 id="typed-interface-calls">Typed interface calls<a class="heading-anchor" href="#typed-interface-calls" aria-label="Link to Typed interface calls">#</a></h2>
+<p>Convert an address to the interface and call a member:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">get</span> readPrice(oracle: <span class="tok-type">address</span>, asset: <span class="tok-type">address</span>): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+  <span class="tok-keyword">return</span> Oracle(oracle).price(asset);
+}</code></pre></div>
+<p>The compiler emits the canonical selector, ABI-encodes arguments, checks call success, and ABI-decodes the declared result. Contract existence checks follow the call/decode path&#39;s documented behavior.</p>
+<p>Build type-checked calldata without making the call using <code>abi.encodeCall</code>:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">let</span> payload: <span class="tok-type">bytes</span> = <span class="tok-builtin">abi</span>.encodeCall(Oracle.price, [asset]);</code></pre></div>
+<p>The function reference must resolve to one unambiguous ABI signature, and the argument tuple must match that signature.</p>
+<p>Typed calls are external EVM calls. <code>msg.sender</code> in the callee is the calling contract, not the original transaction sender.</p>
+<h2 id="external-self-calls">External self-calls<a class="heading-anchor" href="#external-self-calls" aria-label="Link to External self-calls">#</a></h2>
+<p>Calling an exposed member through <code>this</code> is a message call to the current contract. It changes the call frame and is not equivalent to an internal call. Use an internal helper when shared code should preserve the current frame.</p>
+<h2 id="low-level-calls">Low-level calls<a class="heading-anchor" href="#low-level-calls" aria-label="Link to Low-level calls">#</a></h2>
+<p>Addresses support checked low-level call forms:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">let</span> result: <span class="tok-type">bytes</span> = target.call({
+  data: payload,
+  value: amount,
+  gas: gasLimit,
+  success: { condition: <span class="tok-keyword">this</span>.allowed, <span class="tok-builtin">revert</span>: <span class="tok-string">&quot;call failed&quot;</span> },
+});</code></pre></div>
+<p>The exact option set depends on <code>call</code> versus <code>staticcall</code>. A static call cannot send value or perform state changes in the callee.</p>
+<p><code>tryCall</code> and <code>tryStaticcall</code> expose raw success and returndata without automatic failure bubbling:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">let</span> [ok, result]: [<span class="tok-type">bool</span>, <span class="tok-type">bytes</span>] = target.tryCall({ data: payload });
+<span class="tok-keyword">if</span> (!ok) {
+  <span class="tok-builtin">revertWith</span>(result);
+}</code></pre></div>
+<p>Always handle both the success flag and returndata. A successful call can return malformed bytes.</p>
+<h2 id="decoding-returndata">Decoding returndata<a class="heading-anchor" href="#decoding-returndata" aria-label="Link to Decoding returndata">#</a></h2>
+<p>Decode a successful result explicitly:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">let</span> value: <span class="tok-type">u256</span> = result.decode(<span class="tok-type">u256</span>);
+<span class="tok-keyword">let</span> [amount, owner]: [<span class="tok-type">u256</span>, <span class="tok-type">address</span>] = result.decode([<span class="tok-type">u256</span>, <span class="tok-type">address</span>]);</code></pre></div>
+<p>Supported call options can request decoding directly:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">let</span> value: <span class="tok-type">u256</span> = target.staticcall({
+  data: <span class="tok-builtin">abi</span>.encodeWithSignature(<span class="tok-string">&quot;read()&quot;</span>),
+  success: { condition: <span class="tok-keyword">this</span>.allowed, <span class="tok-builtin">revert</span>: <span class="tok-string">&quot;read failed&quot;</span> },
+  decode: <span class="tok-type">u256</span>,
+});</code></pre></div>
+<p>ABI decode validates offsets, lengths, and value words for the requested type.</p>
+<h2 id="try-catch"><code>try</code>/<code>catch</code><a class="heading-anchor" href="#try-catch" aria-label="Link to `try`/`catch`">#</a></h2>
+<p>Use <code>try</code>/<code>catch</code> when the syntax and return shape are clearer than manual raw data handling. Catch clauses can inspect supported <code>Error(string)</code>, panic, and raw failure forms.</p>
+<h2 id="revert-bubbling">Revert bubbling<a class="heading-anchor" href="#revert-bubbling" aria-label="Link to Revert bubbling">#</a></h2>
+<p><code>revertWith(data)</code> reverts with the exact bytes returned by a failed call. This preserves custom errors and nonstandard revert payloads.</p>
+<h2 id="call-security">Call security<a class="heading-anchor" href="#call-security" aria-label="Link to Call security">#</a></h2>
+<p>Any external call can transfer control to untrusted code. The callee can:</p>
+<ul><li>reenter the caller;</li><li>consume gas;</li><li>return malformed data;</li><li>return success with an unexpected semantic result;</li><li>deliberately revert with crafted bytes;</li><li>call other contracts before returning.</li></ul>
+<p>Update critical state before interaction where possible, validate returned values, use a reentrancy guard where appropriate, and do not use <code>tx.origin</code> for authorization.</p><div class="article-footer"><span>JETH language documentation</span><a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></div><nav class="pagination" aria-label="Documentation pages"><a class="pagination-link previous" href="../modifiers/index.html"><span>Previous</span><strong>Function modifiers</strong></a><a class="pagination-link next" href="../libraries/index.html"><span>Next</span><strong>Libraries and using</strong></a></nav></article>
+      <nav class="page-toc" aria-label="On this page"><div class="toc-title">On this page</div><a class="toc-link depth-2" href="#interface-declarations">Interface declarations</a><a class="toc-link depth-2" href="#selectors-and-interface-ids">Selectors and interface IDs</a><a class="toc-link depth-2" href="#typed-interface-calls">Typed interface calls</a><a class="toc-link depth-2" href="#external-self-calls">External self-calls</a><a class="toc-link depth-2" href="#low-level-calls">Low-level calls</a><a class="toc-link depth-2" href="#decoding-returndata">Decoding returndata</a><a class="toc-link depth-2" href="#try-catch">try/catch</a><a class="toc-link depth-2" href="#revert-bubbling">Revert bubbling</a><a class="toc-link depth-2" href="#call-security">Call security</a></nav>
+    </main>
+  </div>
+  <div class="search-modal" hidden><button class="search-backdrop" type="button" aria-label="Close search"></button><div class="search-panel" role="dialog" aria-modal="true" aria-label="Search documentation"><div class="search-box"><span>⌕</span><input class="search-input" type="search" placeholder="Search JETH guides..." autocomplete="off"><button class="search-close" type="button">Esc</button></div><div class="search-results"><div class="search-empty">Start typing to search the book.</div></div></div></div>
+  <script src="../../assets/search-index.js"></script>
+  <script src="../../assets/book.js"></script>
+</body>
+</html>

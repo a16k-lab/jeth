@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Types in the JETH language documentation.">
+  <meta name="theme-color" content="#11131a">
+  <meta property="og:image" content="../../assets/a16k-avatar-logo.png">
+  <title>Types | JETH</title>
+  <link rel="icon" href="../../assets/jeth-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../../assets/book.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../../index.html" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span></a>
+    <nav class="top-nav" aria-label="Primary"><a class="is-active" href="../../index.html">Guides</a><a href="../../internals/compiler-and-tooling/index.html">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
+    <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
+  </header>
+  <div class="pre-release"><span>Pre-release</span> JETH is under active compiler and security review.</div>
+  <div class="book-shell">
+    <aside class="sidebar"><div class="sidebar-title">Guides</div><section class="sidebar-group"><h2>Guides</h2><a class="sidebar-link" href="../../index.html">JETH Documentation</a><a class="sidebar-link" href="../../guides/getting-started/index.html">Getting started</a><a class="sidebar-link" href="../../guides/language-tour/index.html">Language tour</a><a class="sidebar-link" href="../../guides/examples/index.html">Examples</a></section><section class="sidebar-group"><h2>Language</h2><a class="sidebar-link" href="../source-units/index.html">Source units and imports</a><a class="sidebar-link" href="../contract-structure/index.html">Contract structure</a><a class="sidebar-link is-active" href="./index.html" aria-current="page">Types</a><a class="sidebar-link" href="../value-types/index.html">Value types</a><a class="sidebar-link" href="../reference-types/index.html">Reference and composite types</a><a class="sidebar-link" href="../data-locations/index.html">Data locations and copying</a><a class="sidebar-link" href="../expressions/index.html">Expressions and operators</a><a class="sidebar-link" href="../control-flow/index.html">Statements and control flow</a><a class="sidebar-link" href="../functions/index.html">Functions</a><a class="sidebar-link" href="../globals-and-builtins/index.html">Units, globals, and builtins</a><a class="sidebar-link" href="../jeth-features/index.html">JETH-specific features</a></section><section class="sidebar-group"><h2>Contracts</h2><a class="sidebar-link" href="../../contracts/inheritance/index.html">Constructors and inheritance</a><a class="sidebar-link" href="../../contracts/modifiers/index.html">Function modifiers</a><a class="sidebar-link" href="../../contracts/interfaces-and-calls/index.html">Interfaces and external calls</a><a class="sidebar-link" href="../../contracts/libraries/index.html">Libraries and using</a><a class="sidebar-link" href="../../contracts/events-and-errors/index.html">Events, errors, and panics</a></section><section class="sidebar-group"><h2>Internals</h2><a class="sidebar-link" href="../../internals/abi/index.html">Contract ABI specification</a><a class="sidebar-link" href="../../internals/storage-layout/index.html">Storage layout</a><a class="sidebar-link" href="../../internals/compiler-and-tooling/index.html">Compiler, CLI, and tooling</a><a class="sidebar-link" href="../../internals/artifacts/index.html">Contracts and artifacts</a></section><section class="sidebar-group"><h2>Advanced</h2><a class="sidebar-link" href="../../advanced/contract-creation-and-clones/index.html">Contract creation and clones</a><a class="sidebar-link" href="../../advanced/proxies-and-diamonds/index.html">Proxies, beacons, and diamonds</a></section><section class="sidebar-group"><h2>Security</h2><a class="sidebar-link" href="../../security/considerations/index.html">Security considerations</a><a class="sidebar-link" href="../../security/compiler-correctness/index.html">Compiler correctness model</a></section><section class="sidebar-group"><h2>Reference</h2><a class="sidebar-link" href="../../reference/cheatsheet/index.html">Syntax cheatsheet</a><a class="sidebar-link" href="../../reference/differences/index.html">Differences from TypeScript and Solidity</a><a class="sidebar-link" href="../../reference/diagnostics/index.html">Compiler diagnostics</a><a class="sidebar-link" href="../../reference/known-limitations/index.html">Supported features and limitations</a><a class="sidebar-link" href="../../reference/feature-matrix/index.html">Complete feature matrix</a></section><section class="sidebar-group"><h2>Project</h2><a class="sidebar-link" href="../../project/roadmap/index.html">Product roadmap</a><a class="sidebar-link" href="../../project/overview/index.html">Repository overview</a></section><a class="built-by" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></aside>
+    <main class="content-shell">
+      <article class="article"><div class="article-kicker">Language</div>
+<h1 id="types">Types</h1>
+<p>JETH is statically typed. Every value has a type known during compilation, and the type determines its valid operations, storage representation, ABI encoding, conversion rules, and default value.</p>
+<p>This section is split into three detailed chapters:</p>
+<ol><li><a href="../value-types/index.html">Value types</a> covers integers, booleans, addresses, fixed bytes, enums, brands, and function references.</li><li><a href="../reference-types/index.html">Reference and composite types</a> covers dynamic bytes/string, arrays, mappings, structs, nested composites, and tuples.</li><li><a href="../data-locations/index.html">Data locations and copying</a> covers storage, calldata, memory, aliasing, deep copies, dynamic cleanup, and <code>delete</code>.</li></ol>
+<h2 id="type-families">Type families<a class="heading-anchor" href="#type-families" aria-label="Link to Type families">#</a></h2>
+<div class="table-wrap"><table><thead><tr><th>Family</th><th>JETH syntax</th><th>Main representation</th></tr></thead><tbody><tr><td>Unsigned integer</td><td><code>u8</code> through <code>u256</code></td><td>EVM word, checked arithmetic</td></tr><tr><td>Signed integer</td><td><code>i8</code> through <code>i256</code></td><td>Two&#39;s-complement EVM word</td></tr><tr><td>Boolean</td><td><code>bool</code></td><td>Strict zero/one ABI word</td></tr><tr><td>Address</td><td><code>address</code></td><td>160-bit value</td></tr><tr><td>Fixed bytes</td><td><code>bytes1</code> through <code>bytes32</code></td><td>Left-aligned byte sequence</td></tr><tr><td>Dynamic bytes</td><td><code>bytes</code></td><td>Dynamic ABI/storage/memory value</td></tr><tr><td>String</td><td><code>string</code></td><td>UTF-8 byte sequence</td></tr><tr><td>Enum</td><td><code>enum Name { ... }</code></td><td><code>uint8</code>-backed nominal type</td></tr><tr><td>Brand</td><td><code>type X = Brand&lt;Base&gt;</code></td><td>Erased nominal value type</td></tr><tr><td>Dynamic array</td><td><code>T[]</code></td><td>Location-dependent reference value</td></tr><tr><td>Fixed array</td><td><code>Arr&lt;T, N&gt;</code></td><td>Inline or aggregate value</td></tr><tr><td>Mapping</td><td><code>mapping&lt;K, V&gt;</code></td><td>Storage-only hashed association</td></tr><tr><td>Struct</td><td><code>type P = { ... }</code></td><td>Ordered fields/ABI tuple</td></tr><tr><td>Tuple</td><td><code>[A, B]</code></td><td>Multiple values</td></tr><tr><td>Function reference</td><td>inferred/supported signature</td><td>Internal callable reference</td></tr></tbody></table></div>
+<h2 id="no-implicit-dynamic-typing">No implicit dynamic typing<a class="heading-anchor" href="#no-implicit-dynamic-typing" aria-label="Link to No implicit dynamic typing">#</a></h2>
+<p>There is no <code>any</code>, runtime union, implicit number/string conversion, truthiness, <code>undefined</code>, or <code>null</code>. Conversions must be permitted by the source and target types and are often explicit.</p>
+<h2 id="worked-type-example">Worked type example<a class="heading-anchor" href="#worked-type-example" aria-label="Link to Worked type example">#</a></h2>
+<p>This contract combines a nominal identifier, a struct, a dynamic array, a fixed-size array, and a storage mapping:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">type</span> UserId = <span class="tok-type">Brand</span>&lt;<span class="tok-type">u256</span>&gt;;
+
+<span class="tok-keyword">type</span> Profile = {
+  id: UserId;
+  owner: <span class="tok-type">address</span>;
+  scores: <span class="tok-type">u256</span>[];
+  flags: <span class="tok-type">Arr</span>&lt;<span class="tok-type">bool</span>, <span class="tok-number">2</span>&gt;;
+};
+
+<span class="tok-keyword">class</span> Profiles {
+  owners: <span class="tok-type">mapping</span>&lt;UserId, <span class="tok-type">address</span>&gt;;
+
+  register(id: UserId, owner: <span class="tok-type">address</span>): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-builtin">require</span>(owner <span class="tok-operator">!=</span> <span class="tok-type">address</span>(<span class="tok-number">0n</span>), <span class="tok-string">&quot;zero owner&quot;</span>);
+    <span class="tok-keyword">this</span>.owners[id] = owner;
+  }
+
+  <span class="tok-keyword">get</span> ownerOf(id: UserId): <span class="tok-type">External</span>&lt;<span class="tok-type">address</span>&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.owners[id];
+  }
+}</code></pre></div>
+<p><code>UserId</code> is represented as its <code>u256</code> base in the ABI and EVM, but it remains a distinct source type. <code>Profile</code> is a tuple in the ABI. Its <code>scores</code> field makes the complete struct dynamically encoded. <code>owners</code> is storage-only and therefore cannot be an external parameter or return value.</p>
+<h2 id="shape-and-location">Shape and location<a class="heading-anchor" href="#shape-and-location" aria-label="Link to Shape and location">#</a></h2>
+<p>Two values with the same source type can use different runtime representations in storage, calldata, and memory. Compiler support is therefore sometimes consumer-specific. For example, returning a nested aggregate and copying it to storage are different operations with different safety requirements.</p>
+<p>Continue with <a href="../value-types/index.html">value types</a>.</p><div class="article-footer"><span>JETH language documentation</span><a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></div><nav class="pagination" aria-label="Documentation pages"><a class="pagination-link previous" href="../contract-structure/index.html"><span>Previous</span><strong>Contract structure</strong></a><a class="pagination-link next" href="../value-types/index.html"><span>Next</span><strong>Value types</strong></a></nav></article>
+      <nav class="page-toc" aria-label="On this page"><div class="toc-title">On this page</div><a class="toc-link depth-2" href="#type-families">Type families</a><a class="toc-link depth-2" href="#no-implicit-dynamic-typing">No implicit dynamic typing</a><a class="toc-link depth-2" href="#worked-type-example">Worked type example</a><a class="toc-link depth-2" href="#shape-and-location">Shape and location</a></nav>
+    </main>
+  </div>
+  <div class="search-modal" hidden><button class="search-backdrop" type="button" aria-label="Close search"></button><div class="search-panel" role="dialog" aria-modal="true" aria-label="Search documentation"><div class="search-box"><span>⌕</span><input class="search-input" type="search" placeholder="Search JETH guides..." autocomplete="off"><button class="search-close" type="button">Esc</button></div><div class="search-results"><div class="search-empty">Start typing to search the book.</div></div></div></div>
+  <script src="../../assets/search-index.js"></script>
+  <script src="../../assets/book.js"></script>
+</body>
+</html>

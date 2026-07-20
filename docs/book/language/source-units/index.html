@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Source units and imports in the JETH language documentation.">
+  <meta name="theme-color" content="#11131a">
+  <meta property="og:image" content="../../assets/a16k-avatar-logo.png">
+  <title>Source units and imports | JETH</title>
+  <link rel="icon" href="../../assets/jeth-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../../assets/book.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../../index.html" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span></a>
+    <nav class="top-nav" aria-label="Primary"><a class="is-active" href="../../index.html">Guides</a><a href="../../internals/compiler-and-tooling/index.html">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
+    <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
+  </header>
+  <div class="pre-release"><span>Pre-release</span> JETH is under active compiler and security review.</div>
+  <div class="book-shell">
+    <aside class="sidebar"><div class="sidebar-title">Guides</div><section class="sidebar-group"><h2>Guides</h2><a class="sidebar-link" href="../../index.html">JETH Documentation</a><a class="sidebar-link" href="../../guides/getting-started/index.html">Getting started</a><a class="sidebar-link" href="../../guides/language-tour/index.html">Language tour</a><a class="sidebar-link" href="../../guides/examples/index.html">Examples</a></section><section class="sidebar-group"><h2>Language</h2><a class="sidebar-link is-active" href="./index.html" aria-current="page">Source units and imports</a><a class="sidebar-link" href="../contract-structure/index.html">Contract structure</a><a class="sidebar-link" href="../types/index.html">Types</a><a class="sidebar-link" href="../value-types/index.html">Value types</a><a class="sidebar-link" href="../reference-types/index.html">Reference and composite types</a><a class="sidebar-link" href="../data-locations/index.html">Data locations and copying</a><a class="sidebar-link" href="../expressions/index.html">Expressions and operators</a><a class="sidebar-link" href="../control-flow/index.html">Statements and control flow</a><a class="sidebar-link" href="../functions/index.html">Functions</a><a class="sidebar-link" href="../globals-and-builtins/index.html">Units, globals, and builtins</a><a class="sidebar-link" href="../jeth-features/index.html">JETH-specific features</a></section><section class="sidebar-group"><h2>Contracts</h2><a class="sidebar-link" href="../../contracts/inheritance/index.html">Constructors and inheritance</a><a class="sidebar-link" href="../../contracts/modifiers/index.html">Function modifiers</a><a class="sidebar-link" href="../../contracts/interfaces-and-calls/index.html">Interfaces and external calls</a><a class="sidebar-link" href="../../contracts/libraries/index.html">Libraries and using</a><a class="sidebar-link" href="../../contracts/events-and-errors/index.html">Events, errors, and panics</a></section><section class="sidebar-group"><h2>Internals</h2><a class="sidebar-link" href="../../internals/abi/index.html">Contract ABI specification</a><a class="sidebar-link" href="../../internals/storage-layout/index.html">Storage layout</a><a class="sidebar-link" href="../../internals/compiler-and-tooling/index.html">Compiler, CLI, and tooling</a><a class="sidebar-link" href="../../internals/artifacts/index.html">Contracts and artifacts</a></section><section class="sidebar-group"><h2>Advanced</h2><a class="sidebar-link" href="../../advanced/contract-creation-and-clones/index.html">Contract creation and clones</a><a class="sidebar-link" href="../../advanced/proxies-and-diamonds/index.html">Proxies, beacons, and diamonds</a></section><section class="sidebar-group"><h2>Security</h2><a class="sidebar-link" href="../../security/considerations/index.html">Security considerations</a><a class="sidebar-link" href="../../security/compiler-correctness/index.html">Compiler correctness model</a></section><section class="sidebar-group"><h2>Reference</h2><a class="sidebar-link" href="../../reference/cheatsheet/index.html">Syntax cheatsheet</a><a class="sidebar-link" href="../../reference/differences/index.html">Differences from TypeScript and Solidity</a><a class="sidebar-link" href="../../reference/diagnostics/index.html">Compiler diagnostics</a><a class="sidebar-link" href="../../reference/known-limitations/index.html">Supported features and limitations</a><a class="sidebar-link" href="../../reference/feature-matrix/index.html">Complete feature matrix</a></section><section class="sidebar-group"><h2>Project</h2><a class="sidebar-link" href="../../project/roadmap/index.html">Product roadmap</a><a class="sidebar-link" href="../../project/overview/index.html">Repository overview</a></section><a class="built-by" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></aside>
+    <main class="content-shell">
+      <article class="article"><div class="article-kicker">Language</div>
+<h1 id="source-units-and-imports">Source units and imports</h1>
+<p>A JETH source unit is a UTF-8 text file, conventionally ending in <code>.jeth</code>. JETH uses the TypeScript parser to obtain a syntax tree, then validates a strict on-chain subset. Being valid TypeScript syntax does not make a construct valid JETH.</p>
+<h2 id="top-level-declarations">Top-level declarations<a class="heading-anchor" href="#top-level-declarations" aria-label="Link to Top-level declarations">#</a></h2>
+<p>A source unit can contain:</p>
+<ul><li>imports and exports;</li><li>struct-like type aliases;</li><li>branded value-type aliases;</li><li>event and error type aliases;</li><li>enums;</li><li>interfaces;</li><li>abstract and deployable classes;</li><li>static classes used as libraries.</li></ul>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">import</span> { Ownable } <span class="tok-keyword">from</span> <span class="tok-string">&quot;./Ownable.jeth&quot;</span>;
+<span class="tok-keyword">import</span> { MathLib as Math } <span class="tok-keyword">from</span> <span class="tok-string">&quot;./Math.jeth&quot;</span>;
+
+<span class="tok-keyword">export</span> <span class="tok-keyword">type</span> Position = {
+  owner: <span class="tok-type">address</span>;
+  amount: <span class="tok-type">u256</span>;
+};
+
+<span class="tok-keyword">export</span> <span class="tok-keyword">enum</span> Status {
+  Pending,
+  Active,
+  Closed,
+}
+
+<span class="tok-keyword">export</span> <span class="tok-keyword">class</span> Vault <span class="tok-keyword">extends</span> Ownable {
+  <span class="tok-comment">// Contract members.</span>
+}</code></pre></div>
+<h2 id="imports">Imports<a class="heading-anchor" href="#imports" aria-label="Link to Imports">#</a></h2>
+<p>JETH supports named imports from other JETH source units. Imports are resolved by the compiler&#39;s source bundle rather than by Node.js at runtime. Imported declarations participate in type checking, inheritance, interface conformance, library resolution, and selector collision checks.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">import</span> { Base, TokenId } <span class="tok-keyword">from</span> <span class="tok-string">&quot;./base.jeth&quot;</span>;
+<span class="tok-keyword">import</span> { Base as Parent } <span class="tok-keyword">from</span> <span class="tok-string">&quot;./other.jeth&quot;</span>;</code></pre></div>
+<p>Use aliases when two modules export the same source name. Duplicate declarations that remain ambiguous are compile-time errors.</p>
+<p>The current command-line interface accepts one entry file. The compiler API can receive a source map for multi-file builds. A public project configuration and filesystem import resolver are part of the CLI roadmap.</p>
+<h2 id="exports">Exports<a class="heading-anchor" href="#exports" aria-label="Link to Exports">#</a></h2>
+<p>Use <code>export</code> on declarations intended for another source unit:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">export</span> <span class="tok-keyword">type</span> UserId = <span class="tok-type">Brand</span>&lt;<span class="tok-type">u256</span>&gt;;
+
+<span class="tok-keyword">export</span> <span class="tok-keyword">abstract</span> <span class="tok-keyword">class</span> Owned {
+  owner: <span class="tok-type">address</span>;
+}</code></pre></div>
+<p>An imported contract or abstract class is not automatically deployed. Artifact production follows deployable leaf classes and library routes in the complete compilation unit.</p>
+<h2 id="comments">Comments<a class="heading-anchor" href="#comments" aria-label="Link to Comments">#</a></h2>
+<p>Line and block comments use TypeScript syntax:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-comment">// One line.</span>
+
+<span class="tok-comment">/*
+ * Several lines.
+ */</span></code></pre></div>
+<p>NatSpec-compatible artifact documentation is not yet a stable JETH output. Do not assume comments are currently included in ABI or metadata artifacts.</p>
+<h2 id="native-syntax-only">Native syntax only<a class="heading-anchor" href="#native-syntax-only" aria-label="Link to Native syntax only">#</a></h2>
+<p>JETH previously used structural decorators such as <code>@contract</code>, <code>@state</code>, and <code>@external</code>. Those forms are removed. Modern JETH uses native declarations:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> C {
+  value: <span class="tok-type">u256</span>;
+
+  set(value: <span class="tok-type">u256</span>): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-keyword">this</span>.value = value;
+  }
+}</code></pre></div>
+<p>The decorators that remain are decorators with real language meaning and no native TypeScript spelling, including <code>@virtual</code>, <code>@override</code>, <code>@modifier</code>, user modifier applications, <code>@using</code>, <code>@nonReentrant</code>, and proxy/diamond declarations.</p>
+<h2 id="file-and-declaration-names">File and declaration names<a class="heading-anchor" href="#file-and-declaration-names" aria-label="Link to File and declaration names">#</a></h2>
+<p>The compiler tracks declarations by source name and rejects duplicate or ambiguous declarations. Reserved language, EVM, and compiler names cannot be used as declarations where they would conflict with syntax or generated behavior.</p>
+<p>One source unit can emit multiple contract and library artifacts. Consumers should select artifacts by name, not assume the file name is the only contract name.</p>
+<h2 id="permanently-excluded-source-behavior">Permanently excluded source behavior<a class="heading-anchor" href="#permanently-excluded-source-behavior" aria-label="Link to Permanently excluded source behavior">#</a></h2>
+<p>JETH does not provide runtime JavaScript or TypeScript. Constructs such as <code>number</code>, <code>any</code>, async/await, promises, generators, closures, regular expressions, <code>eval</code>, prototypes, <code>typeof</code>, <code>instanceof</code>, and implicit coercion have no JETH runtime meaning and are rejected.</p><div class="article-footer"><span>JETH language documentation</span><a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></div><nav class="pagination" aria-label="Documentation pages"><a class="pagination-link previous" href="../../guides/examples/index.html"><span>Previous</span><strong>Examples</strong></a><a class="pagination-link next" href="../contract-structure/index.html"><span>Next</span><strong>Contract structure</strong></a></nav></article>
+      <nav class="page-toc" aria-label="On this page"><div class="toc-title">On this page</div><a class="toc-link depth-2" href="#top-level-declarations">Top-level declarations</a><a class="toc-link depth-2" href="#imports">Imports</a><a class="toc-link depth-2" href="#exports">Exports</a><a class="toc-link depth-2" href="#comments">Comments</a><a class="toc-link depth-2" href="#native-syntax-only">Native syntax only</a><a class="toc-link depth-2" href="#file-and-declaration-names">File and declaration names</a><a class="toc-link depth-2" href="#permanently-excluded-source-behavior">Permanently excluded source behavior</a></nav>
+    </main>
+  </div>
+  <div class="search-modal" hidden><button class="search-backdrop" type="button" aria-label="Close search"></button><div class="search-panel" role="dialog" aria-modal="true" aria-label="Search documentation"><div class="search-box"><span>⌕</span><input class="search-input" type="search" placeholder="Search JETH guides..." autocomplete="off"><button class="search-close" type="button">Esc</button></div><div class="search-results"><div class="search-empty">Start typing to search the book.</div></div></div></div>
+  <script src="../../assets/search-index.js"></script>
+  <script src="../../assets/book.js"></script>
+</body>
+</html>

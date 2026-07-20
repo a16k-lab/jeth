@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Value types in the JETH language documentation.">
+  <meta name="theme-color" content="#11131a">
+  <meta property="og:image" content="../../assets/a16k-avatar-logo.png">
+  <title>Value types | JETH</title>
+  <link rel="icon" href="../../assets/jeth-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../../assets/book.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../../index.html" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span></a>
+    <nav class="top-nav" aria-label="Primary"><a class="is-active" href="../../index.html">Guides</a><a href="../../internals/compiler-and-tooling/index.html">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
+    <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
+  </header>
+  <div class="pre-release"><span>Pre-release</span> JETH is under active compiler and security review.</div>
+  <div class="book-shell">
+    <aside class="sidebar"><div class="sidebar-title">Guides</div><section class="sidebar-group"><h2>Guides</h2><a class="sidebar-link" href="../../index.html">JETH Documentation</a><a class="sidebar-link" href="../../guides/getting-started/index.html">Getting started</a><a class="sidebar-link" href="../../guides/language-tour/index.html">Language tour</a><a class="sidebar-link" href="../../guides/examples/index.html">Examples</a></section><section class="sidebar-group"><h2>Language</h2><a class="sidebar-link" href="../source-units/index.html">Source units and imports</a><a class="sidebar-link" href="../contract-structure/index.html">Contract structure</a><a class="sidebar-link" href="../types/index.html">Types</a><a class="sidebar-link is-active" href="./index.html" aria-current="page">Value types</a><a class="sidebar-link" href="../reference-types/index.html">Reference and composite types</a><a class="sidebar-link" href="../data-locations/index.html">Data locations and copying</a><a class="sidebar-link" href="../expressions/index.html">Expressions and operators</a><a class="sidebar-link" href="../control-flow/index.html">Statements and control flow</a><a class="sidebar-link" href="../functions/index.html">Functions</a><a class="sidebar-link" href="../globals-and-builtins/index.html">Units, globals, and builtins</a><a class="sidebar-link" href="../jeth-features/index.html">JETH-specific features</a></section><section class="sidebar-group"><h2>Contracts</h2><a class="sidebar-link" href="../../contracts/inheritance/index.html">Constructors and inheritance</a><a class="sidebar-link" href="../../contracts/modifiers/index.html">Function modifiers</a><a class="sidebar-link" href="../../contracts/interfaces-and-calls/index.html">Interfaces and external calls</a><a class="sidebar-link" href="../../contracts/libraries/index.html">Libraries and using</a><a class="sidebar-link" href="../../contracts/events-and-errors/index.html">Events, errors, and panics</a></section><section class="sidebar-group"><h2>Internals</h2><a class="sidebar-link" href="../../internals/abi/index.html">Contract ABI specification</a><a class="sidebar-link" href="../../internals/storage-layout/index.html">Storage layout</a><a class="sidebar-link" href="../../internals/compiler-and-tooling/index.html">Compiler, CLI, and tooling</a><a class="sidebar-link" href="../../internals/artifacts/index.html">Contracts and artifacts</a></section><section class="sidebar-group"><h2>Advanced</h2><a class="sidebar-link" href="../../advanced/contract-creation-and-clones/index.html">Contract creation and clones</a><a class="sidebar-link" href="../../advanced/proxies-and-diamonds/index.html">Proxies, beacons, and diamonds</a></section><section class="sidebar-group"><h2>Security</h2><a class="sidebar-link" href="../../security/considerations/index.html">Security considerations</a><a class="sidebar-link" href="../../security/compiler-correctness/index.html">Compiler correctness model</a></section><section class="sidebar-group"><h2>Reference</h2><a class="sidebar-link" href="../../reference/cheatsheet/index.html">Syntax cheatsheet</a><a class="sidebar-link" href="../../reference/differences/index.html">Differences from TypeScript and Solidity</a><a class="sidebar-link" href="../../reference/diagnostics/index.html">Compiler diagnostics</a><a class="sidebar-link" href="../../reference/known-limitations/index.html">Supported features and limitations</a><a class="sidebar-link" href="../../reference/feature-matrix/index.html">Complete feature matrix</a></section><section class="sidebar-group"><h2>Project</h2><a class="sidebar-link" href="../../project/roadmap/index.html">Product roadmap</a><a class="sidebar-link" href="../../project/overview/index.html">Repository overview</a></section><a class="built-by" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></aside>
+    <main class="content-shell">
+      <article class="article"><div class="article-kicker">Language</div>
+<h1 id="value-types">Value types</h1>
+<p>Value types fit in one EVM word and are copied when assigned or passed. They do not have an explicit data-location annotation.</p>
+<h2 id="unsigned-integers">Unsigned integers<a class="heading-anchor" href="#unsigned-integers" aria-label="Link to Unsigned integers">#</a></h2>
+<p>Unsigned integer types are written <code>u8</code>, <code>u16</code>, and so on through <code>u256</code>, in multiples of eight bits.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">let</span> small: <span class="tok-type">u8</span> = <span class="tok-number">255n</span>;
+<span class="tok-keyword">let</span> word: <span class="tok-type">u256</span> = <span class="tok-number">1n</span> <span class="tok-operator">&lt;&lt;</span> <span class="tok-number">200n</span>;</code></pre></div>
+<p>The range of <code>uN</code> is <code>0</code> through <code>2^N - 1</code>. Arithmetic is checked by default. An overflow or underflow reverts with <code>Panic(0x11)</code>.</p>
+<h2 id="signed-integers">Signed integers<a class="heading-anchor" href="#signed-integers" aria-label="Link to Signed integers">#</a></h2>
+<p>Signed integer types are written <code>i8</code> through <code>i256</code>, also in multiples of eight bits. They use two&#39;s-complement EVM representation.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">let</span> delta: <span class="tok-type">i64</span> = -<span class="tok-number">12n</span>;
+<span class="tok-keyword">let</span> limit: <span class="tok-type">i256</span> = <span class="tok-keyword">type</span>(<span class="tok-type">i256</span>).max;</code></pre></div>
+<p>The range of <code>iN</code> is <code>-2^(N-1)</code> through <code>2^(N-1) - 1</code>. Division of the minimum signed value by <code>-1</code> overflows in checked mode.</p>
+<h2 id="integer-literals">Integer literals<a class="heading-anchor" href="#integer-literals" aria-label="Link to Integer literals">#</a></h2>
+<p>Integer literals use TypeScript BigInt spelling:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">let</span> decimal: <span class="tok-type">u256</span> = <span class="tok-number">1000n</span>;
+<span class="tok-keyword">let</span> hexadecimal: <span class="tok-type">u256</span> = <span class="tok-number">0xffn</span>;</code></pre></div>
+<p>Plain JavaScript number literals such as <code>1</code> are rejected. Constants are folded with exact rational behavior, so intermediate constant division is not prematurely truncated.</p>
+<p>Numeric separators are allowed only in valid literal positions. Address-shaped hex literals are subject to EIP-55 rules.</p>
+<h2 id="boolean">Boolean<a class="heading-anchor" href="#boolean" aria-label="Link to Boolean">#</a></h2>
+<p><code>bool</code> has values <code>true</code> and <code>false</code>. Conditions require a boolean; integers do not coerce to booleans.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">if</span> (amount <span class="tok-operator">!=</span> <span class="tok-number">0n</span>) {
+  <span class="tok-comment">// ...</span>
+}</code></pre></div>
+<p>ABI decoding rejects dirty boolean words rather than treating arbitrary nonzero values as true.</p>
+<h2 id="address">Address<a class="heading-anchor" href="#address" aria-label="Link to Address">#</a></h2>
+<p><code>address</code> represents a 160-bit EVM address.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">let</span> zero: <span class="tok-type">address</span> = <span class="tok-type">address</span>(<span class="tok-number">0n</span>);
+<span class="tok-keyword">let</span> self: <span class="tok-type">address</span> = <span class="tok-type">address</span>(<span class="tok-keyword">this</span>);
+<span class="tok-keyword">let</span> caller: <span class="tok-type">address</span> = <span class="tok-builtin">msg</span>.sender;</code></pre></div>
+<p>Address equality and ordering are unsigned. Arithmetic on addresses is rejected. Conversions between <code>address</code> and <code>u160</code> are explicit. <code>bytes20</code> conversions use the Solidity-compatible alignment rule.</p>
+<p><code>payable(addr)</code> marks an address as payable for the applicable call path. Payable and nonpayable address forms use the same ABI word.</p>
+<p>Address members include supported forms of <code>.balance</code>, <code>.code</code>, <code>.codehash</code>, low-level calls, typed interface conversion, and contract checks.</p>
+<h2 id="fixed-size-bytes">Fixed-size bytes<a class="heading-anchor" href="#fixed-size-bytes" aria-label="Link to Fixed-size bytes">#</a></h2>
+<p><code>bytes1</code> through <code>bytes32</code> hold fixed byte sequences. ABI and storage values are left-aligned within the 32-byte word.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">let</span> selector: <span class="tok-type">bytes4</span> = <span class="tok-type">bytes4</span>(<span class="tok-number">0x12345678n</span>);
+<span class="tok-keyword">let</span> digest: <span class="tok-type">bytes32</span> = <span class="tok-builtin">keccak256</span>(data);</code></pre></div>
+<p>Fixed bytes support equality, ordering, bitwise operations, shifts, supported casts, and byte indexing where applicable.</p>
+<h2 id="enums">Enums<a class="heading-anchor" href="#enums" aria-label="Link to Enums">#</a></h2>
+<p>Enums use a one-byte <code>uint8</code> representation and ABI type.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">enum</span> State {
+  Pending,
+  Active,
+  Closed,
+}
+
+<span class="tok-keyword">let</span> current: State = State.Pending;</code></pre></div>
+<p>Members are numbered from zero in declaration order. Explicit conversion from an out-of-range integer reverts with <code>Panic(0x21)</code>. An enum can have at most the representable supported member count.</p>
+<h2 id="branded-value-types">Branded value types<a class="heading-anchor" href="#branded-value-types" aria-label="Link to Branded value types">#</a></h2>
+<p><code>Brand&lt;Base&gt;</code> creates a nominal value type over a value type:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">type</span> TokenId = <span class="tok-type">Brand</span>&lt;<span class="tok-type">u256</span>&gt;;
+<span class="tok-keyword">type</span> Wei = <span class="tok-type">Brand</span>&lt;<span class="tok-type">u256</span>&gt;;
+
+<span class="tok-keyword">let</span> id: TokenId = TokenId(<span class="tok-number">7n</span>);
+<span class="tok-keyword">let</span> raw: <span class="tok-type">u256</span> = <span class="tok-type">u256</span>(id);</code></pre></div>
+<p>Brands are erased for storage, ABI, selectors, and code generation. Their purpose is compile-time separation. A <code>TokenId</code>, a <code>Wei</code>, and a plain <code>u256</code> are not implicitly interchangeable.</p>
+<p>Operations over two values of the same numeric brand preserve that brand where defined. A literal can be typed in the context of its branded operand.</p>
+<h2 id="function-references">Function references<a class="heading-anchor" href="#function-references" aria-label="Link to Function references">#</a></h2>
+<p>An internal function-reference type uses arrow syntax:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code>(value: <span class="tok-type">u256</span>) <span class="tok-operator">=&gt;</span> <span class="tok-type">u256</span>
+(left: <span class="tok-type">u256</span>, right: <span class="tok-type">u256</span>) <span class="tok-operator">=&gt;</span> <span class="tok-type">u256</span>
+() <span class="tok-operator">=&gt;</span> <span class="tok-keyword">void</span></code></pre></div>
+<p>Take a reference from an unambiguous internal or private method and call it with the declared signature:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code>inc(value: <span class="tok-type">u256</span>): <span class="tok-type">u256</span> { <span class="tok-keyword">return</span> value + <span class="tok-number">1n</span>; }
+
+run(value: <span class="tok-type">u256</span>): <span class="tok-type">u256</span> {
+  <span class="tok-keyword">let</span> fn: (value: <span class="tok-type">u256</span>) <span class="tok-operator">=&gt;</span> <span class="tok-type">u256</span> = <span class="tok-keyword">this</span>.inc;
+  <span class="tok-keyword">return</span> fn(value);
+}</code></pre></div>
+<p>Supported references can be stored in locals, state fields, arrays, fixed arrays, and supported structs. They can be passed and returned through internal functions, selected with a conditional expression, compared with <code>==</code> and <code>!=</code>, and called directly from a state field.</p>
+<p>The zero/default function reference is not callable. Invoking it reverts with <code>Panic(0x51)</code>, matching an uninitialized Solidity internal function pointer.</p>
+<p>Function references are internal compiler values. They are not external ABI function pointers or stable code addresses. They cannot be ABI encoded, exposed as external parameters or returns, emitted in events, converted to integers, or taken from an externally exposed or ambiguous overloaded method.</p>
+<h2 id="default-values">Default values<a class="heading-anchor" href="#default-values" aria-label="Link to Default values">#</a></h2>
+<p>Newly declared values have the zero value for their type:</p>
+<ul><li>integers and fixed bytes: zero;</li><li>bool: false;</li><li>address: <code>address(0n)</code>;</li><li>enum: its first member;</li><li>branded value: the branded zero of its base type.</li></ul>
+<p>There is no <code>undefined</code> or <code>null</code> runtime value.</p><div class="article-footer"><span>JETH language documentation</span><a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></div><nav class="pagination" aria-label="Documentation pages"><a class="pagination-link previous" href="../types/index.html"><span>Previous</span><strong>Types</strong></a><a class="pagination-link next" href="../reference-types/index.html"><span>Next</span><strong>Reference and composite types</strong></a></nav></article>
+      <nav class="page-toc" aria-label="On this page"><div class="toc-title">On this page</div><a class="toc-link depth-2" href="#unsigned-integers">Unsigned integers</a><a class="toc-link depth-2" href="#signed-integers">Signed integers</a><a class="toc-link depth-2" href="#integer-literals">Integer literals</a><a class="toc-link depth-2" href="#boolean">Boolean</a><a class="toc-link depth-2" href="#address">Address</a><a class="toc-link depth-2" href="#fixed-size-bytes">Fixed-size bytes</a><a class="toc-link depth-2" href="#enums">Enums</a><a class="toc-link depth-2" href="#branded-value-types">Branded value types</a><a class="toc-link depth-2" href="#function-references">Function references</a><a class="toc-link depth-2" href="#default-values">Default values</a></nav>
+    </main>
+  </div>
+  <div class="search-modal" hidden><button class="search-backdrop" type="button" aria-label="Close search"></button><div class="search-panel" role="dialog" aria-modal="true" aria-label="Search documentation"><div class="search-box"><span>⌕</span><input class="search-input" type="search" placeholder="Search JETH guides..." autocomplete="off"><button class="search-close" type="button">Esc</button></div><div class="search-results"><div class="search-empty">Start typing to search the book.</div></div></div></div>
+  <script src="../../assets/search-index.js"></script>
+  <script src="../../assets/book.js"></script>
+</body>
+</html>

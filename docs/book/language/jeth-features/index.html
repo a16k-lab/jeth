@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="JETH-specific features in the JETH language documentation.">
+  <meta name="theme-color" content="#11131a">
+  <meta property="og:image" content="../../assets/a16k-avatar-logo.png">
+  <title>JETH-specific features | JETH</title>
+  <link rel="icon" href="../../assets/jeth-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../../assets/book.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../../index.html" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span></a>
+    <nav class="top-nav" aria-label="Primary"><a class="is-active" href="../../index.html">Guides</a><a href="../../internals/compiler-and-tooling/index.html">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
+    <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
+  </header>
+  <div class="pre-release"><span>Pre-release</span> JETH is under active compiler and security review.</div>
+  <div class="book-shell">
+    <aside class="sidebar"><div class="sidebar-title">Guides</div><section class="sidebar-group"><h2>Guides</h2><a class="sidebar-link" href="../../index.html">JETH Documentation</a><a class="sidebar-link" href="../../guides/getting-started/index.html">Getting started</a><a class="sidebar-link" href="../../guides/language-tour/index.html">Language tour</a><a class="sidebar-link" href="../../guides/examples/index.html">Examples</a></section><section class="sidebar-group"><h2>Language</h2><a class="sidebar-link" href="../source-units/index.html">Source units and imports</a><a class="sidebar-link" href="../contract-structure/index.html">Contract structure</a><a class="sidebar-link" href="../types/index.html">Types</a><a class="sidebar-link" href="../value-types/index.html">Value types</a><a class="sidebar-link" href="../reference-types/index.html">Reference and composite types</a><a class="sidebar-link" href="../data-locations/index.html">Data locations and copying</a><a class="sidebar-link" href="../expressions/index.html">Expressions and operators</a><a class="sidebar-link" href="../control-flow/index.html">Statements and control flow</a><a class="sidebar-link" href="../functions/index.html">Functions</a><a class="sidebar-link" href="../globals-and-builtins/index.html">Units, globals, and builtins</a><a class="sidebar-link is-active" href="./index.html" aria-current="page">JETH-specific features</a></section><section class="sidebar-group"><h2>Contracts</h2><a class="sidebar-link" href="../../contracts/inheritance/index.html">Constructors and inheritance</a><a class="sidebar-link" href="../../contracts/modifiers/index.html">Function modifiers</a><a class="sidebar-link" href="../../contracts/interfaces-and-calls/index.html">Interfaces and external calls</a><a class="sidebar-link" href="../../contracts/libraries/index.html">Libraries and using</a><a class="sidebar-link" href="../../contracts/events-and-errors/index.html">Events, errors, and panics</a></section><section class="sidebar-group"><h2>Internals</h2><a class="sidebar-link" href="../../internals/abi/index.html">Contract ABI specification</a><a class="sidebar-link" href="../../internals/storage-layout/index.html">Storage layout</a><a class="sidebar-link" href="../../internals/compiler-and-tooling/index.html">Compiler, CLI, and tooling</a><a class="sidebar-link" href="../../internals/artifacts/index.html">Contracts and artifacts</a></section><section class="sidebar-group"><h2>Advanced</h2><a class="sidebar-link" href="../../advanced/contract-creation-and-clones/index.html">Contract creation and clones</a><a class="sidebar-link" href="../../advanced/proxies-and-diamonds/index.html">Proxies, beacons, and diamonds</a></section><section class="sidebar-group"><h2>Security</h2><a class="sidebar-link" href="../../security/considerations/index.html">Security considerations</a><a class="sidebar-link" href="../../security/compiler-correctness/index.html">Compiler correctness model</a></section><section class="sidebar-group"><h2>Reference</h2><a class="sidebar-link" href="../../reference/cheatsheet/index.html">Syntax cheatsheet</a><a class="sidebar-link" href="../../reference/differences/index.html">Differences from TypeScript and Solidity</a><a class="sidebar-link" href="../../reference/diagnostics/index.html">Compiler diagnostics</a><a class="sidebar-link" href="../../reference/known-limitations/index.html">Supported features and limitations</a><a class="sidebar-link" href="../../reference/feature-matrix/index.html">Complete feature matrix</a></section><section class="sidebar-group"><h2>Project</h2><a class="sidebar-link" href="../../project/roadmap/index.html">Product roadmap</a><a class="sidebar-link" href="../../project/overview/index.html">Repository overview</a></section><a class="built-by" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></aside>
+    <main class="content-shell">
+      <article class="article"><div class="article-kicker">Language</div>
+<h1 id="jeth-specific-language-features">JETH-specific language features</h1>
+<p>JETH deliberately adds a small set of compile-time features beyond Solidity source syntax. They lower to audited EVM-compatible behavior.</p>
+<h2 id="mutability-inference">Mutability inference<a class="heading-anchor" href="#mutability-inference" aria-label="Link to Mutability inference">#</a></h2>
+<p>Class methods do not spell <code>pure</code> or <code>view</code>. The analyzer derives the strongest valid mutability from transitive effects before ABI generation.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">get</span> twice(value: <span class="tok-type">u256</span>): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+  <span class="tok-keyword">return</span> value * <span class="tok-number">2n</span>; <span class="tok-comment">// pure</span>
+}
+
+<span class="tok-keyword">get</span> current(): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+  <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.value; <span class="tok-comment">// view</span>
+}</code></pre></div>
+<h2 id="minimal-visibility">Minimal visibility<a class="heading-anchor" href="#minimal-visibility" aria-label="Link to Minimal visibility">#</a></h2>
+<p><code>External&lt;T&gt;</code> and <code>Payable&lt;T&gt;</code> expose ABI entries. Everything else is internal unless it is a <code>Visible&lt;T&gt;</code> state getter. Private members use <code>#</code>.</p>
+<p>This keeps the internal-call versus message-call boundary explicit.</p>
+<h2 id="branded-newtypes">Branded newtypes<a class="heading-anchor" href="#branded-newtypes" aria-label="Link to Branded newtypes">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">type</span> OrderId = <span class="tok-type">Brand</span>&lt;<span class="tok-type">u256</span>&gt;;
+<span class="tok-keyword">type</span> Amount = <span class="tok-type">Brand</span>&lt;<span class="tok-type">u256</span>&gt;;</code></pre></div>
+<p>Brands prevent accidental mixing while erasing to their base ABI/storage type.</p>
+<h2 id="struct-spread">Struct spread<a class="heading-anchor" href="#struct-spread" aria-label="Link to Struct spread">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">let</span> updated: Config = { ...current, fee: nextFee };</code></pre></div>
+<p>Spread constructs a new supported struct value and overrides named fields. It is not a general JavaScript object spread operation.</p>
+<h2 id="for-of"><code>for...of</code><a class="heading-anchor" href="#for-of" aria-label="Link to `for...of`">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">for</span> (<span class="tok-keyword">const</span> value <span class="tok-keyword">of</span> values) {
+  total <span class="tok-operator">+=</span> value;
+}</code></pre></div>
+<p>This is checked indexed iteration over supported array locations.</p>
+<h2 id="defaults-and-named-arguments">Defaults and named arguments<a class="heading-anchor" href="#defaults-and-named-arguments" aria-label="Link to Defaults and named arguments">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code>fee(amount: <span class="tok-type">u256</span>, bps: <span class="tok-type">u256</span> = <span class="tok-number">30n</span>): <span class="tok-type">u256</span> { ... }
+<span class="tok-keyword">let</span> result: <span class="tok-type">u256</span> = <span class="tok-keyword">this</span>.fee({ amount: value, bps: <span class="tok-number">50n</span> });</code></pre></div>
+<p>These are compile-time call conveniences for internal functions. They do not change the external ABI.</p>
+<h2 id="exhaustive-switch">Exhaustive switch<a class="heading-anchor" href="#exhaustive-switch" aria-label="Link to Exhaustive switch">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">switch</span> (state) {
+  <span class="tok-keyword">case</span> State.Pending: <span class="tok-keyword">return</span> <span class="tok-number">0n</span>;
+  <span class="tok-keyword">case</span> State.Active: <span class="tok-keyword">return</span> <span class="tok-number">1n</span>;
+  <span class="tok-keyword">case</span> State.Closed: <span class="tok-keyword">return</span> <span class="tok-number">2n</span>;
+}</code></pre></div>
+<p>Enum coverage is checked and accidental non-empty fallthrough is rejected.</p>
+<h2 id="generics">Generics<a class="heading-anchor" href="#generics" aria-label="Link to Generics">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code>identity&lt;T&gt;(value: T): T { <span class="tok-keyword">return</span> value; }</code></pre></div>
+<p>Supported internal generics are monomorphized. There is no runtime generic dispatch or generic ABI.</p>
+<h2 id="transient-reentrancy-guard">Transient reentrancy guard<a class="heading-anchor" href="#transient-reentrancy-guard" aria-label="Link to Transient reentrancy guard">#</a></h2>
+<p><code>@nonReentrant</code> provides a built-in EIP-1153 mutex without consuming a persistent storage slot.</p>
+<h2 id="structured-clone-deployment">Structured clone deployment<a class="heading-anchor" href="#structured-clone-deployment" aria-label="Link to Structured clone deployment">#</a></h2>
+<p>JETH exposes EIP-1167 clone creation through typed <code>clone*</code> and <code>predictClone*</code> builtins. The structured surface provides audited CREATE and CREATE2 lowering without exposing arbitrary init code or raw delegatecall to application source. Immutable per-clone byte arguments are available through <code>cloneArgs()</code>.</p>
+<p>See <a href="../../advanced/contract-creation-and-clones/index.html">Contract creation and clones</a> for the complete execution model and examples.</p>
+<h2 id="deep-recursion-and-stack-scheduling">Deep recursion and stack scheduling<a class="heading-anchor" href="#deep-recursion-and-stack-scheduling" aria-label="Link to Deep recursion and stack scheduling">#</a></h2>
+<p>JETH&#39;s Yul backend can avoid some Solidity &quot;stack too deep&quot; source failures and can execute deeper internal recursion before the EVM stack ceiling that affects some solc lowering paths. This is an implementation capability, not an invitation to write gas-unbounded recursive contracts.</p>
+<h2 id="design-rule">Design rule<a class="heading-anchor" href="#design-rule" aria-label="Link to Design rule">#</a></h2>
+<p>Every JETH-specific feature must lower to explicit, testable semantics. Syntax convenience does not authorize JavaScript behavior or weaken the compiler&#39;s acceptance bar.</p><div class="article-footer"><span>JETH language documentation</span><a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></div><nav class="pagination" aria-label="Documentation pages"><a class="pagination-link previous" href="../globals-and-builtins/index.html"><span>Previous</span><strong>Units, globals, and builtins</strong></a><a class="pagination-link next" href="../../contracts/inheritance/index.html"><span>Next</span><strong>Constructors and inheritance</strong></a></nav></article>
+      <nav class="page-toc" aria-label="On this page"><div class="toc-title">On this page</div><a class="toc-link depth-2" href="#mutability-inference">Mutability inference</a><a class="toc-link depth-2" href="#minimal-visibility">Minimal visibility</a><a class="toc-link depth-2" href="#branded-newtypes">Branded newtypes</a><a class="toc-link depth-2" href="#struct-spread">Struct spread</a><a class="toc-link depth-2" href="#for-of">for...of</a><a class="toc-link depth-2" href="#defaults-and-named-arguments">Defaults and named arguments</a><a class="toc-link depth-2" href="#exhaustive-switch">Exhaustive switch</a><a class="toc-link depth-2" href="#generics">Generics</a><a class="toc-link depth-2" href="#transient-reentrancy-guard">Transient reentrancy guard</a><a class="toc-link depth-2" href="#structured-clone-deployment">Structured clone deployment</a><a class="toc-link depth-2" href="#deep-recursion-and-stack-scheduling">Deep recursion and stack scheduling</a><a class="toc-link depth-2" href="#design-rule">Design rule</a></nav>
+    </main>
+  </div>
+  <div class="search-modal" hidden><button class="search-backdrop" type="button" aria-label="Close search"></button><div class="search-panel" role="dialog" aria-modal="true" aria-label="Search documentation"><div class="search-box"><span>⌕</span><input class="search-input" type="search" placeholder="Search JETH guides..." autocomplete="off"><button class="search-close" type="button">Esc</button></div><div class="search-results"><div class="search-empty">Start typing to search the book.</div></div></div></div>
+  <script src="../../assets/search-index.js"></script>
+  <script src="../../assets/book.js"></script>
+</body>
+</html>

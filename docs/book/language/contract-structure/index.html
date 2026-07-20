@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Contract structure in the JETH language documentation.">
+  <meta name="theme-color" content="#11131a">
+  <meta property="og:image" content="../../assets/a16k-avatar-logo.png">
+  <title>Contract structure | JETH</title>
+  <link rel="icon" href="../../assets/jeth-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../../assets/book.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../../index.html" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span></a>
+    <nav class="top-nav" aria-label="Primary"><a class="is-active" href="../../index.html">Guides</a><a href="../../internals/compiler-and-tooling/index.html">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
+    <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
+  </header>
+  <div class="pre-release"><span>Pre-release</span> JETH is under active compiler and security review.</div>
+  <div class="book-shell">
+    <aside class="sidebar"><div class="sidebar-title">Guides</div><section class="sidebar-group"><h2>Guides</h2><a class="sidebar-link" href="../../index.html">JETH Documentation</a><a class="sidebar-link" href="../../guides/getting-started/index.html">Getting started</a><a class="sidebar-link" href="../../guides/language-tour/index.html">Language tour</a><a class="sidebar-link" href="../../guides/examples/index.html">Examples</a></section><section class="sidebar-group"><h2>Language</h2><a class="sidebar-link" href="../source-units/index.html">Source units and imports</a><a class="sidebar-link is-active" href="./index.html" aria-current="page">Contract structure</a><a class="sidebar-link" href="../types/index.html">Types</a><a class="sidebar-link" href="../value-types/index.html">Value types</a><a class="sidebar-link" href="../reference-types/index.html">Reference and composite types</a><a class="sidebar-link" href="../data-locations/index.html">Data locations and copying</a><a class="sidebar-link" href="../expressions/index.html">Expressions and operators</a><a class="sidebar-link" href="../control-flow/index.html">Statements and control flow</a><a class="sidebar-link" href="../functions/index.html">Functions</a><a class="sidebar-link" href="../globals-and-builtins/index.html">Units, globals, and builtins</a><a class="sidebar-link" href="../jeth-features/index.html">JETH-specific features</a></section><section class="sidebar-group"><h2>Contracts</h2><a class="sidebar-link" href="../../contracts/inheritance/index.html">Constructors and inheritance</a><a class="sidebar-link" href="../../contracts/modifiers/index.html">Function modifiers</a><a class="sidebar-link" href="../../contracts/interfaces-and-calls/index.html">Interfaces and external calls</a><a class="sidebar-link" href="../../contracts/libraries/index.html">Libraries and using</a><a class="sidebar-link" href="../../contracts/events-and-errors/index.html">Events, errors, and panics</a></section><section class="sidebar-group"><h2>Internals</h2><a class="sidebar-link" href="../../internals/abi/index.html">Contract ABI specification</a><a class="sidebar-link" href="../../internals/storage-layout/index.html">Storage layout</a><a class="sidebar-link" href="../../internals/compiler-and-tooling/index.html">Compiler, CLI, and tooling</a><a class="sidebar-link" href="../../internals/artifacts/index.html">Contracts and artifacts</a></section><section class="sidebar-group"><h2>Advanced</h2><a class="sidebar-link" href="../../advanced/contract-creation-and-clones/index.html">Contract creation and clones</a><a class="sidebar-link" href="../../advanced/proxies-and-diamonds/index.html">Proxies, beacons, and diamonds</a></section><section class="sidebar-group"><h2>Security</h2><a class="sidebar-link" href="../../security/considerations/index.html">Security considerations</a><a class="sidebar-link" href="../../security/compiler-correctness/index.html">Compiler correctness model</a></section><section class="sidebar-group"><h2>Reference</h2><a class="sidebar-link" href="../../reference/cheatsheet/index.html">Syntax cheatsheet</a><a class="sidebar-link" href="../../reference/differences/index.html">Differences from TypeScript and Solidity</a><a class="sidebar-link" href="../../reference/diagnostics/index.html">Compiler diagnostics</a><a class="sidebar-link" href="../../reference/known-limitations/index.html">Supported features and limitations</a><a class="sidebar-link" href="../../reference/feature-matrix/index.html">Complete feature matrix</a></section><section class="sidebar-group"><h2>Project</h2><a class="sidebar-link" href="../../project/roadmap/index.html">Product roadmap</a><a class="sidebar-link" href="../../project/overview/index.html">Repository overview</a></section><a class="built-by" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></aside>
+    <main class="content-shell">
+      <article class="article"><div class="article-kicker">Language</div>
+<h1 id="structure-of-a-contract">Structure of a contract</h1>
+<p>Contracts use class syntax. A deployable leaf class becomes an EVM contract artifact.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> SimpleStorage {
+  value: <span class="tok-type">u256</span>;
+
+  set(next: <span class="tok-type">u256</span>): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-keyword">this</span>.value = next;
+  }
+
+  <span class="tok-keyword">get</span> read(): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.value;
+  }
+}</code></pre></div>
+<p>A contract can contain state variables, constants, immutables, functions, constructors, modifiers, events, errors, and inherited members.</p>
+<h2 id="state-variables">State variables<a class="heading-anchor" href="#state-variables" aria-label="Link to State variables">#</a></h2>
+<p>Bare fields are persistent storage:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> Ledger {
+  total: <span class="tok-type">u256</span>;
+  balances: <span class="tok-type">mapping</span>&lt;<span class="tok-type">address</span>, <span class="tok-type">u256</span>&gt;;
+  names: <span class="tok-type">string</span>[];
+}</code></pre></div>
+<p>The storage planner assigns Solidity-compatible slots and packed byte offsets. Field order is therefore part of an upgradeable contract&#39;s storage interface.</p>
+<p>An initializer executes during contract creation:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> C {
+  count: <span class="tok-type">u256</span> = <span class="tok-number">1n</span>;
+  enabled: <span class="tok-type">bool</span> = <span class="tok-keyword">true</span>;
+}</code></pre></div>
+<h3 id="private-state-variables">Private state variables<a class="heading-anchor" href="#private-state-variables" aria-label="Link to Private state variables">#</a></h3>
+<p>A leading <code>#</code> makes a field private to its declaring class:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> Vault {
+  <span class="tok-private">#assets</span>: <span class="tok-type">u256</span>;
+
+  deposit(amount: <span class="tok-type">u256</span>): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-keyword">this</span>.<span class="tok-private">#assets</span> <span class="tok-operator">+=</span> amount;
+  }
+
+  <span class="tok-keyword">get</span> totalAssets(): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.<span class="tok-private">#assets</span>;
+  }
+}</code></pre></div>
+<p>Private state still occupies an ordinary storage position according to declaration and inheritance order. Privacy is compile-time access control, not storage secrecy. Anyone can inspect contract storage off chain.</p>
+<p>A derived class cannot directly read or write a base class&#39;s private field. A base implementation inherited by that derived class can still access the field. Base and derived classes may each declare the same <code>#name</code>; the declarations are distinct storage variables.</p>
+<p>A private field cannot use <code>Visible&lt;T&gt;</code> because private storage and an external getter conflict.</p>
+<h2 id="public-getters">Public getters<a class="heading-anchor" href="#public-getters" aria-label="Link to Public getters">#</a></h2>
+<p>Wrap a state type in <code>Visible&lt;T&gt;</code> to generate an external getter:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> C {
+  owner: <span class="tok-type">Visible</span>&lt;<span class="tok-type">address</span>&gt;;
+  balances: <span class="tok-type">Visible</span>&lt;<span class="tok-type">mapping</span>&lt;<span class="tok-type">address</span>, <span class="tok-type">u256</span><span class="tok-operator">&gt;&gt;</span>;
+}</code></pre></div>
+<p>Getter parameters and return values follow Solidity&#39;s public-state-getter rules for the supported storage shape. The underlying field remains available to contract code.</p>
+<p><code>Visible&lt;T&gt;</code> can also wrap a supported initialized constant or immutable field, producing an external read-only getter without allocating a storage slot.</p>
+<h2 id="constants">Constants<a class="heading-anchor" href="#constants" aria-label="Link to Constants">#</a></h2>
+<p>An initialized <code>static</code> field is a compile-time constant. It consumes no storage slot and is folded at each use site.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> Units {
+  <span class="tok-keyword">static</span> BPS: <span class="tok-type">u256</span> = <span class="tok-number">10000n</span>;
+
+  <span class="tok-keyword">get</span> half(): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+    <span class="tok-keyword">return</span> Units.BPS / <span class="tok-number">2n</span>;
+  }
+}</code></pre></div>
+<p>Constants must have compiler-foldable initializers. Constant expressions use exact rational semantics before conversion to the target integer type.</p>
+<h2 id="immutables">Immutables<a class="heading-anchor" href="#immutables" aria-label="Link to Immutables">#</a></h2>
+<p>A <code>static</code> value field without an initializer is an immutable. Assign it in the constructor. It is baked into runtime bytecode and consumes no storage slot.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> Token {
+  <span class="tok-keyword">static</span> OWNER: <span class="tok-type">address</span>;
+
+  constructor(owner: <span class="tok-type">address</span>) {
+    <span class="tok-keyword">this</span>.OWNER = owner;
+  }
+
+  <span class="tok-keyword">get</span> owner(): <span class="tok-type">External</span>&lt;<span class="tok-type">address</span>&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.OWNER;
+  }
+}</code></pre></div>
+<p>Only supported value types can be immutable. An immutable cannot be reassigned after construction.</p>
+<h2 id="functions">Functions<a class="heading-anchor" href="#functions" aria-label="Link to Functions">#</a></h2>
+<p>Return wrappers define ABI exposure:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code>helper(x: <span class="tok-type">u256</span>): <span class="tok-type">u256</span> { <span class="tok-keyword">return</span> x + <span class="tok-number">1n</span>; }
+<span class="tok-private">#privateHelper</span>(x: <span class="tok-type">u256</span>): <span class="tok-type">u256</span> { <span class="tok-keyword">return</span> x + <span class="tok-number">2n</span>; }
+<span class="tok-keyword">static</span> pureHelper(x: <span class="tok-type">u256</span>): <span class="tok-type">u256</span> { <span class="tok-keyword">return</span> x + <span class="tok-number">3n</span>; }
+set(x: <span class="tok-type">u256</span>): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; { <span class="tok-keyword">this</span>.value = x; }
+<span class="tok-keyword">get</span> read(): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; { <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.value; }
+deposit(): <span class="tok-type">Payable</span>&lt;<span class="tok-keyword">void</span>&gt; { <span class="tok-keyword">this</span>.total <span class="tok-operator">+=</span> <span class="tok-builtin">msg</span>.value; }</code></pre></div>
+<ul><li>No wrapper means internal.</li><li>A leading <code>#</code> means private to the declaring class.</li><li><code>static</code> declares a method pure and removes the instance receiver.</li><li><code>External&lt;T&gt;</code> means externally callable and nonpayable.</li><li><code>Payable&lt;T&gt;</code> means externally callable and payable.</li><li>A read-only value-returning class method uses <code>get</code>; its <code>pure</code> or <code>view</code> mutability is inferred from transitive effects.</li></ul>
+<h2 id="events-and-errors">Events and errors<a class="heading-anchor" href="#events-and-errors" aria-label="Link to Events and errors">#</a></h2>
+<p>Events and errors can be declared at file scope or as members:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> Vault {
+  Deposited: <span class="tok-type">event</span>&lt;{ account: <span class="tok-type">indexed</span>&lt;<span class="tok-type">address</span>&gt;; value: <span class="tok-type">u256</span> }&gt;;
+  Unauthorized: <span class="tok-type">error</span>&lt;{ caller: <span class="tok-type">address</span> }&gt;;
+}</code></pre></div>
+<p>Use <code>emit</code> for events and <code>revert</code> or <code>require</code> for errors.</p>
+<h2 id="constructor">Constructor<a class="heading-anchor" href="#constructor" aria-label="Link to Constructor">#</a></h2>
+<p>The constructor runs once in creation code. It can accept ABI-encoded arguments, initialize state and immutables, call supported internal functions, and invoke a base constructor.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> C {
+  owner: <span class="tok-type">address</span>;
+
+  constructor(owner: <span class="tok-type">address</span>) {
+    <span class="tok-keyword">this</span>.owner = owner;
+  }
+}</code></pre></div>
+<p>A constructor is nonpayable unless decorated with <code>@payable</code>.</p>
+<h2 id="special-entries">Special entries<a class="heading-anchor" href="#special-entries" aria-label="Link to Special entries">#</a></h2>
+<p>A method named <code>receive</code> handles empty calldata and accepts value. A method named <code>fallback</code> handles selectors not matched by ordinary entries. Their accepted parameters and return behavior follow the JETH special-entry rules.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> Receiver {
+  received: <span class="tok-type">u256</span>;
+
+  receive(): <span class="tok-keyword">void</span> {
+    <span class="tok-keyword">this</span>.received <span class="tok-operator">+=</span> <span class="tok-builtin">msg</span>.value;
+  }
+
+  fallback(): <span class="tok-keyword">void</span> {
+    <span class="tok-keyword">this</span>.received <span class="tok-operator">+=</span> <span class="tok-number">1n</span>;
+  }
+}</code></pre></div>
+<p><code>receive()</code> is payable by definition. A plain <code>fallback(): void</code> is nonpayable; use <code>fallback(): Payable&lt;void&gt;</code> when the fallback must accept and read value.</p>
+<p>The supported fallback forms are:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code>fallback(): <span class="tok-keyword">void</span> { }
+fallback(): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; { }
+fallback(): <span class="tok-type">Payable</span>&lt;<span class="tok-keyword">void</span>&gt; { }
+fallback(input: <span class="tok-type">bytes</span>): <span class="tok-type">bytes</span> { <span class="tok-keyword">return</span> input; }
+fallback(input: <span class="tok-type">bytes</span>): <span class="tok-type">Payable</span>&lt;<span class="tok-type">bytes</span>&gt; { <span class="tok-keyword">return</span> input; }</code></pre></div>
+<p>The <code>External&lt;T&gt;</code> wrapper is optional and redundant on a nonpayable fallback. A data-passing fallback receives the complete calldata and returns raw bytes. There can be at most one <code>receive</code> and one <code>fallback</code>. <code>receive</code> takes no parameters, returns no value, and must not use <code>Payable&lt;T&gt;</code> because it is already payable by definition.</p>
+<h2 id="abstract-contracts-interfaces-and-libraries">Abstract contracts, interfaces, and libraries<a class="heading-anchor" href="#abstract-contracts-interfaces-and-libraries" aria-label="Link to Abstract contracts, interfaces, and libraries">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">abstract</span> <span class="tok-keyword">class</span> Base {
+  <span class="tok-keyword">abstract</span> value(): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt;;
+}
+
+<span class="tok-keyword">interface</span> Oracle {
+  price(asset: <span class="tok-type">address</span>): <span class="tok-type">View</span>&lt;<span class="tok-type">u256</span>&gt;;
+}
+
+<span class="tok-keyword">static</span> <span class="tok-keyword">class</span> MathLib {
+  min(a: <span class="tok-type">u256</span>, b: <span class="tok-type">u256</span>): <span class="tok-type">u256</span> {
+    <span class="tok-keyword">return</span> a &lt; b ? a : b;
+  }
+}</code></pre></div>
+<p>These declaration kinds are covered in their dedicated chapters.</p><div class="article-footer"><span>JETH language documentation</span><a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></div><nav class="pagination" aria-label="Documentation pages"><a class="pagination-link previous" href="../source-units/index.html"><span>Previous</span><strong>Source units and imports</strong></a><a class="pagination-link next" href="../types/index.html"><span>Next</span><strong>Types</strong></a></nav></article>
+      <nav class="page-toc" aria-label="On this page"><div class="toc-title">On this page</div><a class="toc-link depth-2" href="#state-variables">State variables</a><a class="toc-link depth-3" href="#private-state-variables">Private state variables</a><a class="toc-link depth-2" href="#public-getters">Public getters</a><a class="toc-link depth-2" href="#constants">Constants</a><a class="toc-link depth-2" href="#immutables">Immutables</a><a class="toc-link depth-2" href="#functions">Functions</a><a class="toc-link depth-2" href="#events-and-errors">Events and errors</a><a class="toc-link depth-2" href="#constructor">Constructor</a><a class="toc-link depth-2" href="#special-entries">Special entries</a><a class="toc-link depth-2" href="#abstract-contracts-interfaces-and-libraries">Abstract contracts, interfaces, and libraries</a></nav>
+    </main>
+  </div>
+  <div class="search-modal" hidden><button class="search-backdrop" type="button" aria-label="Close search"></button><div class="search-panel" role="dialog" aria-modal="true" aria-label="Search documentation"><div class="search-box"><span>⌕</span><input class="search-input" type="search" placeholder="Search JETH guides..." autocomplete="off"><button class="search-close" type="button">Esc</button></div><div class="search-results"><div class="search-empty">Start typing to search the book.</div></div></div></div>
+  <script src="../../assets/search-index.js"></script>
+  <script src="../../assets/book.js"></script>
+</body>
+</html>

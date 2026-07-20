@@ -1,8 +1,12 @@
 # JETH
 
+![a16k organization logo](docs/assets/a16k-avatar-logo.png)
+
 JETH is a smart-contract language with a strict TypeScript-shaped syntax and
 Solidity-compatible EVM semantics. It compiles JETH source to typed IR, Yul,
 ABI metadata, and EVM bytecode through `solc`.
+
+Built by [@a16k-lab](https://github.com/a16k-lab).
 
 The project follows one non-negotiable compiler rule: a clean rejection is
 better than accepted code that produces the wrong behavior. Accepted programs
@@ -49,7 +53,7 @@ the repository command above is the supported entry point.
 
 ## A first contract
 
-```typescript
+```jeth
 class Counter {
   count: u256 = 0n;
 
@@ -95,7 +99,9 @@ mandatory.
 
 ## Documentation
 
-Public language documentation lives in [docs/guide](docs/guide/README.md):
+The standalone HTML language book starts at
+[docs/book/index.html](docs/book/index.html). Its Markdown sources live in
+[docs/guide](docs/guide/README.md):
 
 - [Getting started](docs/guide/getting-started.md)
 - [Source units and imports](docs/guide/language/source-units.md)
@@ -110,6 +116,12 @@ Public language documentation lives in [docs/guide](docs/guide/README.md):
 - [Compiler correctness model](docs/guide/security/compiler-correctness.md)
 - [Compiler and tooling](docs/guide/compiler-and-tooling.md)
 - [Product roadmap](docs/guide/roadmap.md)
+
+Rebuild the HTML book after editing its Markdown sources:
+
+```bash
+npm run docs:build
+```
 
 The existing files directly under `docs/` are engineering design notes, audit
 records, and implementation specifications. They support compiler development

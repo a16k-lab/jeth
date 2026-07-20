@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Examples in the JETH language documentation.">
+  <meta name="theme-color" content="#11131a">
+  <meta property="og:image" content="../../assets/a16k-avatar-logo.png">
+  <title>Examples | JETH</title>
+  <link rel="icon" href="../../assets/jeth-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../../assets/book.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../../index.html" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span></a>
+    <nav class="top-nav" aria-label="Primary"><a class="is-active" href="../../index.html">Guides</a><a href="../../internals/compiler-and-tooling/index.html">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
+    <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
+  </header>
+  <div class="pre-release"><span>Pre-release</span> JETH is under active compiler and security review.</div>
+  <div class="book-shell">
+    <aside class="sidebar"><div class="sidebar-title">Guides</div><section class="sidebar-group"><h2>Guides</h2><a class="sidebar-link" href="../../index.html">JETH Documentation</a><a class="sidebar-link" href="../getting-started/index.html">Getting started</a><a class="sidebar-link" href="../language-tour/index.html">Language tour</a><a class="sidebar-link is-active" href="./index.html" aria-current="page">Examples</a></section><section class="sidebar-group"><h2>Language</h2><a class="sidebar-link" href="../../language/source-units/index.html">Source units and imports</a><a class="sidebar-link" href="../../language/contract-structure/index.html">Contract structure</a><a class="sidebar-link" href="../../language/types/index.html">Types</a><a class="sidebar-link" href="../../language/value-types/index.html">Value types</a><a class="sidebar-link" href="../../language/reference-types/index.html">Reference and composite types</a><a class="sidebar-link" href="../../language/data-locations/index.html">Data locations and copying</a><a class="sidebar-link" href="../../language/expressions/index.html">Expressions and operators</a><a class="sidebar-link" href="../../language/control-flow/index.html">Statements and control flow</a><a class="sidebar-link" href="../../language/functions/index.html">Functions</a><a class="sidebar-link" href="../../language/globals-and-builtins/index.html">Units, globals, and builtins</a><a class="sidebar-link" href="../../language/jeth-features/index.html">JETH-specific features</a></section><section class="sidebar-group"><h2>Contracts</h2><a class="sidebar-link" href="../../contracts/inheritance/index.html">Constructors and inheritance</a><a class="sidebar-link" href="../../contracts/modifiers/index.html">Function modifiers</a><a class="sidebar-link" href="../../contracts/interfaces-and-calls/index.html">Interfaces and external calls</a><a class="sidebar-link" href="../../contracts/libraries/index.html">Libraries and using</a><a class="sidebar-link" href="../../contracts/events-and-errors/index.html">Events, errors, and panics</a></section><section class="sidebar-group"><h2>Internals</h2><a class="sidebar-link" href="../../internals/abi/index.html">Contract ABI specification</a><a class="sidebar-link" href="../../internals/storage-layout/index.html">Storage layout</a><a class="sidebar-link" href="../../internals/compiler-and-tooling/index.html">Compiler, CLI, and tooling</a><a class="sidebar-link" href="../../internals/artifacts/index.html">Contracts and artifacts</a></section><section class="sidebar-group"><h2>Advanced</h2><a class="sidebar-link" href="../../advanced/contract-creation-and-clones/index.html">Contract creation and clones</a><a class="sidebar-link" href="../../advanced/proxies-and-diamonds/index.html">Proxies, beacons, and diamonds</a></section><section class="sidebar-group"><h2>Security</h2><a class="sidebar-link" href="../../security/considerations/index.html">Security considerations</a><a class="sidebar-link" href="../../security/compiler-correctness/index.html">Compiler correctness model</a></section><section class="sidebar-group"><h2>Reference</h2><a class="sidebar-link" href="../../reference/cheatsheet/index.html">Syntax cheatsheet</a><a class="sidebar-link" href="../../reference/differences/index.html">Differences from TypeScript and Solidity</a><a class="sidebar-link" href="../../reference/diagnostics/index.html">Compiler diagnostics</a><a class="sidebar-link" href="../../reference/known-limitations/index.html">Supported features and limitations</a><a class="sidebar-link" href="../../reference/feature-matrix/index.html">Complete feature matrix</a></section><section class="sidebar-group"><h2>Project</h2><a class="sidebar-link" href="../../project/roadmap/index.html">Product roadmap</a><a class="sidebar-link" href="../../project/overview/index.html">Repository overview</a></section><a class="built-by" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></aside>
+    <main class="content-shell">
+      <article class="article"><div class="article-kicker">Guides</div>
+<h1 id="examples">Examples</h1>
+<p>The <code>examples/</code> directory contains runnable source programs. Start with small contracts and move to composite ABI/storage cases.</p>
+<h2 id="suggested-learning-order">Suggested learning order<a class="heading-anchor" href="#suggested-learning-order" aria-label="Link to Suggested learning order">#</a></h2>
+<ol><li><a href="https://github.com/a16k-lab/jeth/blob/main/examples/Counter.jeth" target="_blank" rel="noreferrer"><code>Counter.jeth</code></a>: state, checked arithmetic, and an external getter.</li><li><a href="https://github.com/a16k-lab/jeth/blob/main/examples/Arith.jeth" target="_blank" rel="noreferrer"><code>Arith.jeth</code></a>: integer operations and panic behavior.</li><li><a href="https://github.com/a16k-lab/jeth/blob/main/examples/Control.jeth" target="_blank" rel="noreferrer"><code>Control.jeth</code></a>: branches and loops.</li><li><a href="https://github.com/a16k-lab/jeth/blob/main/examples/Globals.jeth" target="_blank" rel="noreferrer"><code>Globals.jeth</code></a>: <code>msg</code>, <code>block</code>, and <code>tx</code> data.</li><li><a href="https://github.com/a16k-lab/jeth/blob/main/examples/Events.jeth" target="_blank" rel="noreferrer"><code>Events.jeth</code></a>: event topics and data.</li><li><a href="https://github.com/a16k-lab/jeth/blob/main/examples/Errors.jeth" target="_blank" rel="noreferrer"><code>Errors.jeth</code></a>: revert strings and custom errors.</li><li><a href="https://github.com/a16k-lab/jeth/blob/main/examples/Arrays.jeth" target="_blank" rel="noreferrer"><code>Arrays.jeth</code></a>: dynamic arrays.</li><li><a href="https://github.com/a16k-lab/jeth/blob/main/examples/FixedArrays.jeth" target="_blank" rel="noreferrer"><code>FixedArrays.jeth</code></a>: fixed arrays.</li><li><a href="https://github.com/a16k-lab/jeth/blob/main/examples/Structs.jeth" target="_blank" rel="noreferrer"><code>Structs.jeth</code></a>: struct construction and storage.</li><li><a href="https://github.com/a16k-lab/jeth/blob/main/examples/Nested.jeth" target="_blank" rel="noreferrer"><code>Nested.jeth</code></a>: nested state shapes.</li><li><a href="https://github.com/a16k-lab/jeth/blob/main/examples/Vault.jeth" target="_blank" rel="noreferrer"><code>Vault.jeth</code></a>: a larger end-to-end contract.</li><li><a href="https://github.com/a16k-lab/jeth/blob/main/examples/CloneFactory.jeth" target="_blank" rel="noreferrer"><code>CloneFactory.jeth</code></a>: CREATE and CREATE2 EIP-1167 clones with atomic initialization.</li></ol>
+<h2 id="small-complete-examples">Small complete examples<a class="heading-anchor" href="#small-complete-examples" aria-label="Link to Small complete examples">#</a></h2>
+<h3 id="owned-counter">Owned counter<a class="heading-anchor" href="#owned-counter" aria-label="Link to Owned counter">#</a></h3>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> OwnedCounter {
+  owner: <span class="tok-type">address</span>;
+  count: <span class="tok-type">Visible</span>&lt;<span class="tok-type">u256</span>&gt;;
+
+  constructor(initialOwner: <span class="tok-type">address</span>) {
+    <span class="tok-builtin">require</span>(initialOwner <span class="tok-operator">!=</span> <span class="tok-type">address</span>(<span class="tok-number">0n</span>), <span class="tok-string">&quot;zero owner&quot;</span>);
+    <span class="tok-keyword">this</span>.owner = initialOwner;
+  }
+
+  increment(): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-builtin">require</span>(<span class="tok-builtin">msg</span>.sender <span class="tok-operator">==</span> <span class="tok-keyword">this</span>.owner, <span class="tok-string">&quot;not owner&quot;</span>);
+    <span class="tok-keyword">this</span>.count <span class="tok-operator">+=</span> <span class="tok-number">1n</span>;
+  }
+}</code></pre></div>
+<p>Deploy with an owner constructor argument. <code>increment()</code> succeeds only from that address, and the generated <code>count()</code> getter returns the current value.</p>
+<h3 id="typed-token-payout">Typed token payout<a class="heading-anchor" href="#typed-token-payout" aria-label="Link to Typed token payout">#</a></h3>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">interface</span> Token {
+  transfer(to: <span class="tok-type">address</span>, amount: <span class="tok-type">u256</span>): <span class="tok-type">bool</span>;
+}
+
+<span class="tok-keyword">class</span> TokenPayout {
+  owner: <span class="tok-type">address</span>;
+
+  constructor(initialOwner: <span class="tok-type">address</span>) {
+    <span class="tok-keyword">this</span>.owner = initialOwner;
+  }
+
+  pay(
+    token: <span class="tok-type">address</span>,
+    recipient: <span class="tok-type">address</span>,
+    amount: <span class="tok-type">u256</span>,
+  ): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-builtin">require</span>(<span class="tok-builtin">msg</span>.sender <span class="tok-operator">==</span> <span class="tok-keyword">this</span>.owner, <span class="tok-string">&quot;not owner&quot;</span>);
+    <span class="tok-keyword">const</span> transferred: <span class="tok-type">bool</span> = Token(token).transfer(recipient, amount);
+    <span class="tok-builtin">require</span>(transferred, <span class="tok-string">&quot;transfer failed&quot;</span>);
+  }
+}</code></pre></div>
+<p>The interface supplies the selector and ABI schema. The external call can reenter, so the production version must account for any state it adds before making the call.</p>
+<h2 id="compile-an-example">Compile an example<a class="heading-anchor" href="#compile-an-example" aria-label="Link to Compile an example">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>bash</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="bash"><code>npm run jethc -- examples/Vault.jeth --abi --layout
+npm run jethc -- examples/Vault.jeth -o build/vault</code></pre></div>
+<h2 id="example-quality-policy">Example quality policy<a class="heading-anchor" href="#example-quality-policy" aria-label="Link to Example quality policy">#</a></h2>
+<p>Shipping examples should be:</p>
+<ul><li>small enough to explain one concept clearly;</li><li>compiled in CI;</li><li>paired with runtime assertions when behavior matters;</li><li>explicit about security assumptions;</li><li>free of audit-only names such as <code>_repro</code> or <code>_adv</code> in the public learning path;</li><li>linked from a guide page that explains expected output.</li></ul>
+<p>The repository also contains adversarial and generated examples used for compiler coverage. They are valuable engineering fixtures but are not tutorials.</p>
+<h2 id="repository-examples-still-planned">Repository examples still planned<a class="heading-anchor" href="#repository-examples-still-planned" aria-label="Link to Repository examples still planned">#</a></h2>
+<ul><li>ERC-20-like token with branded units and custom errors;</li><li>access-controlled vault using checks-effects-interactions;</li><li>typed interface call and <code>try</code>/<code>catch</code>;</li><li>internal and external library linking;</li><li>upgradeable proxy deployment and safe upgrade walkthrough;</li><li>diamond deployment and selector management;</li><li>calldata slicing plus ABI decoding;</li><li>signed-message recovery with replay protection;</li><li>fixed-point math with explicit rounding once the audited math package exists.</li></ul><div class="article-footer"><span>JETH language documentation</span><a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></div><nav class="pagination" aria-label="Documentation pages"><a class="pagination-link previous" href="../language-tour/index.html"><span>Previous</span><strong>Language tour</strong></a><a class="pagination-link next" href="../../language/source-units/index.html"><span>Next</span><strong>Source units and imports</strong></a></nav></article>
+      <nav class="page-toc" aria-label="On this page"><div class="toc-title">On this page</div><a class="toc-link depth-2" href="#suggested-learning-order">Suggested learning order</a><a class="toc-link depth-2" href="#small-complete-examples">Small complete examples</a><a class="toc-link depth-3" href="#owned-counter">Owned counter</a><a class="toc-link depth-3" href="#typed-token-payout">Typed token payout</a><a class="toc-link depth-2" href="#compile-an-example">Compile an example</a><a class="toc-link depth-2" href="#example-quality-policy">Example quality policy</a><a class="toc-link depth-2" href="#repository-examples-still-planned">Repository examples still planned</a></nav>
+    </main>
+  </div>
+  <div class="search-modal" hidden><button class="search-backdrop" type="button" aria-label="Close search"></button><div class="search-panel" role="dialog" aria-modal="true" aria-label="Search documentation"><div class="search-box"><span>⌕</span><input class="search-input" type="search" placeholder="Search JETH guides..." autocomplete="off"><button class="search-close" type="button">Esc</button></div><div class="search-results"><div class="search-empty">Start typing to search the book.</div></div></div></div>
+  <script src="../../assets/search-index.js"></script>
+  <script src="../../assets/book.js"></script>
+</body>
+</html>

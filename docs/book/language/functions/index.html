@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Functions in the JETH language documentation.">
+  <meta name="theme-color" content="#11131a">
+  <meta property="og:image" content="../../assets/a16k-avatar-logo.png">
+  <title>Functions | JETH</title>
+  <link rel="icon" href="../../assets/jeth-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../../assets/book.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../../index.html" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span></a>
+    <nav class="top-nav" aria-label="Primary"><a class="is-active" href="../../index.html">Guides</a><a href="../../internals/compiler-and-tooling/index.html">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
+    <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
+  </header>
+  <div class="pre-release"><span>Pre-release</span> JETH is under active compiler and security review.</div>
+  <div class="book-shell">
+    <aside class="sidebar"><div class="sidebar-title">Guides</div><section class="sidebar-group"><h2>Guides</h2><a class="sidebar-link" href="../../index.html">JETH Documentation</a><a class="sidebar-link" href="../../guides/getting-started/index.html">Getting started</a><a class="sidebar-link" href="../../guides/language-tour/index.html">Language tour</a><a class="sidebar-link" href="../../guides/examples/index.html">Examples</a></section><section class="sidebar-group"><h2>Language</h2><a class="sidebar-link" href="../source-units/index.html">Source units and imports</a><a class="sidebar-link" href="../contract-structure/index.html">Contract structure</a><a class="sidebar-link" href="../types/index.html">Types</a><a class="sidebar-link" href="../value-types/index.html">Value types</a><a class="sidebar-link" href="../reference-types/index.html">Reference and composite types</a><a class="sidebar-link" href="../data-locations/index.html">Data locations and copying</a><a class="sidebar-link" href="../expressions/index.html">Expressions and operators</a><a class="sidebar-link" href="../control-flow/index.html">Statements and control flow</a><a class="sidebar-link is-active" href="./index.html" aria-current="page">Functions</a><a class="sidebar-link" href="../globals-and-builtins/index.html">Units, globals, and builtins</a><a class="sidebar-link" href="../jeth-features/index.html">JETH-specific features</a></section><section class="sidebar-group"><h2>Contracts</h2><a class="sidebar-link" href="../../contracts/inheritance/index.html">Constructors and inheritance</a><a class="sidebar-link" href="../../contracts/modifiers/index.html">Function modifiers</a><a class="sidebar-link" href="../../contracts/interfaces-and-calls/index.html">Interfaces and external calls</a><a class="sidebar-link" href="../../contracts/libraries/index.html">Libraries and using</a><a class="sidebar-link" href="../../contracts/events-and-errors/index.html">Events, errors, and panics</a></section><section class="sidebar-group"><h2>Internals</h2><a class="sidebar-link" href="../../internals/abi/index.html">Contract ABI specification</a><a class="sidebar-link" href="../../internals/storage-layout/index.html">Storage layout</a><a class="sidebar-link" href="../../internals/compiler-and-tooling/index.html">Compiler, CLI, and tooling</a><a class="sidebar-link" href="../../internals/artifacts/index.html">Contracts and artifacts</a></section><section class="sidebar-group"><h2>Advanced</h2><a class="sidebar-link" href="../../advanced/contract-creation-and-clones/index.html">Contract creation and clones</a><a class="sidebar-link" href="../../advanced/proxies-and-diamonds/index.html">Proxies, beacons, and diamonds</a></section><section class="sidebar-group"><h2>Security</h2><a class="sidebar-link" href="../../security/considerations/index.html">Security considerations</a><a class="sidebar-link" href="../../security/compiler-correctness/index.html">Compiler correctness model</a></section><section class="sidebar-group"><h2>Reference</h2><a class="sidebar-link" href="../../reference/cheatsheet/index.html">Syntax cheatsheet</a><a class="sidebar-link" href="../../reference/differences/index.html">Differences from TypeScript and Solidity</a><a class="sidebar-link" href="../../reference/diagnostics/index.html">Compiler diagnostics</a><a class="sidebar-link" href="../../reference/known-limitations/index.html">Supported features and limitations</a><a class="sidebar-link" href="../../reference/feature-matrix/index.html">Complete feature matrix</a></section><section class="sidebar-group"><h2>Project</h2><a class="sidebar-link" href="../../project/roadmap/index.html">Product roadmap</a><a class="sidebar-link" href="../../project/overview/index.html">Repository overview</a></section><a class="built-by" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></aside>
+    <main class="content-shell">
+      <article class="article"><div class="article-kicker">Language</div>
+<h1 id="functions">Functions</h1>
+<p>Functions are declared as class methods. Their name, return wrapper, <code>get</code> or <code>static</code> modifier, body, and decorators determine visibility, ABI exposure, mutability, payability, inheritance behavior, and modifier execution.</p>
+<h2 id="function-forms-at-a-glance">Function forms at a glance<a class="heading-anchor" href="#function-forms-at-a-glance" aria-label="Link to Function forms at a glance">#</a></h2>
+<div class="table-wrap"><table><thead><tr><th>JETH declaration</th><th>Visibility</th><th>Mutability rule</th><th>ABI entry</th></tr></thead><tbody><tr><td><code>f(): T</code></td><td>internal</td><td>inferred</td><td>no</td></tr><tr><td><code>#f(): T</code></td><td>private</td><td>inferred</td><td>no</td></tr><tr><td><code>get f(): T</code></td><td>internal</td><td>inferred read-only</td><td>no</td></tr><tr><td><code>get #f(): T</code></td><td>private</td><td>inferred read-only</td><td>no</td></tr><tr><td><code>f(): External&lt;T&gt;</code></td><td>external</td><td>state-mutating or void check</td><td>yes</td></tr><tr><td><code>get f(): External&lt;T&gt;</code></td><td>external</td><td>inferred <code>pure</code> or <code>view</code></td><td>yes</td></tr><tr><td><code>f(): Payable&lt;T&gt;</code></td><td>external</td><td>payable and state-mutating</td><td>yes</td></tr><tr><td><code>static f(): T</code></td><td>internal</td><td>declared <code>pure</code></td><td>no</td></tr><tr><td><code>static get f(): External&lt;T&gt;</code></td><td>external</td><td>declared <code>pure</code></td><td>yes</td></tr></tbody></table></div>
+<p><code>External&lt;T&gt;</code> and <code>Payable&lt;T&gt;</code> are source-level return markers. They are not nested runtime values. For example, an <code>External&lt;u256&gt;</code> method returns one <code>u256</code> in the ABI.</p>
+<h2 id="internal-functions">Internal functions<a class="heading-anchor" href="#internal-functions" aria-label="Link to Internal functions">#</a></h2>
+<p>A plain method is internal. It is not emitted in the ABI:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code>double(value: <span class="tok-type">u256</span>): <span class="tok-type">u256</span> {
+  <span class="tok-keyword">return</span> value * <span class="tok-number">2n</span>;
+}</code></pre></div>
+<p>Call an internal method by bare name or through <code>this</code>:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">let</span> a: <span class="tok-type">u256</span> = double(<span class="tok-number">3n</span>);
+<span class="tok-keyword">let</span> b: <span class="tok-type">u256</span> = <span class="tok-keyword">this</span>.double(<span class="tok-number">4n</span>);</code></pre></div>
+<p>Internal calls are jumps inside the current EVM execution. They preserve the current <code>msg.sender</code>, <code>msg.value</code>, storage context, and revert context. They are not message calls and cannot be wrapped in <code>try</code>/<code>catch</code>.</p>
+<p>Internal functions support direct recursion and mutual recursion. The compiler computes transitive reachability and effects, including calls through supported function references.</p>
+<h2 id="private-functions">Private functions<a class="heading-anchor" href="#private-functions" aria-label="Link to Private functions">#</a></h2>
+<p>A leading <code>#</code> is JETH&#39;s native spelling of Solidity <code>private</code>:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> Vault {
+  <span class="tok-private">#fee</span>(amount: <span class="tok-type">u256</span>): <span class="tok-type">u256</span> {
+    <span class="tok-keyword">return</span> amount / <span class="tok-number">100n</span>;
+  }
+
+  <span class="tok-keyword">get</span> quote(amount: <span class="tok-type">u256</span>): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+    <span class="tok-keyword">return</span> amount - <span class="tok-keyword">this</span>.<span class="tok-private">#fee</span>(amount);
+  }
+}</code></pre></div>
+<p>A private function:</p>
+<ul><li>is callable only from the class that declares it;</li><li>is absent from the ABI;</li><li>cannot be accessed directly by a derived class;</li><li>can still be used by an inherited base implementation executing on a derived contract;</li><li>may have the same source name as a private function in a base class because the two declarations are distinct;</li><li>lowers like an internal function after compile-time visibility enforcement.</li></ul>
+<p>Private functions must be called with <code>this.#name(...)</code>. The <code>#</code> is part of the source name and cannot be replaced with a string, computed property, or the compiler&#39;s internal mangled name.</p>
+<p>A private function cannot return <code>External&lt;T&gt;</code> or <code>Payable&lt;T&gt;</code>. Private and ABI exposure are contradictory, so the compiler rejects the declaration rather than publishing an obfuscated selector.</p>
+<p>Read-only private helpers can use <code>get</code>:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> Ledger {
+  total: <span class="tok-type">u256</span>;
+
+  <span class="tok-keyword">get</span> <span class="tok-private">#current</span>(): <span class="tok-type">u256</span> {
+    <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.total;
+  }
+
+  <span class="tok-keyword">get</span> snapshot(): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.<span class="tok-private">#current</span>();
+  }
+}</code></pre></div>
+<p><code>get #current()</code> is still private. <code>get</code> controls the read-only axis; <code>#</code> controls the visibility axis.</p>
+<h2 id="static-functions">Static functions<a class="heading-anchor" href="#static-functions" aria-label="Link to Static functions">#</a></h2>
+<p>A <code>static</code> method has no instance receiver and is declared pure. Call it through the class name:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> Math {
+  <span class="tok-keyword">static</span> square(value: <span class="tok-type">u256</span>): <span class="tok-type">u256</span> {
+    <span class="tok-keyword">return</span> value * value;
+  }
+
+  <span class="tok-keyword">static</span> <span class="tok-keyword">get</span> four(): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+    <span class="tok-keyword">return</span> Math.square(<span class="tok-number">2n</span>);
+  }
+}</code></pre></div>
+<p>A static method cannot read instance storage, <code>this</code>, environment-dependent values, or immutables. It can read compile-time constants and call other pure static methods. A <code>static</code> method that violates its declared-pure contract is a compile-time error.</p>
+<p><code>static #helper(...)</code> is a private static helper and is called as <code>ClassName.#helper(...)</code>. A static payable method is rejected because a static method has no instance context in which to account for received value.</p>
+<h2 id="external-functions">External functions<a class="heading-anchor" href="#external-functions" aria-label="Link to External functions">#</a></h2>
+<p><code>External&lt;T&gt;</code> exposes a nonpayable ABI entry:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code>set(value: <span class="tok-type">u256</span>): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+  <span class="tok-keyword">this</span>.value = value;
+}</code></pre></div>
+<p>An externally exposed function is a message-call boundary. Calling it by bare name is rejected. Put reusable logic in an internal helper, or use an explicit external self-call when new message-call semantics are intended.</p>
+<p>An <code>External&lt;T&gt;</code> method that returns a non-void value and is read-only must use <code>get</code>. This prevents an ABI function from silently claiming nonpayable state-mutating behavior while its body is actually <code>pure</code> or <code>view</code>:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">get</span> balanceOf(owner: <span class="tok-type">address</span>): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+  <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.balances[owner];
+}</code></pre></div>
+<p>A read-only <code>External&lt;void&gt;</code> check is allowed without <code>get</code> because it exposes no value-returning accessor:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code>checkSolvent(): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+  <span class="tok-builtin">require</span>(<span class="tok-keyword">this</span>.assets <span class="tok-operator">&gt;=</span> <span class="tok-keyword">this</span>.liabilities, <span class="tok-string">&quot;insolvent&quot;</span>);
+}</code></pre></div>
+<h2 id="read-only-functions-and-inference">Read-only functions and inference<a class="heading-anchor" href="#read-only-functions-and-inference" aria-label="Link to Read-only functions and inference">#</a></h2>
+<p><code>get</code> declares that a class method is read-only. Despite its TypeScript-shaped spelling, a JETH <code>get</code> method can have parameters:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">get</span> quote(amount: <span class="tok-type">u256</span>): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+  <span class="tok-keyword">return</span> amount * <span class="tok-keyword">this</span>.rate;
+}</code></pre></div>
+<p>The analyzer computes transitive effects:</p>
+<ul><li>no state, immutable, environment, or external reads: <code>pure</code>;</li><li>state, immutable, environment, or read-only external access: <code>view</code>;</li><li>storage writes, transient writes, logs, value transfer, or mutating calls: state-mutating.</li></ul>
+<p>The inferred mutability is emitted in the ABI. A <code>get</code> body that writes state, emits an event, transfers value, or reaches another mutating operation is a compile-time error.</p>
+<p><code>View&lt;T&gt;</code> and <code>Pure&lt;T&gt;</code> are interface-only markers. A class method has a body, so its mutability is inferred. Use <code>get f(): External&lt;T&gt;</code> for an exposed read-only implementation.</p>
+<h2 id="payable-functions">Payable functions<a class="heading-anchor" href="#payable-functions" aria-label="Link to Payable functions">#</a></h2>
+<p><code>Payable&lt;T&gt;</code> exposes an ABI entry that accepts ETH:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code>deposit(): <span class="tok-type">Payable</span>&lt;<span class="tok-keyword">void</span>&gt; {
+  <span class="tok-keyword">this</span>.balance <span class="tok-operator">+=</span> <span class="tok-builtin">msg</span>.value;
+}</code></pre></div>
+<p><code>msg.value</code> is available only where payability permits it. Nonpayable entries reject nonzero call value before entering the function body. A <code>get</code> method cannot be payable because read-only and value-receiving declarations conflict.</p>
+<h2 id="parameters">Parameters<a class="heading-anchor" href="#parameters" aria-label="Link to Parameters">#</a></h2>
+<p>Every parameter has an explicit JETH type:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code>quote(owner: <span class="tok-type">address</span>, amount: <span class="tok-type">u128</span>): <span class="tok-type">u256</span> {
+  <span class="tok-keyword">return</span> owner <span class="tok-operator">==</span> <span class="tok-type">address</span>(<span class="tok-number">0n</span>) ? <span class="tok-number">0n</span> : <span class="tok-type">u256</span>(amount) * <span class="tok-keyword">this</span>.rate;
+}</code></pre></div>
+<p>External reference-type parameters are decoded from calldata. Internal reference-type parameters follow the accepted memory, storage, or aliasing path for their shape. See <a href="../data-locations/index.html">Data locations and copying</a>.</p>
+<p>Parameter names participate in named-argument calls and diagnostics. Duplicate parameter names, reserved names, missing types, and unsupported ABI types are compile-time errors.</p>
+<h2 id="return-values">Return values<a class="heading-anchor" href="#return-values" aria-label="Link to Return values">#</a></h2>
+<p>The declared return type is checked on every reachable return path:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code>read(): [<span class="tok-type">u256</span>, <span class="tok-type">address</span>] {
+  <span class="tok-keyword">return</span> [<span class="tok-keyword">this</span>.value, <span class="tok-keyword">this</span>.owner];
+}</code></pre></div>
+<p>A <code>void</code> function can use <code>return;</code>. A non-void function must return a compatible value on every reachable path. Multi-value returns use tuple syntax and ABI encode each component in order for external functions.</p>
+<h2 id="default-arguments">Default arguments<a class="heading-anchor" href="#default-arguments" aria-label="Link to Default arguments">#</a></h2>
+<p>Trailing internal parameters can have compile-time defaults:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code>fee(amount: <span class="tok-type">u256</span>, bps: <span class="tok-type">u256</span> = <span class="tok-number">30n</span>, floor: <span class="tok-type">u256</span> = <span class="tok-number">1n</span>): <span class="tok-type">u256</span> {
+  <span class="tok-keyword">let</span> result: <span class="tok-type">u256</span> = amount * bps / <span class="tok-number">10000n</span>;
+  <span class="tok-keyword">return</span> result &lt; floor ? floor : result;
+}</code></pre></div>
+<p>Defaults are evaluated in declaration context and must satisfy the supported constant-expression rules. They are checked even if every current call supplies the argument. External callers still provide the complete ABI parameter list.</p>
+<h2 id="named-arguments">Named arguments<a class="heading-anchor" href="#named-arguments" aria-label="Link to Named arguments">#</a></h2>
+<p>Internal calls can bind arguments by parameter name:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">let</span> result: <span class="tok-type">u256</span> = <span class="tok-keyword">this</span>.fee({ amount: value, bps: <span class="tok-number">50n</span> });</code></pre></div>
+<p>Names must match parameters, cannot be duplicated, and cannot omit a required parameter. The compiler reorders the arguments to declaration order before lowering the call.</p>
+<h2 id="overloading">Overloading<a class="heading-anchor" href="#overloading" aria-label="Link to Overloading">#</a></h2>
+<p>Functions can be overloaded when parameter signatures distinguish them:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code>scale(value: <span class="tok-type">u256</span>): <span class="tok-type">u256</span> { <span class="tok-keyword">return</span> value * <span class="tok-number">2n</span>; }
+scale(value: <span class="tok-type">u256</span>, factor: <span class="tok-type">u256</span>): <span class="tok-type">u256</span> { <span class="tok-keyword">return</span> value * factor; }</code></pre></div>
+<p>Return type alone does not create a distinct overload. External overloads must also have distinct canonical ABI selectors. The compiler rejects ambiguous call resolution and selector collisions.</p>
+<h2 id="generics">Generics<a class="heading-anchor" href="#generics" aria-label="Link to Generics">#</a></h2>
+<p>Internal functions can be generic over supported type parameters:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code>identity&lt;T&gt;(value: T): T {
+  <span class="tok-keyword">return</span> value;
+}</code></pre></div>
+<p>Generics are monomorphized at compile time. Each concrete instantiation is type checked and lowered as specialized internal code. Generic functions cannot form a dynamic runtime type system or a generic external ABI.</p>
+<h2 id="internal-function-references">Internal function references<a class="heading-anchor" href="#internal-function-references" aria-label="Link to Internal function references">#</a></h2>
+<p>Use arrow-type syntax for an internal function reference:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code>inc(value: <span class="tok-type">u256</span>): <span class="tok-type">u256</span> { <span class="tok-keyword">return</span> value + <span class="tok-number">1n</span>; }
+dec(value: <span class="tok-type">u256</span>): <span class="tok-type">u256</span> { <span class="tok-keyword">return</span> value - <span class="tok-number">1n</span>; }
+
+apply(fn: (value: <span class="tok-type">u256</span>) <span class="tok-operator">=&gt;</span> <span class="tok-type">u256</span>, value: <span class="tok-type">u256</span>): <span class="tok-type">u256</span> {
+  <span class="tok-keyword">return</span> fn(value);
+}
+
+<span class="tok-keyword">get</span> choose(up: <span class="tok-type">bool</span>, value: <span class="tok-type">u256</span>): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+  <span class="tok-keyword">let</span> fn: (value: <span class="tok-type">u256</span>) <span class="tok-operator">=&gt;</span> <span class="tok-type">u256</span> = up ? <span class="tok-keyword">this</span>.inc : <span class="tok-keyword">this</span>.dec;
+  <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.apply(fn, value);
+}</code></pre></div>
+<p>Supported function references can be stored in locals, state fields, arrays, and supported structs; passed and returned internally; compared with <code>==</code> and <code>!=</code>; and invoked through a matching signature. An unset reference reverts with <code>Panic(0x51)</code> when called.</p>
+<p>Function references are not ABI-encodable external function pointers. They cannot be external parameters or returns, event values, encoded ABI values, or cast to integers. Taking the address of an exposed or ambiguous overloaded method is rejected.</p>
+<p>Calls through a reference conservatively include the effects of compatible targets when the compiler infers mutability.</p>
+<h2 id="function-selectors">Function selectors<a class="heading-anchor" href="#function-selectors" aria-label="Link to Function selectors">#</a></h2>
+<p>An unambiguous exposed function reference has a canonical <code>bytes4</code> selector:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">interface</span> Token {
+  transfer(to: <span class="tok-type">address</span>, amount: <span class="tok-type">u256</span>): <span class="tok-type">bool</span>;
+}
+
+<span class="tok-keyword">class</span> SelectorReader {
+  <span class="tok-keyword">get</span> transferSelector(): <span class="tok-type">External</span>&lt;<span class="tok-type">bytes4</span>&gt; {
+    <span class="tok-keyword">return</span> Token.transfer.selector;
+  }
+}</code></pre></div>
+<p>Selector lookup on an overloaded name is ambiguous unless the source context identifies one signature. The compiler also rejects distinct ABI declarations whose canonical signatures collide to the same four bytes.</p>
+<h2 id="function-decorators">Function decorators<a class="heading-anchor" href="#function-decorators" aria-label="Link to Function decorators">#</a></h2>
+<p>Function decorators add compile-time behavior:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-decorator">@virtual</span>
+calculate(value: <span class="tok-type">u256</span>): <span class="tok-type">u256</span> {
+  <span class="tok-keyword">return</span> value;
+}
+
+<span class="tok-decorator">@nonReentrant</span>
+execute(): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+  <span class="tok-comment">// ...</span>
+}</code></pre></div>
+<p>The supported families are:</p>
+<ul><li><code>@virtual</code> and <code>@override</code> for inheritance;</li><li>declared and applied user modifiers;</li><li><code>@nonReentrant</code> for the transient-storage guard;</li><li>advanced proxy, diamond, and library decorators where documented.</li></ul>
+<p>Retired visibility and mutability decorators such as <code>@external</code>, <code>@public</code>, <code>@internal</code>, <code>@private</code>, <code>@view</code>, and <code>@pure</code> are rejected. Use native return markers, <code>#</code>, <code>get</code>, and <code>static</code> instead.</p>
+<p>Decorators are validated at declaration and application sites. An unused modifier or generic template is still type-checked through the compiler&#39;s standalone validation routes.</p>
+<h2 id="calls-and-effects">Calls and effects<a class="heading-anchor" href="#calls-and-effects" aria-label="Link to Calls and effects">#</a></h2>
+<p>Effects propagate through internal calls, private calls, function references, modifiers, and static methods. A pure caller cannot hide a storage read inside a helper. A modifier&#39;s pre-code and post-code contribute to the wrapped function&#39;s inferred mutability.</p>
+<p>External calls are separate EVM calls and can reenter. See <a href="../../contracts/interfaces-and-calls/index.html">Interfaces and external calls</a> and <a href="../../security/considerations/index.html">Security considerations</a>.</p><div class="article-footer"><span>JETH language documentation</span><a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></div><nav class="pagination" aria-label="Documentation pages"><a class="pagination-link previous" href="../control-flow/index.html"><span>Previous</span><strong>Statements and control flow</strong></a><a class="pagination-link next" href="../globals-and-builtins/index.html"><span>Next</span><strong>Units, globals, and builtins</strong></a></nav></article>
+      <nav class="page-toc" aria-label="On this page"><div class="toc-title">On this page</div><a class="toc-link depth-2" href="#function-forms-at-a-glance">Function forms at a glance</a><a class="toc-link depth-2" href="#internal-functions">Internal functions</a><a class="toc-link depth-2" href="#private-functions">Private functions</a><a class="toc-link depth-2" href="#static-functions">Static functions</a><a class="toc-link depth-2" href="#external-functions">External functions</a><a class="toc-link depth-2" href="#read-only-functions-and-inference">Read-only functions and inference</a><a class="toc-link depth-2" href="#payable-functions">Payable functions</a><a class="toc-link depth-2" href="#parameters">Parameters</a><a class="toc-link depth-2" href="#return-values">Return values</a><a class="toc-link depth-2" href="#default-arguments">Default arguments</a><a class="toc-link depth-2" href="#named-arguments">Named arguments</a><a class="toc-link depth-2" href="#overloading">Overloading</a><a class="toc-link depth-2" href="#generics">Generics</a><a class="toc-link depth-2" href="#internal-function-references">Internal function references</a><a class="toc-link depth-2" href="#function-selectors">Function selectors</a><a class="toc-link depth-2" href="#function-decorators">Function decorators</a><a class="toc-link depth-2" href="#calls-and-effects">Calls and effects</a></nav>
+    </main>
+  </div>
+  <div class="search-modal" hidden><button class="search-backdrop" type="button" aria-label="Close search"></button><div class="search-panel" role="dialog" aria-modal="true" aria-label="Search documentation"><div class="search-box"><span>⌕</span><input class="search-input" type="search" placeholder="Search JETH guides..." autocomplete="off"><button class="search-close" type="button">Esc</button></div><div class="search-results"><div class="search-empty">Start typing to search the book.</div></div></div></div>
+  <script src="../../assets/search-index.js"></script>
+  <script src="../../assets/book.js"></script>
+</body>
+</html>

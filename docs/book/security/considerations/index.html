@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Security considerations in the JETH language documentation.">
+  <meta name="theme-color" content="#11131a">
+  <meta property="og:image" content="../../assets/a16k-avatar-logo.png">
+  <title>Security considerations | JETH</title>
+  <link rel="icon" href="../../assets/jeth-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../../assets/book.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../../index.html" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span></a>
+    <nav class="top-nav" aria-label="Primary"><a class="is-active" href="../../index.html">Guides</a><a href="../../internals/compiler-and-tooling/index.html">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
+    <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
+  </header>
+  <div class="pre-release"><span>Pre-release</span> JETH is under active compiler and security review.</div>
+  <div class="book-shell">
+    <aside class="sidebar"><div class="sidebar-title">Guides</div><section class="sidebar-group"><h2>Guides</h2><a class="sidebar-link" href="../../index.html">JETH Documentation</a><a class="sidebar-link" href="../../guides/getting-started/index.html">Getting started</a><a class="sidebar-link" href="../../guides/language-tour/index.html">Language tour</a><a class="sidebar-link" href="../../guides/examples/index.html">Examples</a></section><section class="sidebar-group"><h2>Language</h2><a class="sidebar-link" href="../../language/source-units/index.html">Source units and imports</a><a class="sidebar-link" href="../../language/contract-structure/index.html">Contract structure</a><a class="sidebar-link" href="../../language/types/index.html">Types</a><a class="sidebar-link" href="../../language/value-types/index.html">Value types</a><a class="sidebar-link" href="../../language/reference-types/index.html">Reference and composite types</a><a class="sidebar-link" href="../../language/data-locations/index.html">Data locations and copying</a><a class="sidebar-link" href="../../language/expressions/index.html">Expressions and operators</a><a class="sidebar-link" href="../../language/control-flow/index.html">Statements and control flow</a><a class="sidebar-link" href="../../language/functions/index.html">Functions</a><a class="sidebar-link" href="../../language/globals-and-builtins/index.html">Units, globals, and builtins</a><a class="sidebar-link" href="../../language/jeth-features/index.html">JETH-specific features</a></section><section class="sidebar-group"><h2>Contracts</h2><a class="sidebar-link" href="../../contracts/inheritance/index.html">Constructors and inheritance</a><a class="sidebar-link" href="../../contracts/modifiers/index.html">Function modifiers</a><a class="sidebar-link" href="../../contracts/interfaces-and-calls/index.html">Interfaces and external calls</a><a class="sidebar-link" href="../../contracts/libraries/index.html">Libraries and using</a><a class="sidebar-link" href="../../contracts/events-and-errors/index.html">Events, errors, and panics</a></section><section class="sidebar-group"><h2>Internals</h2><a class="sidebar-link" href="../../internals/abi/index.html">Contract ABI specification</a><a class="sidebar-link" href="../../internals/storage-layout/index.html">Storage layout</a><a class="sidebar-link" href="../../internals/compiler-and-tooling/index.html">Compiler, CLI, and tooling</a><a class="sidebar-link" href="../../internals/artifacts/index.html">Contracts and artifacts</a></section><section class="sidebar-group"><h2>Advanced</h2><a class="sidebar-link" href="../../advanced/contract-creation-and-clones/index.html">Contract creation and clones</a><a class="sidebar-link" href="../../advanced/proxies-and-diamonds/index.html">Proxies, beacons, and diamonds</a></section><section class="sidebar-group"><h2>Security</h2><a class="sidebar-link is-active" href="./index.html" aria-current="page">Security considerations</a><a class="sidebar-link" href="../compiler-correctness/index.html">Compiler correctness model</a></section><section class="sidebar-group"><h2>Reference</h2><a class="sidebar-link" href="../../reference/cheatsheet/index.html">Syntax cheatsheet</a><a class="sidebar-link" href="../../reference/differences/index.html">Differences from TypeScript and Solidity</a><a class="sidebar-link" href="../../reference/diagnostics/index.html">Compiler diagnostics</a><a class="sidebar-link" href="../../reference/known-limitations/index.html">Supported features and limitations</a><a class="sidebar-link" href="../../reference/feature-matrix/index.html">Complete feature matrix</a></section><section class="sidebar-group"><h2>Project</h2><a class="sidebar-link" href="../../project/roadmap/index.html">Product roadmap</a><a class="sidebar-link" href="../../project/overview/index.html">Repository overview</a></section><a class="built-by" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></aside>
+    <main class="content-shell">
+      <article class="article"><div class="article-kicker">Security</div>
+<h1 id="security-considerations">Security considerations</h1>
+<p>Built by <a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer">@a16k-lab</a>.</p>
+<p>This chapter covers contract-author risks. Compiler correctness is addressed in the next chapter.</p>
+<aside class="callout callout-danger"><div class="callout-label">DANGER</div><p>Passing compiler tests does not make an application safe. Production contracts still require application-specific testing, economic review, deployment review, and an independent audit.</p></aside>
+<h2 id="reentrancy">Reentrancy<a class="heading-anchor" href="#reentrancy" aria-label="Link to Reentrancy">#</a></h2>
+<p>External calls transfer control. Update critical state before interaction, validate invariants after return where necessary, and use <code>@nonReentrant</code> for an appropriate guard boundary.</p>
+<p>Do not assume a static-looking interface prevents the callee from calling other contracts.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> Escrow {
+  balances: <span class="tok-type">mapping</span>&lt;<span class="tok-type">address</span>, <span class="tok-type">u256</span>&gt;;
+
+  deposit(): <span class="tok-type">Payable</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-keyword">this</span>.balances[<span class="tok-builtin">msg</span>.sender] <span class="tok-operator">+=</span> <span class="tok-builtin">msg</span>.value;
+  }
+
+  <span class="tok-decorator">@nonReentrant</span>
+  withdraw(receiver: <span class="tok-type">address</span>, amount: <span class="tok-type">u256</span>): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-keyword">const</span> available: <span class="tok-type">u256</span> = <span class="tok-keyword">this</span>.balances[<span class="tok-builtin">msg</span>.sender];
+    <span class="tok-builtin">require</span>(available <span class="tok-operator">&gt;=</span> amount, <span class="tok-string">&quot;insufficient balance&quot;</span>);
+
+    <span class="tok-comment">// Effects before interaction.</span>
+    <span class="tok-keyword">this</span>.balances[<span class="tok-builtin">msg</span>.sender] = available - amount;
+
+    receiver.call({
+      data: <span class="tok-type">bytes</span>(<span class="tok-string">&quot;&quot;</span>),
+      value: amount,
+      success: { condition: <span class="tok-keyword">true</span>, <span class="tok-builtin">revert</span>: <span class="tok-string">&quot;ETH transfer failed&quot;</span> },
+    });
+  }
+}</code></pre></div>
+<p>The state reduction occurs before the external call, and <code>@nonReentrant</code> protects the chosen entry boundary. In a real escrow, also define receiver, pause, accounting, and forced-ETH policies.</p>
+<h2 id="authorization">Authorization<a class="heading-anchor" href="#authorization" aria-label="Link to Authorization">#</a></h2>
+<p>Use <code>msg.sender</code>, role state, signatures with replay protection, or a reviewed governance mechanism. Never use <code>tx.origin</code> for authorization.</p>
+<p>Check authorization on every state-changing entry, including upgrade, pause, rescue, callback, and initialization paths.</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> OwnedSettings {
+  owner: <span class="tok-type">address</span>;
+  limit: <span class="tok-type">u256</span>;
+
+  constructor(initialOwner: <span class="tok-type">address</span>) {
+    <span class="tok-builtin">require</span>(initialOwner <span class="tok-operator">!=</span> <span class="tok-type">address</span>(<span class="tok-number">0n</span>), <span class="tok-string">&quot;zero owner&quot;</span>);
+    <span class="tok-keyword">this</span>.owner = initialOwner;
+  }
+
+  setLimit(newLimit: <span class="tok-type">u256</span>): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-builtin">require</span>(<span class="tok-builtin">msg</span>.sender <span class="tok-operator">==</span> <span class="tok-keyword">this</span>.owner, <span class="tok-string">&quot;not owner&quot;</span>);
+    <span class="tok-keyword">this</span>.limit = newLimit;
+  }
+}</code></pre></div>
+<p>Constructor authorization does not protect later entries. Every privileged state transition needs its own check or a correctly applied modifier.</p>
+<h2 id="arithmetic-and-precision">Arithmetic and precision<a class="heading-anchor" href="#arithmetic-and-precision" aria-label="Link to Arithmetic and precision">#</a></h2>
+<p>Checked integer arithmetic prevents silent overflow outside <code>unchecked</code>, but it does not prevent:</p>
+<ul><li>precision loss from division;</li><li>unfavorable rounding;</li><li>unit confusion;</li><li>economic overflow in an intentionally wide range;</li><li>incorrect fixed-point scaling;</li><li>division before multiplication;</li><li>malicious boundary inputs.</li></ul>
+<p>Use branded units, explicit rounding policies, range checks, and reference vectors.</p>
+<h2 id="calls-and-returndata">Calls and returndata<a class="heading-anchor" href="#calls-and-returndata" aria-label="Link to Calls and returndata">#</a></h2>
+<p>A low-level call success flag means the EVM call did not revert. It does not mean the intended application action occurred. Validate returndata and postconditions.</p>
+<p>Bubble raw revert data only when exposing the callee&#39;s error surface is intended. Crafted revert bytes can mimic known selectors.</p>
+<h2 id="abi-and-signatures">ABI and signatures<a class="heading-anchor" href="#abi-and-signatures" aria-label="Link to ABI and signatures">#</a></h2>
+<p>Avoid ambiguous <code>abi.encodePacked</code> inputs when hashing multiple dynamic values. Include domain separation, chain/application context, signer, nonce, action, parameters, and expiry as needed.</p>
+<p>Enforce low-s signatures through the safe recovery helper and reject the zero address.</p>
+<h2 id="randomness-and-block-data">Randomness and block data<a class="heading-anchor" href="#randomness-and-block-data" aria-label="Link to Randomness and block data">#</a></h2>
+<p>Timestamp, coinbase, prevrandao, blockhash, gas, and ordering can be influenced or predicted to varying degrees. Use a reviewed randomness protocol for valuable outcomes.</p>
+<h2 id="denial-of-service-and-gas">Denial of service and gas<a class="heading-anchor" href="#denial-of-service-and-gas" aria-label="Link to Denial of service and gas">#</a></h2>
+<p>Loops over user-growing storage can become uncallable. External calls can consume gas. Large calldata or returndata can increase copy costs. Deep recursion and large memory allocations can fail.</p>
+<p>Bound iteration, use pull patterns, paginate, and make progress resumable where appropriate.</p>
+<h2 id="storage-and-upgrades">Storage and upgrades<a class="heading-anchor" href="#storage-and-upgrades" aria-label="Link to Storage and upgrades">#</a></h2>
+<p>Upgradeable systems must preserve field order, packing, inheritance order, namespaces, and reserved proxy slots. Initialize every proxy exactly once and protect upgrade authorization.</p>
+<p>An implementation constructor does not initialize proxy storage.</p>
+<h2 id="delegatecall">Delegatecall<a class="heading-anchor" href="#delegatecall" aria-label="Link to Delegatecall">#</a></h2>
+<p>External libraries, proxies, and diamonds execute code in another account&#39;s storage context. A delegate target can modify any storage slot and act as the calling contract.</p>
+<p>Only delegate to verified code selected by trusted, audited logic.</p>
+<h2 id="error-handling">Error handling<a class="heading-anchor" href="#error-handling" aria-label="Link to Error handling">#</a></h2>
+<p>Use custom errors for expected failures. Use assertions for internal invariants. Do not ignore low-level call success. Do not rely on revert strings as a stable machine protocol.</p>
+<h2 id="compiler-and-dependency-pinning">Compiler and dependency pinning<a class="heading-anchor" href="#compiler-and-dependency-pinning" aria-label="Link to Compiler and dependency pinning">#</a></h2>
+<p>Pin the JETH version, solc version, EVM target, dependencies, optimizer settings, and source inputs. Preserve artifacts and hashes. Recompile and re-audit when the toolchain changes.</p>
+<h2 id="audit-scope">Audit scope<a class="heading-anchor" href="#audit-scope" aria-label="Link to Audit scope">#</a></h2>
+<p>Passing the JETH differential suite does not audit an application. Production contracts still need invariant tests, fuzzing, economic analysis, deployment review, key-management review, and an independent audit.</p><div class="article-footer"><span>JETH language documentation</span><a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></div><nav class="pagination" aria-label="Documentation pages"><a class="pagination-link previous" href="../../advanced/proxies-and-diamonds/index.html"><span>Previous</span><strong>Proxies, beacons, and diamonds</strong></a><a class="pagination-link next" href="../compiler-correctness/index.html"><span>Next</span><strong>Compiler correctness model</strong></a></nav></article>
+      <nav class="page-toc" aria-label="On this page"><div class="toc-title">On this page</div><a class="toc-link depth-2" href="#reentrancy">Reentrancy</a><a class="toc-link depth-2" href="#authorization">Authorization</a><a class="toc-link depth-2" href="#arithmetic-and-precision">Arithmetic and precision</a><a class="toc-link depth-2" href="#calls-and-returndata">Calls and returndata</a><a class="toc-link depth-2" href="#abi-and-signatures">ABI and signatures</a><a class="toc-link depth-2" href="#randomness-and-block-data">Randomness and block data</a><a class="toc-link depth-2" href="#denial-of-service-and-gas">Denial of service and gas</a><a class="toc-link depth-2" href="#storage-and-upgrades">Storage and upgrades</a><a class="toc-link depth-2" href="#delegatecall">Delegatecall</a><a class="toc-link depth-2" href="#error-handling">Error handling</a><a class="toc-link depth-2" href="#compiler-and-dependency-pinning">Compiler and dependency pinning</a><a class="toc-link depth-2" href="#audit-scope">Audit scope</a></nav>
+    </main>
+  </div>
+  <div class="search-modal" hidden><button class="search-backdrop" type="button" aria-label="Close search"></button><div class="search-panel" role="dialog" aria-modal="true" aria-label="Search documentation"><div class="search-box"><span>⌕</span><input class="search-input" type="search" placeholder="Search JETH guides..." autocomplete="off"><button class="search-close" type="button">Esc</button></div><div class="search-results"><div class="search-empty">Start typing to search the book.</div></div></div></div>
+  <script src="../../assets/search-index.js"></script>
+  <script src="../../assets/book.js"></script>
+</body>
+</html>

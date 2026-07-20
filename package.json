@@ -9,6 +9,7 @@
     "test": "vitest run",
     "test:changed": "vitest run --changed",
     "jethc": "tsx src/cli.ts",
+    "docs:build": "tsx scripts/build-docs.mts",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

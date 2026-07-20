@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Getting started in the JETH language documentation.">
+  <meta name="theme-color" content="#11131a">
+  <meta property="og:image" content="../../assets/a16k-avatar-logo.png">
+  <title>Getting started | JETH</title>
+  <link rel="icon" href="../../assets/jeth-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../../assets/book.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../../index.html" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span></a>
+    <nav class="top-nav" aria-label="Primary"><a class="is-active" href="../../index.html">Guides</a><a href="../../internals/compiler-and-tooling/index.html">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
+    <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
+  </header>
+  <div class="pre-release"><span>Pre-release</span> JETH is under active compiler and security review.</div>
+  <div class="book-shell">
+    <aside class="sidebar"><div class="sidebar-title">Guides</div><section class="sidebar-group"><h2>Guides</h2><a class="sidebar-link" href="../../index.html">JETH Documentation</a><a class="sidebar-link is-active" href="./index.html" aria-current="page">Getting started</a><a class="sidebar-link" href="../language-tour/index.html">Language tour</a><a class="sidebar-link" href="../examples/index.html">Examples</a></section><section class="sidebar-group"><h2>Language</h2><a class="sidebar-link" href="../../language/source-units/index.html">Source units and imports</a><a class="sidebar-link" href="../../language/contract-structure/index.html">Contract structure</a><a class="sidebar-link" href="../../language/types/index.html">Types</a><a class="sidebar-link" href="../../language/value-types/index.html">Value types</a><a class="sidebar-link" href="../../language/reference-types/index.html">Reference and composite types</a><a class="sidebar-link" href="../../language/data-locations/index.html">Data locations and copying</a><a class="sidebar-link" href="../../language/expressions/index.html">Expressions and operators</a><a class="sidebar-link" href="../../language/control-flow/index.html">Statements and control flow</a><a class="sidebar-link" href="../../language/functions/index.html">Functions</a><a class="sidebar-link" href="../../language/globals-and-builtins/index.html">Units, globals, and builtins</a><a class="sidebar-link" href="../../language/jeth-features/index.html">JETH-specific features</a></section><section class="sidebar-group"><h2>Contracts</h2><a class="sidebar-link" href="../../contracts/inheritance/index.html">Constructors and inheritance</a><a class="sidebar-link" href="../../contracts/modifiers/index.html">Function modifiers</a><a class="sidebar-link" href="../../contracts/interfaces-and-calls/index.html">Interfaces and external calls</a><a class="sidebar-link" href="../../contracts/libraries/index.html">Libraries and using</a><a class="sidebar-link" href="../../contracts/events-and-errors/index.html">Events, errors, and panics</a></section><section class="sidebar-group"><h2>Internals</h2><a class="sidebar-link" href="../../internals/abi/index.html">Contract ABI specification</a><a class="sidebar-link" href="../../internals/storage-layout/index.html">Storage layout</a><a class="sidebar-link" href="../../internals/compiler-and-tooling/index.html">Compiler, CLI, and tooling</a><a class="sidebar-link" href="../../internals/artifacts/index.html">Contracts and artifacts</a></section><section class="sidebar-group"><h2>Advanced</h2><a class="sidebar-link" href="../../advanced/contract-creation-and-clones/index.html">Contract creation and clones</a><a class="sidebar-link" href="../../advanced/proxies-and-diamonds/index.html">Proxies, beacons, and diamonds</a></section><section class="sidebar-group"><h2>Security</h2><a class="sidebar-link" href="../../security/considerations/index.html">Security considerations</a><a class="sidebar-link" href="../../security/compiler-correctness/index.html">Compiler correctness model</a></section><section class="sidebar-group"><h2>Reference</h2><a class="sidebar-link" href="../../reference/cheatsheet/index.html">Syntax cheatsheet</a><a class="sidebar-link" href="../../reference/differences/index.html">Differences from TypeScript and Solidity</a><a class="sidebar-link" href="../../reference/diagnostics/index.html">Compiler diagnostics</a><a class="sidebar-link" href="../../reference/known-limitations/index.html">Supported features and limitations</a><a class="sidebar-link" href="../../reference/feature-matrix/index.html">Complete feature matrix</a></section><section class="sidebar-group"><h2>Project</h2><a class="sidebar-link" href="../../project/roadmap/index.html">Product roadmap</a><a class="sidebar-link" href="../../project/overview/index.html">Repository overview</a></section><a class="built-by" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></aside>
+    <main class="content-shell">
+      <article class="article"><div class="article-kicker">Guides</div>
+<h1 id="getting-started">Getting started</h1>
+<h2 id="requirements">Requirements<a class="heading-anchor" href="#requirements" aria-label="Link to Requirements">#</a></h2>
+<ul><li>Node.js 22</li><li>npm</li><li>A local clone of the JETH repository</li></ul>
+<p>The compiler package is currently private and pre-release. Use the repository entry point until a versioned <code>jethc</code> package and standalone binary are published.</p>
+<h2 id="install-and-verify">Install and verify<a class="heading-anchor" href="#install-and-verify" aria-label="Link to Install and verify">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>bash</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="bash"><code>npm install
+npm run build
+npm test</code></pre></div>
+<p>Compile the bundled counter example:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>bash</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="bash"><code>npm run jethc -- examples/Counter.jeth --abi --bin --layout</code></pre></div>
+<p>Write artifacts to a directory:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>bash</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="bash"><code>npm run jethc -- examples/Counter.jeth -o build/</code></pre></div>
+<p>The current CLI can print generated Yul, ABI JSON, creation/runtime bytecode, and storage layout:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>text</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="text"><code>usage: jethc &lt;file.jeth&gt; [options]
+  --yul       print generated Yul
+  --abi       print ABI JSON
+  --bin       print creation and runtime bytecode
+  --layout    print storage layout
+  -o &lt;dir&gt;    write artifacts to a directory</code></pre></div>
+<h2 id="create-a-contract">Create a contract<a class="heading-anchor" href="#create-a-contract" aria-label="Link to Create a contract">#</a></h2>
+<p>Create <code>Hello.jeth</code>:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">class</span> Hello {
+  value: <span class="tok-type">u256</span> = <span class="tok-number">0n</span>;
+
+  setValue(next: <span class="tok-type">u256</span>): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; {
+    <span class="tok-keyword">this</span>.value = next;
+  }
+
+  <span class="tok-keyword">get</span> readValue(): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.value;
+  }
+}</code></pre></div>
+<p>Compile it:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>bash</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="bash"><code>npm run jethc -- Hello.jeth -o build/</code></pre></div>
+<p>The output directory contains ABI, creation bytecode, runtime bytecode, and Yul. The exact output format is not stable until the public CLI milestone is complete.</p>
+<h2 id="read-jeth-syntax-correctly">Read JETH syntax correctly<a class="heading-anchor" href="#read-jeth-syntax-correctly" aria-label="Link to Read JETH syntax correctly">#</a></h2>
+<ul><li>Integer literals use BigInt syntax: <code>1n</code>, not <code>1</code>.</li><li><code>u256</code> means an EVM <code>uint256</code>, not a JavaScript number.</li><li>A bare class is a contract.</li><li>A bare field is storage.</li><li>A method returning <code>External&lt;T&gt;</code> is externally callable.</li><li>A <code>get</code> method is read-only; the compiler infers <code>pure</code> or <code>view</code>.</li><li>A method without <code>External&lt;T&gt;</code> or <code>Payable&lt;T&gt;</code> is internal.</li><li>Arithmetic is checked unless it is inside <code>unchecked: { ... }</code>.</li></ul>
+<h2 id="next-steps">Next steps<a class="heading-anchor" href="#next-steps" aria-label="Link to Next steps">#</a></h2>
+<ul><li>Take the <a href="../language-tour/index.html">language tour</a>.</li><li>Browse progressively larger <a href="../examples/index.html">examples</a>.</li><li>Use the <a href="../../language/types/index.html">language reference</a> for exact syntax.</li><li>Check <a href="../../reference/feature-matrix/index.html">SUPPORTED.md</a> before relying on an advanced shape.</li><li>Read <a href="../../security/considerations/index.html">security considerations</a> and the <a href="../../security/compiler-correctness/index.html">compiler correctness model</a> before deploying anything.</li></ul><div class="article-footer"><span>JETH language documentation</span><a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></div><nav class="pagination" aria-label="Documentation pages"><a class="pagination-link previous" href="../../index.html"><span>Previous</span><strong>JETH Documentation</strong></a><a class="pagination-link next" href="../language-tour/index.html"><span>Next</span><strong>Language tour</strong></a></nav></article>
+      <nav class="page-toc" aria-label="On this page"><div class="toc-title">On this page</div><a class="toc-link depth-2" href="#requirements">Requirements</a><a class="toc-link depth-2" href="#install-and-verify">Install and verify</a><a class="toc-link depth-2" href="#create-a-contract">Create a contract</a><a class="toc-link depth-2" href="#read-jeth-syntax-correctly">Read JETH syntax correctly</a><a class="toc-link depth-2" href="#next-steps">Next steps</a></nav>
+    </main>
+  </div>
+  <div class="search-modal" hidden><button class="search-backdrop" type="button" aria-label="Close search"></button><div class="search-panel" role="dialog" aria-modal="true" aria-label="Search documentation"><div class="search-box"><span>⌕</span><input class="search-input" type="search" placeholder="Search JETH guides..." autocomplete="off"><button class="search-close" type="button">Esc</button></div><div class="search-results"><div class="search-empty">Start typing to search the book.</div></div></div></div>
+  <script src="../../assets/search-index.js"></script>
+  <script src="../../assets/book.js"></script>
+</body>
+</html>

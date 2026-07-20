@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Syntax cheatsheet in the JETH language documentation.">
+  <meta name="theme-color" content="#11131a">
+  <meta property="og:image" content="../../assets/a16k-avatar-logo.png">
+  <title>Syntax cheatsheet | JETH</title>
+  <link rel="icon" href="../../assets/jeth-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../../assets/book.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../../index.html" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span></a>
+    <nav class="top-nav" aria-label="Primary"><a class="is-active" href="../../index.html">Guides</a><a href="../../internals/compiler-and-tooling/index.html">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
+    <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
+  </header>
+  <div class="pre-release"><span>Pre-release</span> JETH is under active compiler and security review.</div>
+  <div class="book-shell">
+    <aside class="sidebar"><div class="sidebar-title">Guides</div><section class="sidebar-group"><h2>Guides</h2><a class="sidebar-link" href="../../index.html">JETH Documentation</a><a class="sidebar-link" href="../../guides/getting-started/index.html">Getting started</a><a class="sidebar-link" href="../../guides/language-tour/index.html">Language tour</a><a class="sidebar-link" href="../../guides/examples/index.html">Examples</a></section><section class="sidebar-group"><h2>Language</h2><a class="sidebar-link" href="../../language/source-units/index.html">Source units and imports</a><a class="sidebar-link" href="../../language/contract-structure/index.html">Contract structure</a><a class="sidebar-link" href="../../language/types/index.html">Types</a><a class="sidebar-link" href="../../language/value-types/index.html">Value types</a><a class="sidebar-link" href="../../language/reference-types/index.html">Reference and composite types</a><a class="sidebar-link" href="../../language/data-locations/index.html">Data locations and copying</a><a class="sidebar-link" href="../../language/expressions/index.html">Expressions and operators</a><a class="sidebar-link" href="../../language/control-flow/index.html">Statements and control flow</a><a class="sidebar-link" href="../../language/functions/index.html">Functions</a><a class="sidebar-link" href="../../language/globals-and-builtins/index.html">Units, globals, and builtins</a><a class="sidebar-link" href="../../language/jeth-features/index.html">JETH-specific features</a></section><section class="sidebar-group"><h2>Contracts</h2><a class="sidebar-link" href="../../contracts/inheritance/index.html">Constructors and inheritance</a><a class="sidebar-link" href="../../contracts/modifiers/index.html">Function modifiers</a><a class="sidebar-link" href="../../contracts/interfaces-and-calls/index.html">Interfaces and external calls</a><a class="sidebar-link" href="../../contracts/libraries/index.html">Libraries and using</a><a class="sidebar-link" href="../../contracts/events-and-errors/index.html">Events, errors, and panics</a></section><section class="sidebar-group"><h2>Internals</h2><a class="sidebar-link" href="../../internals/abi/index.html">Contract ABI specification</a><a class="sidebar-link" href="../../internals/storage-layout/index.html">Storage layout</a><a class="sidebar-link" href="../../internals/compiler-and-tooling/index.html">Compiler, CLI, and tooling</a><a class="sidebar-link" href="../../internals/artifacts/index.html">Contracts and artifacts</a></section><section class="sidebar-group"><h2>Advanced</h2><a class="sidebar-link" href="../../advanced/contract-creation-and-clones/index.html">Contract creation and clones</a><a class="sidebar-link" href="../../advanced/proxies-and-diamonds/index.html">Proxies, beacons, and diamonds</a></section><section class="sidebar-group"><h2>Security</h2><a class="sidebar-link" href="../../security/considerations/index.html">Security considerations</a><a class="sidebar-link" href="../../security/compiler-correctness/index.html">Compiler correctness model</a></section><section class="sidebar-group"><h2>Reference</h2><a class="sidebar-link is-active" href="./index.html" aria-current="page">Syntax cheatsheet</a><a class="sidebar-link" href="../differences/index.html">Differences from TypeScript and Solidity</a><a class="sidebar-link" href="../diagnostics/index.html">Compiler diagnostics</a><a class="sidebar-link" href="../known-limitations/index.html">Supported features and limitations</a><a class="sidebar-link" href="../feature-matrix/index.html">Complete feature matrix</a></section><section class="sidebar-group"><h2>Project</h2><a class="sidebar-link" href="../../project/roadmap/index.html">Product roadmap</a><a class="sidebar-link" href="../../project/overview/index.html">Repository overview</a></section><a class="built-by" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></aside>
+    <main class="content-shell">
+      <article class="article"><div class="article-kicker">Reference</div>
+<h1 id="syntax-cheatsheet">Syntax cheatsheet</h1>
+<h2 id="declarations">Declarations<a class="heading-anchor" href="#declarations" aria-label="Link to Declarations">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">type</span> User = { id: <span class="tok-type">u256</span>; owner: <span class="tok-type">address</span> };
+<span class="tok-keyword">type</span> UserId = <span class="tok-type">Brand</span>&lt;<span class="tok-type">u256</span>&gt;;
+<span class="tok-keyword">type</span> Changed = <span class="tok-type">event</span>&lt;{ id: <span class="tok-type">indexed</span>&lt;<span class="tok-type">u256</span>&gt;; value: <span class="tok-type">u256</span> }&gt;;
+<span class="tok-keyword">type</span> Unauthorized = <span class="tok-type">error</span>&lt;{ caller: <span class="tok-type">address</span> }&gt;;
+
+<span class="tok-keyword">enum</span> State { Pending, Active, Closed }
+
+<span class="tok-keyword">interface</span> Oracle {
+  price(asset: <span class="tok-type">address</span>): <span class="tok-type">View</span>&lt;<span class="tok-type">u256</span>&gt;;
+}
+
+<span class="tok-keyword">abstract</span> <span class="tok-keyword">class</span> Base {
+  <span class="tok-keyword">abstract</span> f(): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt;;
+}
+
+<span class="tok-keyword">static</span> <span class="tok-keyword">class</span> Lib {
+  min(self: <span class="tok-type">u256</span>, b: <span class="tok-type">u256</span>): <span class="tok-type">u256</span> { <span class="tok-keyword">return</span> self &lt; b ? self : b; }
+}
+
+<span class="tok-keyword">class</span> Contract <span class="tok-keyword">extends</span> Base {
+  value: <span class="tok-type">u256</span>;
+
+  <span class="tok-decorator">@override</span>
+  f(): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+    <span class="tok-keyword">this</span>.value <span class="tok-operator">+=</span> <span class="tok-number">1n</span>;
+    <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.value;
+  }
+}</code></pre></div>
+<h2 id="state-constants-and-immutables">State, constants, and immutables<a class="heading-anchor" href="#state-constants-and-immutables" aria-label="Link to State, constants, and immutables">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code>value: <span class="tok-type">u256</span>;
+<span class="tok-private">#secret</span>: <span class="tok-type">u256</span>;
+owner: <span class="tok-type">Visible</span>&lt;<span class="tok-type">address</span>&gt;;
+balances: <span class="tok-type">mapping</span>&lt;<span class="tok-type">address</span>, <span class="tok-type">u256</span>&gt;;
+values: <span class="tok-type">u256</span>[];
+pair: <span class="tok-type">Arr</span>&lt;<span class="tok-type">u256</span>, <span class="tok-number">2</span>&gt;;
+
+<span class="tok-keyword">static</span> SCALE: <span class="tok-type">u256</span> = <span class="tok-number">1000000n</span>;
+<span class="tok-keyword">static</span> OWNER: <span class="tok-type">address</span>;</code></pre></div>
+<h2 id="functions">Functions<a class="heading-anchor" href="#functions" aria-label="Link to Functions">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code>internalHelper(x: <span class="tok-type">u256</span>): <span class="tok-type">u256</span> { <span class="tok-keyword">return</span> x + <span class="tok-number">1n</span>; }
+<span class="tok-private">#privateHelper</span>(x: <span class="tok-type">u256</span>): <span class="tok-type">u256</span> { <span class="tok-keyword">return</span> x + <span class="tok-number">2n</span>; }
+<span class="tok-keyword">static</span> pureHelper(x: <span class="tok-type">u256</span>): <span class="tok-type">u256</span> { <span class="tok-keyword">return</span> x + <span class="tok-number">3n</span>; }
+set(x: <span class="tok-type">u256</span>): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; { <span class="tok-keyword">this</span>.value = x; }
+<span class="tok-keyword">get</span> read(): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; { <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.value; }
+<span class="tok-keyword">get</span> <span class="tok-private">#privateRead</span>(): <span class="tok-type">u256</span> { <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.<span class="tok-private">#secret</span>; }
+deposit(): <span class="tok-type">Payable</span>&lt;<span class="tok-keyword">void</span>&gt; { <span class="tok-keyword">this</span>.value <span class="tok-operator">+=</span> <span class="tok-builtin">msg</span>.value; }
+
+constructor(owner: <span class="tok-type">address</span>) {
+  <span class="tok-keyword">this</span>.OWNER = owner;
+}
+
+receive(): <span class="tok-keyword">void</span> { <span class="tok-comment">/* payable by definition */</span> }
+fallback(): <span class="tok-keyword">void</span> { <span class="tok-comment">/* nonpayable fallback */</span> }
+fallback(): <span class="tok-type">Payable</span>&lt;<span class="tok-keyword">void</span>&gt; { <span class="tok-comment">/* payable fallback */</span> }
+fallback(input: <span class="tok-type">bytes</span>): <span class="tok-type">bytes</span> { <span class="tok-keyword">return</span> input; }</code></pre></div>
+<h2 id="internal-function-references">Internal function references<a class="heading-anchor" href="#internal-function-references" aria-label="Link to Internal function references">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">let</span> fn: (value: <span class="tok-type">u256</span>) <span class="tok-operator">=&gt;</span> <span class="tok-type">u256</span> = <span class="tok-keyword">this</span>.internalHelper;
+<span class="tok-keyword">let</span> result: <span class="tok-type">u256</span> = fn(<span class="tok-number">4n</span>);</code></pre></div>
+<h2 id="locals-and-assignment">Locals and assignment<a class="heading-anchor" href="#locals-and-assignment" aria-label="Link to Locals and assignment">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">let</span> amount: <span class="tok-type">u256</span> = <span class="tok-number">1n</span>;
+<span class="tok-keyword">let</span> data: <span class="tok-type">bytes</span> = input;
+<span class="tok-keyword">let</span> pair: <span class="tok-type">Arr</span>&lt;<span class="tok-type">u256</span>, <span class="tok-number">2</span>&gt; = [<span class="tok-number">1n</span>, <span class="tok-number">2n</span>];
+<span class="tok-keyword">let</span> [value, ok]: [<span class="tok-type">u256</span>, <span class="tok-type">bool</span>] = <span class="tok-keyword">this</span>.readPair();
+
+<span class="tok-keyword">this</span>.total <span class="tok-operator">+=</span> amount;
+[a, b] = [b, a];
+<span class="tok-keyword">delete</span> <span class="tok-keyword">this</span>.values;</code></pre></div>
+<h2 id="control-flow">Control flow<a class="heading-anchor" href="#control-flow" aria-label="Link to Control flow">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">if</span> (condition) { ... } <span class="tok-keyword">else</span> { ... }
+<span class="tok-keyword">while</span> (condition) { ... }
+<span class="tok-keyword">do</span> { ... } <span class="tok-keyword">while</span> (condition);
+<span class="tok-keyword">for</span> (<span class="tok-keyword">let</span> i: <span class="tok-type">u256</span> = <span class="tok-number">0n</span>; i &lt; n; i <span class="tok-operator">+=</span> <span class="tok-number">1n</span>) { ... }
+<span class="tok-keyword">for</span> (<span class="tok-keyword">const</span> value <span class="tok-keyword">of</span> values) { ... }
+
+<span class="tok-keyword">switch</span> (state) {
+  <span class="tok-keyword">case</span> State.Pending: <span class="tok-keyword">return</span> <span class="tok-number">0n</span>;
+  <span class="tok-keyword">case</span> State.Active: <span class="tok-keyword">return</span> <span class="tok-number">1n</span>;
+  <span class="tok-keyword">case</span> State.Closed: <span class="tok-keyword">return</span> <span class="tok-number">2n</span>;
+}</code></pre></div>
+<h2 id="errors-and-events">Errors and events<a class="heading-anchor" href="#errors-and-events" aria-label="Link to Errors and events">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-builtin">require</span>(condition);
+<span class="tok-builtin">require</span>(condition, <span class="tok-string">&quot;message&quot;</span>);
+<span class="tok-builtin">require</span>(condition, Unauthorized(<span class="tok-builtin">msg</span>.sender));
+<span class="tok-builtin">assert</span>(invariant);
+<span class="tok-builtin">revert</span>();
+<span class="tok-builtin">revert</span>(<span class="tok-string">&quot;message&quot;</span>);
+<span class="tok-builtin">revert</span>(Unauthorized(<span class="tok-builtin">msg</span>.sender));
+<span class="tok-builtin">revertWith</span>(rawData);
+emit(Changed(id, value));</code></pre></div>
+<h2 id="calls-and-abi">Calls and ABI<a class="heading-anchor" href="#calls-and-abi" aria-label="Link to Calls and ABI">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">let</span> price: <span class="tok-type">u256</span> = Oracle(oracle).price(asset);
+<span class="tok-keyword">let</span> [ok, ret]: [<span class="tok-type">bool</span>, <span class="tok-type">bytes</span>] = target.tryCall({ data: payload });
+<span class="tok-keyword">let</span> raw: <span class="tok-type">bytes</span> = <span class="tok-builtin">abi</span>.encode(a, b);
+<span class="tok-keyword">let</span> packed: <span class="tok-type">bytes</span> = <span class="tok-builtin">abi</span>.encodePacked(a, b);
+<span class="tok-keyword">let</span> value: <span class="tok-type">u256</span> = raw.decode(<span class="tok-type">u256</span>);</code></pre></div>
+<h2 id="contract-creation-and-clones">Contract creation and clones<a class="heading-anchor" href="#contract-creation-and-clones" aria-label="Link to Contract creation and clones">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">let</span> sequential: <span class="tok-type">address</span> = <span class="tok-builtin">clone</span>(implementation);
+<span class="tok-keyword">let</span> deterministic: <span class="tok-type">address</span> = <span class="tok-builtin">cloneDeterministic</span>(implementation, salt);
+<span class="tok-keyword">let</span> predicted: <span class="tok-type">address</span> = <span class="tok-builtin">predictClone</span>(implementation, salt);
+
+<span class="tok-keyword">let</span> args: <span class="tok-type">bytes</span> = <span class="tok-builtin">abi</span>.encode(owner, feeBps);
+<span class="tok-keyword">let</span> configured: <span class="tok-type">address</span> = <span class="tok-builtin">cloneWithArgs</span>(implementation, args);
+<span class="tok-keyword">let</span> deterministicConfigured: <span class="tok-type">address</span> =
+  <span class="tok-builtin">cloneDeterministicWithArgs</span>(implementation, salt, args);
+<span class="tok-keyword">let</span> predictedConfigured: <span class="tok-type">address</span> =
+  <span class="tok-builtin">predictCloneWithArgs</span>(implementation, salt, args);
+
+<span class="tok-keyword">let</span> ownCloneData: <span class="tok-type">bytes</span> = <span class="tok-builtin">cloneArgs</span>();
+<span class="tok-keyword">let</span> deployed: <span class="tok-type">bool</span> = <span class="tok-builtin">isContract</span>(implementation);</code></pre></div>
+<p>These helpers deploy EIP-1167 clones through CREATE or CREATE2. Arbitrary <code>new Contract(...)</code> deployment is not currently supported. See the <a href="../../advanced/contract-creation-and-clones/index.html">complete creation and clone guide</a>.</p>
+<h2 id="modifiers-and-inheritance">Modifiers and inheritance<a class="heading-anchor" href="#modifiers-and-inheritance" aria-label="Link to Modifiers and inheritance">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-decorator">@modifier</span>
+onlyOwner() {
+  <span class="tok-builtin">require</span>(<span class="tok-builtin">msg</span>.sender <span class="tok-operator">==</span> <span class="tok-keyword">this</span>.owner, <span class="tok-string">&quot;not owner&quot;</span>);
+  _;
+}
+
+<span class="tok-decorator">@onlyOwner</span>
+<span class="tok-decorator">@nonReentrant</span>
+execute(): <span class="tok-type">External</span>&lt;<span class="tok-keyword">void</span>&gt; { ... }
+
+<span class="tok-decorator">@virtual</span>
+f(): <span class="tok-type">u256</span> { <span class="tok-keyword">return</span> <span class="tok-number">1n</span>; }
+
+<span class="tok-decorator">@override</span>
+f(): <span class="tok-type">u256</span> { <span class="tok-keyword">return</span> <span class="tok-keyword">super</span>.f() + <span class="tok-number">1n</span>; }</code></pre></div>
+<h2 id="common-conversions">Common conversions<a class="heading-anchor" href="#common-conversions" aria-label="Link to Common conversions">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-type">u256</span>(small)
+<span class="tok-type">u160</span>(account)
+<span class="tok-type">address</span>(raw)
+<span class="tok-builtin">payable</span>(account)
+<span class="tok-type">bytes20</span>(account)
+TokenId(rawId)
+<span class="tok-type">u256</span>(tokenId)</code></pre></div>
+<p>See the detailed chapters for restrictions, location rules, and runtime behavior.</p><div class="article-footer"><span>JETH language documentation</span><a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></div><nav class="pagination" aria-label="Documentation pages"><a class="pagination-link previous" href="../../security/compiler-correctness/index.html"><span>Previous</span><strong>Compiler correctness model</strong></a><a class="pagination-link next" href="../differences/index.html"><span>Next</span><strong>Differences from TypeScript and Solidity</strong></a></nav></article>
+      <nav class="page-toc" aria-label="On this page"><div class="toc-title">On this page</div><a class="toc-link depth-2" href="#declarations">Declarations</a><a class="toc-link depth-2" href="#state-constants-and-immutables">State, constants, and immutables</a><a class="toc-link depth-2" href="#functions">Functions</a><a class="toc-link depth-2" href="#internal-function-references">Internal function references</a><a class="toc-link depth-2" href="#locals-and-assignment">Locals and assignment</a><a class="toc-link depth-2" href="#control-flow">Control flow</a><a class="toc-link depth-2" href="#errors-and-events">Errors and events</a><a class="toc-link depth-2" href="#calls-and-abi">Calls and ABI</a><a class="toc-link depth-2" href="#contract-creation-and-clones">Contract creation and clones</a><a class="toc-link depth-2" href="#modifiers-and-inheritance">Modifiers and inheritance</a><a class="toc-link depth-2" href="#common-conversions">Common conversions</a></nav>
+    </main>
+  </div>
+  <div class="search-modal" hidden><button class="search-backdrop" type="button" aria-label="Close search"></button><div class="search-panel" role="dialog" aria-modal="true" aria-label="Search documentation"><div class="search-box"><span>⌕</span><input class="search-input" type="search" placeholder="Search JETH guides..." autocomplete="off"><button class="search-close" type="button">Esc</button></div><div class="search-results"><div class="search-empty">Start typing to search the book.</div></div></div></div>
+  <script src="../../assets/search-index.js"></script>
+  <script src="../../assets/book.js"></script>
+</body>
+</html>

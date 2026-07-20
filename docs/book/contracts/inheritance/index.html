@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Constructors and inheritance in the JETH language documentation.">
+  <meta name="theme-color" content="#11131a">
+  <meta property="og:image" content="../../assets/a16k-avatar-logo.png">
+  <title>Constructors and inheritance | JETH</title>
+  <link rel="icon" href="../../assets/jeth-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../../assets/book.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../../index.html" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span></a>
+    <nav class="top-nav" aria-label="Primary"><a class="is-active" href="../../index.html">Guides</a><a href="../../internals/compiler-and-tooling/index.html">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
+    <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
+  </header>
+  <div class="pre-release"><span>Pre-release</span> JETH is under active compiler and security review.</div>
+  <div class="book-shell">
+    <aside class="sidebar"><div class="sidebar-title">Guides</div><section class="sidebar-group"><h2>Guides</h2><a class="sidebar-link" href="../../index.html">JETH Documentation</a><a class="sidebar-link" href="../../guides/getting-started/index.html">Getting started</a><a class="sidebar-link" href="../../guides/language-tour/index.html">Language tour</a><a class="sidebar-link" href="../../guides/examples/index.html">Examples</a></section><section class="sidebar-group"><h2>Language</h2><a class="sidebar-link" href="../../language/source-units/index.html">Source units and imports</a><a class="sidebar-link" href="../../language/contract-structure/index.html">Contract structure</a><a class="sidebar-link" href="../../language/types/index.html">Types</a><a class="sidebar-link" href="../../language/value-types/index.html">Value types</a><a class="sidebar-link" href="../../language/reference-types/index.html">Reference and composite types</a><a class="sidebar-link" href="../../language/data-locations/index.html">Data locations and copying</a><a class="sidebar-link" href="../../language/expressions/index.html">Expressions and operators</a><a class="sidebar-link" href="../../language/control-flow/index.html">Statements and control flow</a><a class="sidebar-link" href="../../language/functions/index.html">Functions</a><a class="sidebar-link" href="../../language/globals-and-builtins/index.html">Units, globals, and builtins</a><a class="sidebar-link" href="../../language/jeth-features/index.html">JETH-specific features</a></section><section class="sidebar-group"><h2>Contracts</h2><a class="sidebar-link is-active" href="./index.html" aria-current="page">Constructors and inheritance</a><a class="sidebar-link" href="../modifiers/index.html">Function modifiers</a><a class="sidebar-link" href="../interfaces-and-calls/index.html">Interfaces and external calls</a><a class="sidebar-link" href="../libraries/index.html">Libraries and using</a><a class="sidebar-link" href="../events-and-errors/index.html">Events, errors, and panics</a></section><section class="sidebar-group"><h2>Internals</h2><a class="sidebar-link" href="../../internals/abi/index.html">Contract ABI specification</a><a class="sidebar-link" href="../../internals/storage-layout/index.html">Storage layout</a><a class="sidebar-link" href="../../internals/compiler-and-tooling/index.html">Compiler, CLI, and tooling</a><a class="sidebar-link" href="../../internals/artifacts/index.html">Contracts and artifacts</a></section><section class="sidebar-group"><h2>Advanced</h2><a class="sidebar-link" href="../../advanced/contract-creation-and-clones/index.html">Contract creation and clones</a><a class="sidebar-link" href="../../advanced/proxies-and-diamonds/index.html">Proxies, beacons, and diamonds</a></section><section class="sidebar-group"><h2>Security</h2><a class="sidebar-link" href="../../security/considerations/index.html">Security considerations</a><a class="sidebar-link" href="../../security/compiler-correctness/index.html">Compiler correctness model</a></section><section class="sidebar-group"><h2>Reference</h2><a class="sidebar-link" href="../../reference/cheatsheet/index.html">Syntax cheatsheet</a><a class="sidebar-link" href="../../reference/differences/index.html">Differences from TypeScript and Solidity</a><a class="sidebar-link" href="../../reference/diagnostics/index.html">Compiler diagnostics</a><a class="sidebar-link" href="../../reference/known-limitations/index.html">Supported features and limitations</a><a class="sidebar-link" href="../../reference/feature-matrix/index.html">Complete feature matrix</a></section><section class="sidebar-group"><h2>Project</h2><a class="sidebar-link" href="../../project/roadmap/index.html">Product roadmap</a><a class="sidebar-link" href="../../project/overview/index.html">Repository overview</a></section><a class="built-by" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></aside>
+    <main class="content-shell">
+      <article class="article"><div class="article-kicker">Contracts</div>
+<h1 id="constructors-inheritance-and-abstract-contracts">Constructors, inheritance, and abstract contracts</h1>
+<p>JETH supports contract inheritance with Solidity-compatible state ordering, constructor execution, virtual dispatch, and override checks.</p>
+<h2 id="base-contracts">Base contracts<a class="heading-anchor" href="#base-contracts" aria-label="Link to Base contracts">#</a></h2>
+<p>Use <code>extends</code> for inheritance:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">abstract</span> <span class="tok-keyword">class</span> Owned {
+  owner: <span class="tok-type">address</span>;
+
+  constructor(owner: <span class="tok-type">address</span>) {
+    <span class="tok-keyword">this</span>.owner = owner;
+  }
+
+  <span class="tok-keyword">get</span> isOwner(account: <span class="tok-type">address</span>): <span class="tok-type">bool</span> {
+    <span class="tok-keyword">return</span> account <span class="tok-operator">==</span> <span class="tok-keyword">this</span>.owner;
+  }
+}
+
+<span class="tok-keyword">class</span> Vault <span class="tok-keyword">extends</span> Owned {
+  constructor(owner: <span class="tok-type">address</span>) {
+    <span class="tok-keyword">super</span>(owner);
+  }
+}</code></pre></div>
+<p>State fields are laid out base-first according to the resolved linearization. Changing base order or fields can change an upgradeable contract&#39;s storage.</p>
+<h2 id="base-constructor-arguments">Base constructor arguments<a class="heading-anchor" href="#base-constructor-arguments" aria-label="Link to Base constructor arguments">#</a></h2>
+<p>Provide base arguments in the derived constructor with <code>super(args)</code>:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">abstract</span> <span class="tok-keyword">class</span> Capped {
+  cap: <span class="tok-type">u256</span>;
+  constructor(cap: <span class="tok-type">u256</span>) { <span class="tok-keyword">this</span>.cap = cap; }
+}
+
+<span class="tok-keyword">class</span> Token <span class="tok-keyword">extends</span> Capped {
+  constructor(supply: <span class="tok-type">u256</span>) {
+    <span class="tok-keyword">super</span>(supply * <span class="tok-number">2n</span>);
+  }
+}</code></pre></div>
+<p>Constant base arguments can also use the supported heritage form. A base constructor must be initialized exactly once. Ambiguous multiple-base argument routes are rejected.</p>
+<p>Base constructors execute from the most-base contract toward the final derived contract. Field initializers run in the corresponding construction sequence.</p>
+<h2 id="abstract-contracts">Abstract contracts<a class="heading-anchor" href="#abstract-contracts" aria-label="Link to Abstract contracts">#</a></h2>
+<p>An abstract contract can contain implemented members and bodyless requirements:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">abstract</span> <span class="tok-keyword">class</span> PriceSource {
+  <span class="tok-keyword">abstract</span> <span class="tok-keyword">get</span> price(asset: <span class="tok-type">address</span>): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt;;
+
+  <span class="tok-keyword">get</span> normalized(asset: <span class="tok-type">address</span>): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.price(asset) * <span class="tok-number">1000000n</span>;
+  }
+}</code></pre></div>
+<p><code>abstract</code> on a bodyless member is the native spelling of a required virtual member. The decorator form is also supported where applicable:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">abstract</span> <span class="tok-keyword">class</span> PriceSource {
+  <span class="tok-decorator">@virtual</span> <span class="tok-keyword">get</span> price(asset: <span class="tok-type">address</span>): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt;;
+}</code></pre></div>
+<p>A concrete leaf must implement every inherited requirement.</p>
+<p>An abstract-only source unit is still fully type-checked. It emits empty creation/runtime artifacts for independent abstract leaves rather than silently ignoring invalid bodies.</p>
+<h2 id="virtual-members">Virtual members<a class="heading-anchor" href="#virtual-members" aria-label="Link to Virtual members">#</a></h2>
+<p>Mark an implemented member <code>@virtual</code> when a descendant may override it:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">abstract</span> <span class="tok-keyword">class</span> FeeModel {
+  <span class="tok-decorator">@virtual</span>
+  fee(amount: <span class="tok-type">u256</span>): <span class="tok-type">u256</span> {
+    <span class="tok-keyword">return</span> amount / <span class="tok-number">100n</span>;
+  }
+}</code></pre></div>
+<h2 id="overrides">Overrides<a class="heading-anchor" href="#overrides" aria-label="Link to Overrides">#</a></h2>
+<p>Use <code>@override</code> on a replacing member:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">abstract</span> <span class="tok-keyword">class</span> FeeModel {
+  <span class="tok-decorator">@virtual</span>
+  fee(amount: <span class="tok-type">u256</span>): <span class="tok-type">u256</span> {
+    <span class="tok-keyword">return</span> amount / <span class="tok-number">100n</span>;
+  }
+}
+
+<span class="tok-keyword">class</span> FlatFee <span class="tok-keyword">extends</span> FeeModel {
+  <span class="tok-decorator">@override</span>
+  fee(amount: <span class="tok-type">u256</span>): <span class="tok-type">u256</span> {
+    <span class="tok-keyword">return</span> amount / <span class="tok-number">200n</span>;
+  }
+}</code></pre></div>
+<p>The override must match the inherited signature, exposure, mutability contract, return shape, and member kind. In multiple inheritance, an override list can be required to identify all overridden bases.</p>
+<h2 id="super-calls"><code>super</code> calls<a class="heading-anchor" href="#super-calls" aria-label="Link to `super` calls">#</a></h2>
+<p>An overriding internal function can invoke the next implementation in the linearized base order:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">abstract</span> <span class="tok-keyword">class</span> FeeModel {
+  <span class="tok-decorator">@virtual</span>
+  fee(amount: <span class="tok-type">u256</span>): <span class="tok-type">u256</span> {
+    <span class="tok-keyword">return</span> amount / <span class="tok-number">100n</span>;
+  }
+}
+
+<span class="tok-keyword">class</span> DiscountFee <span class="tok-keyword">extends</span> FeeModel {
+  <span class="tok-decorator">@override</span>
+  fee(amount: <span class="tok-type">u256</span>): <span class="tok-type">u256</span> {
+    <span class="tok-keyword">return</span> <span class="tok-keyword">super</span>.fee(amount) / <span class="tok-number">2n</span>;
+  }
+}</code></pre></div>
+<p>External ABI entries are message-call boundaries. Put reusable inherited logic in internal functions when an internal <code>super</code> call is required.</p>
+<h2 id="multiple-inheritance">Multiple inheritance<a class="heading-anchor" href="#multiple-inheritance" aria-label="Link to Multiple inheritance">#</a></h2>
+<p>Multiple bases are supported with deterministic linearization and collision checks. The compiler rejects ambiguous fields, incompatible method signatures, duplicate selector exposure, and unresolved override requirements.</p>
+<p>Prefer small interfaces and shallow implementation inheritance. Complex linearization makes storage, modifiers, and <code>super</code> behavior harder to audit.</p>
+<h2 id="private-members">Private members<a class="heading-anchor" href="#private-members" aria-label="Link to Private members">#</a></h2>
+<p>A leading <code>#</code> declares a private member. It is not visible to derived contracts:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">abstract</span> <span class="tok-keyword">class</span> Base {
+  <span class="tok-private">#secret</span>: <span class="tok-type">u256</span>;
+
+  <span class="tok-private">#normalize</span>(value: <span class="tok-type">u256</span>): <span class="tok-type">u256</span> {
+    <span class="tok-keyword">return</span> value + <span class="tok-number">1n</span>;
+  }
+
+  <span class="tok-keyword">get</span> reveal(): <span class="tok-type">External</span>&lt;<span class="tok-type">u256</span>&gt; {
+    <span class="tok-keyword">return</span> <span class="tok-keyword">this</span>.<span class="tok-private">#normalize</span>(<span class="tok-keyword">this</span>.<span class="tok-private">#secret</span>);
+  }
+}</code></pre></div>
+<p>A private base member remains usable by methods declared in that base, including when those methods execute as part of a derived contract. A derived method cannot directly name <code>this.#secret</code> or <code>this.#normalize(...)</code> from the base.</p>
+<p>The same private source name may be declared independently in a base and a derived class. Those declarations do not override each other and occupy distinct storage or function identities. Private methods are not virtual and cannot be overridden.</p>
+<p>Use ordinary internal members when descendants are intended to access or override them. See <a href="../../language/functions/index.html#private-functions">Private functions</a> and <a href="../../language/contract-structure/index.html#private-state-variables">Private state variables</a>.</p><div class="article-footer"><span>JETH language documentation</span><a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28">Built by @a16k-lab</a></div><nav class="pagination" aria-label="Documentation pages"><a class="pagination-link previous" href="../../language/jeth-features/index.html"><span>Previous</span><strong>JETH-specific features</strong></a><a class="pagination-link next" href="../modifiers/index.html"><span>Next</span><strong>Function modifiers</strong></a></nav></article>
+      <nav class="page-toc" aria-label="On this page"><div class="toc-title">On this page</div><a class="toc-link depth-2" href="#base-contracts">Base contracts</a><a class="toc-link depth-2" href="#base-constructor-arguments">Base constructor arguments</a><a class="toc-link depth-2" href="#abstract-contracts">Abstract contracts</a><a class="toc-link depth-2" href="#virtual-members">Virtual members</a><a class="toc-link depth-2" href="#overrides">Overrides</a><a class="toc-link depth-2" href="#super-calls">super calls</a><a class="toc-link depth-2" href="#multiple-inheritance">Multiple inheritance</a><a class="toc-link depth-2" href="#private-members">Private members</a></nav>
+    </main>
+  </div>
+  <div class="search-modal" hidden><button class="search-backdrop" type="button" aria-label="Close search"></button><div class="search-panel" role="dialog" aria-modal="true" aria-label="Search documentation"><div class="search-box"><span>⌕</span><input class="search-input" type="search" placeholder="Search JETH guides..." autocomplete="off"><button class="search-close" type="button">Esc</button></div><div class="search-results"><div class="search-empty">Start typing to search the book.</div></div></div></div>
+  <script src="../../assets/search-index.js"></script>
+  <script src="../../assets/book.js"></script>
+</body>
+</html>
