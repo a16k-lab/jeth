@@ -1,8 +1,11 @@
-# ![JETH orange logo](assets/jeth/jeth-orange-icon-32.png) JETH
+<h1>
+  <img src="assets/jeth/jeth-orange-icon-32.png" width="28" height="28" alt="a16k-lab logo" align="center">
+  <p style="display:inline">JETH</p>
+</h1>
 
-<p class="a16k-lockup">
+<p class="a16k-lockup" >
   <a href="https://github.com/a16k-lab">
-    <img src="docs/assets/a16k-avatar-logo.png" width="28" height="28" alt="a16k-lab logo" align="middle">
+    <img src="https://github.com/a16k-lab/.github/blob/main/profile/assets/a16k-logo-512.png?raw=true" width="28" height="28" alt="a16k-lab logo" align="center">
     Built by <strong>@a16k-lab</strong>
   </a>
 </p>
