@@ -1,7 +1,5 @@
-<h1>
-  <img src="assets/jeth/jeth-orange-icon-32.png" width="28" height="28" alt="a16k-lab logo" align="center">
-  <p style="display:inline">JETH</p>
-</h1>
+# ![JETH orange logo](assets/jeth/jeth-orange-icon-32.png) JETH
+
 
 <p class="a16k-lockup" >
   <a href="https://github.com/a16k-lab">
