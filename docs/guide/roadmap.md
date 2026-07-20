@@ -1,5 +1,7 @@
 # Product roadmap
 
+Built by [@a16k-lab](https://github.com/a16k-lab).
+
 This roadmap turns JETH from a strong compiler research project into a product
 that can be installed, integrated, reviewed, and operated safely. The order is
 intentional: release trust comes before adding a large new language surface.
@@ -75,8 +77,9 @@ and an explicit compiler invariant.
 Goal: close the remaining practical gaps without weakening soundness.
 
 - Work through the current "Still gated" list in `SUPPORTED.md`.
-- Prioritize common contract and ABI shapes, contract creation/CREATE2, function
-  values where safely expressible, and storage-reference library workflows.
+- Prioritize common contract and ABI shapes, arbitrary contract construction
+  beyond the existing EIP-1167 CREATE/CREATE2 clone surface, function values
+  where safely expressible, and storage-reference library workflows.
 - Improve import/package boundaries and deterministic dependency resolution.
 - Add analyzer checks that prevent proxy/storage misuse and common application
   hazards where the compiler has enough information to prove them.

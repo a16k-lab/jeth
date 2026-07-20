@@ -1,0 +1,59 @@
+interface CloneAccount {
+  initialize(owner: address): void;
+  owner(): View<address>;
+}
+
+class AccountImplementation {
+  currentOwner: address;
+  initialized: bool;
+
+  initialize(owner: address): External<void> {
+    require(!this.initialized, 'already initialized');
+    require(owner != address(0n), 'zero owner');
+    this.initialized = true;
+    this.currentOwner = owner;
+  }
+
+  get owner(): External<address> {
+    return this.currentOwner;
+  }
+}
+
+class AccountCloneFactory {
+  Created: event<{
+    instance: indexed<address>;
+    implementation: indexed<address>;
+    owner: address;
+    salt: bytes32;
+  }>;
+
+  create(implementation: address, owner: address): External<address> {
+    require(isContract(implementation), 'implementation has no code');
+    const instance: address = clone(implementation);
+    CloneAccount(instance).initialize(owner);
+    emit(Created(instance, implementation, owner, bytes32(0n)));
+    return instance;
+  }
+
+  createDeterministic(
+    implementation: address,
+    owner: address,
+    userSalt: bytes32,
+  ): External<address> {
+    require(isContract(implementation), 'implementation has no code');
+    const salt: bytes32 = keccak256(abi.encode(msg.sender, userSalt));
+    const instance: address = cloneDeterministic(implementation, salt);
+    CloneAccount(instance).initialize(owner);
+    emit(Created(instance, implementation, owner, salt));
+    return instance;
+  }
+
+  get predictDeterministic(
+    implementation: address,
+    caller: address,
+    userSalt: bytes32,
+  ): External<address> {
+    const salt: bytes32 = keccak256(abi.encode(caller, userSalt));
+    return predictClone(implementation, salt);
+  }
+}

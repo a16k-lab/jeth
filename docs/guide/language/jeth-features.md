@@ -8,7 +8,7 @@ source syntax. They lower to audited EVM-compatible behavior.
 Class methods do not spell `pure` or `view`. The analyzer derives the strongest
 valid mutability from transitive effects before ABI generation.
 
-```typescript
+```jeth
 get twice(value: u256): External<u256> {
   return value * 2n; // pure
 }
@@ -27,7 +27,7 @@ This keeps the internal-call versus message-call boundary explicit.
 
 ## Branded newtypes
 
-```typescript
+```jeth
 type OrderId = Brand<u256>;
 type Amount = Brand<u256>;
 ```
@@ -36,7 +36,7 @@ Brands prevent accidental mixing while erasing to their base ABI/storage type.
 
 ## Struct spread
 
-```typescript
+```jeth
 let updated: Config = { ...current, fee: nextFee };
 ```
 
@@ -45,7 +45,7 @@ not a general JavaScript object spread operation.
 
 ## `for...of`
 
-```typescript
+```jeth
 for (const value of values) {
   total += value;
 }
@@ -55,7 +55,7 @@ This is checked indexed iteration over supported array locations.
 
 ## Defaults and named arguments
 
-```typescript
+```jeth
 fee(amount: u256, bps: u256 = 30n): u256 { ... }
 let result: u256 = this.fee({ amount: value, bps: 50n });
 ```
@@ -65,7 +65,7 @@ change the external ABI.
 
 ## Exhaustive switch
 
-```typescript
+```jeth
 switch (state) {
   case State.Pending: return 0n;
   case State.Active: return 1n;
@@ -77,7 +77,7 @@ Enum coverage is checked and accidental non-empty fallthrough is rejected.
 
 ## Generics
 
-```typescript
+```jeth
 identity<T>(value: T): T { return value; }
 ```
 
@@ -88,6 +88,16 @@ dispatch or generic ABI.
 
 `@nonReentrant` provides a built-in EIP-1153 mutex without consuming a persistent
 storage slot.
+
+## Structured clone deployment
+
+JETH exposes EIP-1167 clone creation through typed `clone*` and `predictClone*`
+builtins. The structured surface provides audited CREATE and CREATE2 lowering
+without exposing arbitrary init code or raw delegatecall to application source.
+Immutable per-clone byte arguments are available through `cloneArgs()`.
+
+See [Contract creation and clones](../advanced/contract-creation-and-clones.md)
+for the complete execution model and examples.
 
 ## Deep recursion and stack scheduling
 

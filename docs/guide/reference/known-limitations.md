@@ -3,10 +3,9 @@
 JETH's language surface is intentionally evidence-driven. A source shape is
 accepted only when its analyzer and backend path are supported.
 
-{% hint style="warning" %}
-A type being supported in one location or operation does not imply every copy,
-call, return, assignment, hash, or ABI path for that type is supported.
-{% endhint %}
+> [!WARNING] A type being supported in one location or operation does not imply
+> every copy, call, return, assignment, hash, or ABI path for that type is
+> supported.
 
 ## Authoritative matrix
 
@@ -28,6 +27,8 @@ Representative clean rejections include:
 - ternaries over dynamic storage aggregates;
 - selected nested packed dynamic-array paths;
 - remaining pointer-headed memory/decode shapes;
+- arbitrary `new Contract(...)` and raw init-code CREATE/CREATE2 deployment
+  beyond the structured EIP-1167 clone builtins;
 - artifact/CLI presentation gaps such as tuple component JSON and source maps.
 
 The exact diagnostic and compiler revision matter. This summary should not be
@@ -60,6 +61,55 @@ Safe workarounds are explicit and local:
 - split a large shape into smaller supported fields.
 
 Never use a workaround that depends on guessed memory offsets or storage slots.
+
+### Unsupported whole-value copy and safe redesign
+
+This shape is intentionally rejected because it contains a dynamic array whose
+element is a fixed-size value array:
+
+```jeth
+// Expected JETH470-style compile error.
+type NestedPairs = {
+  tag: u256;
+  pairs: Arr<u256, 2>[];
+};
+
+class RejectedPairs {
+  value: NestedPairs;
+
+  setValue(input: NestedPairs): External<void> {
+    this.value = input;
+  }
+}
+```
+
+When changing the application schema is acceptable, flatten the pair data into
+a supported dynamic value array and preserve the pair invariant explicitly:
+
+```jeth
+class FlatPairs {
+  tag: u256;
+  values: u256[];
+
+  replace(newTag: u256, flatValues: u256[]): External<void> {
+    require(flatValues.length % 2n == 0n, "incomplete pair");
+    this.tag = newTag;
+    this.values = flatValues;
+  }
+
+  get pairCount(): External<u256> {
+    return this.values.length / 2n;
+  }
+
+  get pairValue(pairIndex: u256, side: u256): External<u256> {
+    require(side < 2n, "invalid side");
+    return this.values[pairIndex * 2n + side];
+  }
+}
+```
+
+This is a schema change, not a representation trick. Existing protocols should
+not silently substitute it for an established ABI.
 
 ## Permanently excluded features
 

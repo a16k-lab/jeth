@@ -18,6 +18,62 @@ contracts and move to composite ABI/storage cases.
 9. [`Structs.jeth`](../../examples/Structs.jeth): struct construction and storage.
 10. [`Nested.jeth`](../../examples/Nested.jeth): nested state shapes.
 11. [`Vault.jeth`](../../examples/Vault.jeth): a larger end-to-end contract.
+12. [`CloneFactory.jeth`](../../examples/CloneFactory.jeth): CREATE and CREATE2
+    EIP-1167 clones with atomic initialization.
+
+## Small complete examples
+
+### Owned counter
+
+```jeth
+class OwnedCounter {
+  owner: address;
+  count: Visible<u256>;
+
+  constructor(initialOwner: address) {
+    require(initialOwner != address(0n), "zero owner");
+    this.owner = initialOwner;
+  }
+
+  increment(): External<void> {
+    require(msg.sender == this.owner, "not owner");
+    this.count += 1n;
+  }
+}
+```
+
+Deploy with an owner constructor argument. `increment()` succeeds only from that
+address, and the generated `count()` getter returns the current value.
+
+### Typed token payout
+
+```jeth
+interface Token {
+  transfer(to: address, amount: u256): bool;
+}
+
+class TokenPayout {
+  owner: address;
+
+  constructor(initialOwner: address) {
+    this.owner = initialOwner;
+  }
+
+  pay(
+    token: address,
+    recipient: address,
+    amount: u256,
+  ): External<void> {
+    require(msg.sender == this.owner, "not owner");
+    const transferred: bool = Token(token).transfer(recipient, amount);
+    require(transferred, "transfer failed");
+  }
+}
+```
+
+The interface supplies the selector and ABI schema. The external call can
+reenter, so the production version must account for any state it adds before
+making the call.
 
 ## Compile an example
 
@@ -40,13 +96,13 @@ Shipping examples should be:
 The repository also contains adversarial and generated examples used for compiler
 coverage. They are valuable engineering fixtures but are not tutorials.
 
-## Examples still needed for the public docs
+## Repository examples still planned
 
 - ERC-20-like token with branded units and custom errors;
 - access-controlled vault using checks-effects-interactions;
 - typed interface call and `try`/`catch`;
 - internal and external library linking;
-- proxy deployment and safe upgrade walkthrough;
+- upgradeable proxy deployment and safe upgrade walkthrough;
 - diamond deployment and selector management;
 - calldata slicing plus ABI decoding;
 - signed-message recovery with replay protection;

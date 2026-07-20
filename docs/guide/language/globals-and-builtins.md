@@ -9,7 +9,7 @@ JETH does not currently expose Solidity-style numeric suffix expressions such as
 `1 ether` or `2 days` through its TypeScript-shaped syntax. Represent values in
 explicit base units or use reviewed named constants and branded types:
 
-```typescript
+```jeth
 type Wei = Brand<u256>;
 
 class Units {
@@ -47,7 +47,7 @@ the origin while changing the immediate caller.
 
 Supported block data includes:
 
-```typescript
+```jeth
 block.timestamp
 block.number
 block.chainid
@@ -64,7 +64,7 @@ do not treat timestamp or prevrandao as an unbiasable randomness source.
 
 ## Address and code globals
 
-```typescript
+```jeth
 address(this)
 account.balance
 account.code
@@ -76,9 +76,31 @@ Code length is not a reliable proof that an address is permanently an EOA.
 Contracts under construction have no deployed runtime code, and account code can
 change under protocol/account behavior.
 
+## Contract creation and clone builtins
+
+JETH exposes structured EIP-1167 deployment rather than arbitrary user-level
+CREATE or CREATE2:
+
+```jeth
+clone(implementation)
+cloneDeterministic(implementation, salt)
+cloneWithArgs(implementation, args)
+cloneDeterministicWithArgs(implementation, salt, args)
+predictClone(implementation, salt)
+predictCloneWithArgs(implementation, salt, args)
+cloneArgs()
+```
+
+The four deployment helpers create state and are not allowed in read-only
+methods. Prediction and argument reads inspect the EVM environment. They are
+allowed in `get` methods, but not in `static` methods. See
+[Contract creation and clones](../advanced/contract-creation-and-clones.md) for
+address formulas, exact runtime layout, initialization, collisions, and failure
+behavior.
+
 ## Gas and block history
 
-```typescript
+```jeth
 gasleft()
 blockhash(number)
 blobhash(index)
@@ -88,7 +110,7 @@ These expose the corresponding EVM operations and protocol limitations.
 
 ## Hash functions
 
-```typescript
+```jeth
 keccak256(data)
 sha256(data)
 ripemd160(data)
@@ -99,7 +121,7 @@ other values explicitly.
 
 ## Modular arithmetic
 
-```typescript
+```jeth
 addmod(a, b, modulus)
 mulmod(a, b, modulus)
 ```
@@ -109,7 +131,7 @@ than silently relying on the raw opcode's zero result.
 
 ## ABI helpers
 
-```typescript
+```jeth
 abi.encode(a, b)
 abi.encodePacked(a, b)
 abi.encodeWithSelector(selector, a, b)
@@ -125,7 +147,7 @@ sensitive hashing.
 
 ## Signatures and crypto
 
-```typescript
+```jeth
 ecrecover(hash, v, r, s)
 recover(hash, signature)
 recover(hash, v, r, s)
