@@ -1,6 +1,4 @@
-# JETH
-
-![JETH orange logo](assets/jeth/jeth-orange-icon-256.png)
+# ![JETH orange logo](assets/jeth/jeth-orange-icon-32.png) JETH
 
 <p class="a16k-lockup">
   <a href="https://github.com/a16k-lab">

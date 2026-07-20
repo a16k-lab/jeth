@@ -555,14 +555,15 @@ function renderMarkdown(page: Page, markdown: string): { html: string; toc: TocI
     if (heading) {
       const depth = heading[1].length;
       const title = heading[2].replace(/\s+#+$/, '');
-      const id = uniqueId(title);
+      const visibleTitle = title.replace(/^!\[[^\]]*]\([^)]+\)\s*/, '');
+      const id = uniqueId(visibleTitle);
       if (depth === 1) {
         html.push(`<div class="article-kicker">${escapeHtml(page.group)}</div>`);
       }
       html.push(
-        `<h${depth} id="${id}">${inlineMarkdown(page, title)}${depth > 1 ? `<a class="heading-anchor" href="#${id}" aria-label="Link to ${escapeHtml(title)}">#</a>` : ''}</h${depth}>`,
+        `<h${depth} id="${id}">${inlineMarkdown(page, title)}${depth > 1 ? `<a class="heading-anchor" href="#${id}" aria-label="Link to ${escapeHtml(visibleTitle)}">#</a>` : ''}</h${depth}>`,
       );
-      if (depth >= 2 && depth <= 3) toc.push({ depth, id, title: title.replace(/[`*_]/g, '') });
+      if (depth >= 2 && depth <= 3) toc.push({ depth, id, title: visibleTitle.replace(/[`*_]/g, '') });
       index += 1;
       continue;
     }
@@ -645,6 +646,7 @@ function renderMarkdown(page: Page, markdown: string): { html: string; toc: TocI
 
   const plainText = markdown
     .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/!\[[^\]]*]\([^)]+\)/g, ' ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/[#>*_`\[\]()|]/g, ' ')
     .replace(/\s+/g, ' ')
@@ -847,6 +849,7 @@ kbd { border: 1px solid var(--border); background: var(--panel-soft); border-rad
 .article li { margin: 7px 0; padding-left: 5px; }
 .article code:not(pre code) { background: var(--panel-soft); border: 1px solid var(--border); border-radius: 5px; padding: .12em .35em; font-family: "SFMono-Regular", Consolas, monospace; font-size: .86em; color: var(--accent-strong); overflow-wrap: anywhere; word-break: break-word; }
 .markdown-image { display: block; width: 128px; height: 128px; object-fit: cover; border-radius: 24px; border: 1px solid var(--border); box-shadow: var(--shadow); }
+.article h1 .markdown-image { display: inline-block; width: 32px; height: 32px; margin: 0 11px 0 0; border: 0; border-radius: 8px; box-shadow: none; vertical-align: .04em; }
 .article blockquote { margin: 28px 0; padding: 18px 22px; border-left: 3px solid var(--accent); background: var(--panel); box-shadow: var(--shadow); border-radius: 0 10px 10px 0; }
 .article blockquote p { margin: 0; }
 .callout { border: 1px solid var(--border); border-left: 4px solid #6476e8; background: var(--panel); padding: 18px 20px; margin: 28px 0; border-radius: 9px; }

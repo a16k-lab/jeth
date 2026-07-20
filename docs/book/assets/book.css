@@ -86,6 +86,7 @@ kbd { border: 1px solid var(--border); background: var(--panel-soft); border-rad
 .article li { margin: 7px 0; padding-left: 5px; }
 .article code:not(pre code) { background: var(--panel-soft); border: 1px solid var(--border); border-radius: 5px; padding: .12em .35em; font-family: "SFMono-Regular", Consolas, monospace; font-size: .86em; color: var(--accent-strong); overflow-wrap: anywhere; word-break: break-word; }
 .markdown-image { display: block; width: 128px; height: 128px; object-fit: cover; border-radius: 24px; border: 1px solid var(--border); box-shadow: var(--shadow); }
+.article h1 .markdown-image { display: inline-block; width: 32px; height: 32px; margin: 0 11px 0 0; border: 0; border-radius: 8px; box-shadow: none; vertical-align: .04em; }
 .article blockquote { margin: 28px 0; padding: 18px 22px; border-left: 3px solid var(--accent); background: var(--panel); box-shadow: var(--shadow); border-radius: 0 10px 10px 0; }
 .article blockquote p { margin: 0; }
 .callout { border: 1px solid var(--border); border-left: 4px solid #6476e8; background: var(--panel); padding: 18px 20px; margin: 28px 0; border-radius: 9px; }
