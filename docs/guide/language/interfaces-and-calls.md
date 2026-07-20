@@ -5,7 +5,7 @@ available when the callee schema is unknown or raw returndata is required.
 
 ## Interface declarations
 
-```typescript
+```jeth
 interface Oracle {
   price(asset: address): View<u256>;
   decimals(): Pure<u8>;
@@ -17,11 +17,48 @@ Interface methods have no body, so mutability cannot be inferred. Use the
 supported interface return wrappers to state `pure`, `view`, nonpayable, or
 payable behavior.
 
+Interfaces can extend other interfaces. Overloads are allowed when canonical
+parameter signatures differ. Events and custom errors may also be declared in
+an interface; they do not contribute to its EIP-165 interface ID.
+
+## Selectors and interface IDs
+
+Use a type-qualified member for a function selector:
+
+```jeth
+let selector: bytes4 = Oracle.price.selector;
+```
+
+For a directly declared contract member, `ContractName.method.selector` and
+`this.method.selector` are supported. Internal methods have no ABI selector. An
+overloaded name is rejected when the source context does not identify exactly
+one signature.
+
+`type(I).interfaceId` returns the XOR of the selectors declared directly by
+interface `I`:
+
+```jeth
+interface IERC165 {
+  supportsInterface(id: bytes4): View<bool>;
+}
+
+class C {
+  get erc165Id(): External<bytes4> {
+    return type(IERC165).interfaceId;
+  }
+}
+```
+
+As in Solidity, inherited interface methods are excluded from the derived
+interface's own `interfaceId`. Query each layer when implementing an inheritance
+chain. `type(...).interfaceId` is valid for interfaces, not contract, enum, or
+integer types.
+
 ## Typed interface calls
 
 Convert an address to the interface and call a member:
 
-```typescript
+```jeth
 get readPrice(oracle: address, asset: address): External<u256> {
   return Oracle(oracle).price(asset);
 }
@@ -30,6 +67,15 @@ get readPrice(oracle: address, asset: address): External<u256> {
 The compiler emits the canonical selector, ABI-encodes arguments, checks call
 success, and ABI-decodes the declared result. Contract existence checks follow
 the call/decode path's documented behavior.
+
+Build type-checked calldata without making the call using `abi.encodeCall`:
+
+```jeth
+let payload: bytes = abi.encodeCall(Oracle.price, [asset]);
+```
+
+The function reference must resolve to one unambiguous ABI signature, and the
+argument tuple must match that signature.
 
 Typed calls are external EVM calls. `msg.sender` in the callee is the calling
 contract, not the original transaction sender.
@@ -44,7 +90,7 @@ Use an internal helper when shared code should preserve the current frame.
 
 Addresses support checked low-level call forms:
 
-```typescript
+```jeth
 let result: bytes = target.call({
   data: payload,
   value: amount,
@@ -59,7 +105,7 @@ send value or perform state changes in the callee.
 `tryCall` and `tryStaticcall` expose raw success and returndata without automatic
 failure bubbling:
 
-```typescript
+```jeth
 let [ok, result]: [bool, bytes] = target.tryCall({ data: payload });
 if (!ok) {
   revertWith(result);
@@ -73,14 +119,14 @@ malformed bytes.
 
 Decode a successful result explicitly:
 
-```typescript
+```jeth
 let value: u256 = result.decode(u256);
 let [amount, owner]: [u256, address] = result.decode([u256, address]);
 ```
 
 Supported call options can request decoding directly:
 
-```typescript
+```jeth
 let value: u256 = target.staticcall({
   data: abi.encodeWithSignature("read()"),
   success: { condition: this.allowed, revert: "read failed" },

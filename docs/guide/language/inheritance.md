@@ -7,7 +7,7 @@ constructor execution, virtual dispatch, and override checks.
 
 Use `extends` for inheritance:
 
-```typescript
+```jeth
 abstract class Owned {
   owner: address;
 
@@ -34,7 +34,7 @@ Changing base order or fields can change an upgradeable contract's storage.
 
 Provide base arguments in the derived constructor with `super(args)`:
 
-```typescript
+```jeth
 abstract class Capped {
   cap: u256;
   constructor(cap: u256) { this.cap = cap; }
@@ -58,7 +58,7 @@ contract. Field initializers run in the corresponding construction sequence.
 
 An abstract contract can contain implemented members and bodyless requirements:
 
-```typescript
+```jeth
 abstract class PriceSource {
   abstract get price(asset: address): External<u256>;
 
@@ -71,7 +71,7 @@ abstract class PriceSource {
 `abstract` on a bodyless member is the native spelling of a required virtual
 member. The decorator form is also supported where applicable:
 
-```typescript
+```jeth
 abstract class PriceSource {
   @virtual get price(asset: address): External<u256>;
 }
@@ -87,7 +87,7 @@ ignoring invalid bodies.
 
 Mark an implemented member `@virtual` when a descendant may override it:
 
-```typescript
+```jeth
 abstract class FeeModel {
   @virtual
   fee(amount: u256): u256 {
@@ -100,7 +100,7 @@ abstract class FeeModel {
 
 Use `@override` on a replacing member:
 
-```typescript
+```jeth
 abstract class FeeModel {
   @virtual
   fee(amount: u256): u256 {
@@ -125,7 +125,7 @@ required to identify all overridden bases.
 An overriding internal function can invoke the next implementation in the
 linearized base order:
 
-```typescript
+```jeth
 abstract class FeeModel {
   @virtual
   fee(amount: u256): u256 {
@@ -157,10 +157,29 @@ linearization makes storage, modifiers, and `super` behavior harder to audit.
 
 A leading `#` declares a private member. It is not visible to derived contracts:
 
-```typescript
+```jeth
 abstract class Base {
   #secret: u256;
+
+  #normalize(value: u256): u256 {
+    return value + 1n;
+  }
+
+  get reveal(): External<u256> {
+    return this.#normalize(this.#secret);
+  }
 }
 ```
 
-Use ordinary internal members when descendants are intended to access them.
+A private base member remains usable by methods declared in that base, including
+when those methods execute as part of a derived contract. A derived method
+cannot directly name `this.#secret` or `this.#normalize(...)` from the base.
+
+The same private source name may be declared independently in a base and a
+derived class. Those declarations do not override each other and occupy distinct
+storage or function identities. Private methods are not virtual and cannot be
+overridden.
+
+Use ordinary internal members when descendants are intended to access or
+override them. See [Private functions](functions.md#private-functions) and
+[Private state variables](contract-structure.md#private-state-variables).

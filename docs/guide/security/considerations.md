@@ -1,13 +1,13 @@
 # Security considerations
 
+Built by [@a16k-lab](https://github.com/a16k-lab).
+
 This chapter covers contract-author risks. Compiler correctness is addressed in
 the next chapter.
 
-{% hint style="danger" %}
-Passing compiler tests does not make an application safe. Production contracts
-still require application-specific testing, economic review, deployment review,
-and an independent audit.
-{% endhint %}
+> [!DANGER] Passing compiler tests does not make an application safe. Production
+> contracts still require application-specific testing, economic review,
+> deployment review, and an independent audit.
 
 ## Reentrancy
 
@@ -18,6 +18,35 @@ appropriate guard boundary.
 Do not assume a static-looking interface prevents the callee from calling other
 contracts.
 
+```jeth
+class Escrow {
+  balances: mapping<address, u256>;
+
+  deposit(): Payable<void> {
+    this.balances[msg.sender] += msg.value;
+  }
+
+  @nonReentrant
+  withdraw(receiver: address, amount: u256): External<void> {
+    const available: u256 = this.balances[msg.sender];
+    require(available >= amount, "insufficient balance");
+
+    // Effects before interaction.
+    this.balances[msg.sender] = available - amount;
+
+    receiver.call({
+      data: bytes(""),
+      value: amount,
+      success: { condition: true, revert: "ETH transfer failed" },
+    });
+  }
+}
+```
+
+The state reduction occurs before the external call, and `@nonReentrant`
+protects the chosen entry boundary. In a real escrow, also define receiver,
+pause, accounting, and forced-ETH policies.
+
 ## Authorization
 
 Use `msg.sender`, role state, signatures with replay protection, or a reviewed
@@ -25,6 +54,26 @@ governance mechanism. Never use `tx.origin` for authorization.
 
 Check authorization on every state-changing entry, including upgrade, pause,
 rescue, callback, and initialization paths.
+
+```jeth
+class OwnedSettings {
+  owner: address;
+  limit: u256;
+
+  constructor(initialOwner: address) {
+    require(initialOwner != address(0n), "zero owner");
+    this.owner = initialOwner;
+  }
+
+  setLimit(newLimit: u256): External<void> {
+    require(msg.sender == this.owner, "not owner");
+    this.limit = newLimit;
+  }
+}
+```
+
+Constructor authorization does not protect later entries. Every privileged
+state transition needs its own check or a correctly applied modifier.
 
 ## Arithmetic and precision
 

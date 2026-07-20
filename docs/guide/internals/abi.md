@@ -1,5 +1,7 @@
 # Contract ABI specification
 
+Built by [@a16k-lab](https://github.com/a16k-lab).
+
 JETH uses the Ethereum Contract ABI for externally visible calls, returns,
 events, and errors. The target behavior is Solidity 0.8.35 for overlapping
 supported types.
@@ -58,6 +60,39 @@ dynamic tails
 
 Nested containers reset their relative offset base according to ABI rules.
 
+### Worked calldata example
+
+```jeth
+class AbiInbox {
+  lastCount: u256;
+
+  submit(id: u256, values: u256[]): External<u256> {
+    require(values.length > 0n, "empty values");
+    this.lastCount = values.length;
+    return id + values[0n];
+  }
+
+  get count(): External<u256> {
+    return this.lastCount;
+  }
+}
+```
+
+The canonical signature is `submit(uint256,uint256[])`, so the selector is
+`0x2f344195`. Calling `submit(7, [10, 20])` produces:
+
+```text
+2f344195                                                        selector
+0000000000000000000000000000000000000000000000000000000000000007  id
+0000000000000000000000000000000000000000000000000000000000000040  values offset
+0000000000000000000000000000000000000000000000000000000000000002  values length
+000000000000000000000000000000000000000000000000000000000000000a  values[0]
+0000000000000000000000000000000000000000000000000000000000000014  values[1]
+```
+
+The offset is `0x40` from the start of the argument tuple, immediately after the
+selector. The successful return value is `17`, encoded as one 32-byte word.
+
 ## Word representation
 
 - Unsigned integers and addresses are zero-extended.
@@ -101,10 +136,42 @@ Non-anonymous events use the canonical signature hash as topic 0. Indexed static
 values occupy one topic. Indexed dynamic values and supported aggregates use the
 event indexed hash rules. Non-indexed values use ABI tuple encoding in log data.
 
+```jeth
+type Submitted = event<{
+  sender: indexed<address>;
+  id: indexed<u256>;
+  values: u256[];
+}>;
+```
+
+For `Submitted`, topic 0 is the event signature hash, topics 1 and 2 contain the
+indexed sender and id, and the dynamic array is encoded in the log data tuple.
+
 ## Error encoding
 
 Custom errors use a selector followed by ABI arguments. `Error(string)` uses
 selector `0x08c379a0`. `Panic(uint256)` uses selector `0x4e487b71`.
+
+```jeth
+type Unauthorized = error<{ caller: address }>;
+
+class Guarded {
+  owner: address;
+
+  constructor(owner: address) {
+    this.owner = owner;
+  }
+
+  run(): External<void> {
+    if (msg.sender != this.owner) {
+      revert(Unauthorized({ caller: msg.sender }));
+    }
+  }
+}
+```
+
+`Unauthorized(address)` uses its own four-byte selector followed by one
+zero-extended address word.
 
 ## ABI JSON
 

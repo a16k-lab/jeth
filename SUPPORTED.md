@@ -1,5 +1,7 @@
 # JETH - supported vs unsupported features
 
+Built by [@a16k-lab](https://github.com/a16k-lab).
+
 Running checklist per directive §10.7. Updated through **Phase 4 + the solc-parity feature
 sweep** (closed all 17 audit-found compile-time gaps; runtime byte-identical to solc), plus
 **enums** and the **six distinctive features F1-F6** (see the next section and

@@ -17,7 +17,7 @@ JSON mode, source maps, metadata, and build-info files are roadmap items.
 
 ## ABI exposure
 
-```typescript
+```jeth
 class C {
   value: Visible<u256>;
 

@@ -46,11 +46,72 @@ Solidity asks the author to write `pure` and `view`. JETH infers them from the
 body and transitive calls. Interfaces still declare mutability because they have
 no body.
 
+### Compared example
+
+JETH:
+
+```jeth
+class Balance {
+  amount: u256;
+
+  get read(): External<u256> {
+    return this.amount;
+  }
+}
+```
+
+Solidity:
+
+```solidity
+contract Balance {
+    uint256 amount;
+
+    function read() external view returns (uint256) {
+        return amount;
+    }
+}
+```
+
+JETH infers `view` from the storage read. The exposed JETH getter still uses
+`get` to declare its read-only contract.
+
 ## Visibility
 
 JETH exposes only methods wrapped in `External<T>`/`Payable<T>` and fields wrapped
 in `Visible<T>`. Ordinary methods are internal. This is narrower than Solidity's
 several visibility keywords.
+
+JETH private members use `#` and stay scoped to their declaring class:
+
+```jeth
+class Vault {
+  #assets: u256;
+
+  #fee(value: u256): u256 {
+    return value / 100n;
+  }
+
+  get quote(value: u256): External<u256> {
+    return value - this.#fee(value);
+  }
+}
+```
+
+The Solidity equivalent spells the same visibility explicitly:
+
+```solidity
+contract Vault {
+    uint256 private assets;
+
+    function fee(uint256 value) private pure returns (uint256) {
+        return value / 100;
+    }
+
+    function quote(uint256 value) external pure returns (uint256) {
+        return value - fee(value);
+    }
+}
+```
 
 ## JETH-only compile-time features
 
@@ -67,6 +128,23 @@ several visibility keywords.
 JETH follows its Solidity target for checked arithmetic, panic codes,
 short-circuiting, and observable evaluation order. Do not infer behavior from
 JavaScript evaluation or coercion.
+
+```jeth
+class Arithmetic {
+  get add(u: u8, v: u8): External<u8> {
+    return u + v;
+  }
+
+  get wrap(u: u8, v: u8): External<u8> {
+    unchecked: {
+      return u + v;
+    }
+  }
+}
+```
+
+`add(255, 1)` panics with arithmetic code `0x11`. `wrap(255, 1)` returns zero.
+This is EVM integer behavior, not JavaScript number behavior.
 
 ## Safer malformed-calldata behavior
 

@@ -39,6 +39,40 @@ There is no `any`, runtime union, implicit number/string conversion, truthiness,
 `undefined`, or `null`. Conversions must be permitted by the source and target
 types and are often explicit.
 
+## Worked type example
+
+This contract combines a nominal identifier, a struct, a dynamic array, a
+fixed-size array, and a storage mapping:
+
+```jeth
+type UserId = Brand<u256>;
+
+type Profile = {
+  id: UserId;
+  owner: address;
+  scores: u256[];
+  flags: Arr<bool, 2>;
+};
+
+class Profiles {
+  owners: mapping<UserId, address>;
+
+  register(id: UserId, owner: address): External<void> {
+    require(owner != address(0n), "zero owner");
+    this.owners[id] = owner;
+  }
+
+  get ownerOf(id: UserId): External<address> {
+    return this.owners[id];
+  }
+}
+```
+
+`UserId` is represented as its `u256` base in the ABI and EVM, but it remains a
+distinct source type. `Profile` is a tuple in the ABI. Its `scores` field makes
+the complete struct dynamically encoded. `owners` is storage-only and therefore
+cannot be an external parameter or return value.
+
 ## Shape and location
 
 Two values with the same source type can use different runtime representations

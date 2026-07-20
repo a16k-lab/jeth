@@ -1,5 +1,7 @@
 # Compiler, CLI, and tooling
 
+Built by [@a16k-lab](https://github.com/a16k-lab).
+
 The JETH compiler accepts source text, validates and analyzes it, emits Yul and
 ABI metadata, then asks solc to optimize and assemble bytecode.
 
@@ -53,7 +55,7 @@ frozen public artifact standard.
 
 ## Compiler API
 
-```typescript
+```jeth
 import { compile } from "./src/compile.js";
 
 const result = compile(source, {
@@ -91,7 +93,7 @@ contract and `contracts` holds artifacts in document order.
 
 ## Multi-file API
 
-```typescript
+```jeth
 const result = compile(entrySource, {
   fileName: "src/App.jeth",
   sources: {
@@ -109,7 +111,7 @@ original source file and span.
 
 Compilation failures throw `CompileError` with structured diagnostics:
 
-```typescript
+```jeth
 try {
   const result = compile(source, { fileName: "C.jeth" });
 } catch (error) {

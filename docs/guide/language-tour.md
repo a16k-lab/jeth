@@ -5,7 +5,7 @@ that differ most from TypeScript and Solidity.
 
 ## State and external methods
 
-```typescript
+```jeth
 class Vault {
   balances: mapping<address, u256>;
 
@@ -25,7 +25,7 @@ uses `get` and reads storage, its ABI mutability is inferred as `view`.
 
 ## Checked arithmetic
 
-```typescript
+```jeth
 let next: u256 = current + amount;
 ```
 
@@ -33,8 +33,8 @@ Unsigned overflow and signed overflow revert with Solidity-compatible panic
 data. Division by zero and invalid enum conversions also use the matching panic
 codes. Use `unchecked` only when wrapping is deliberate and proven safe:
 
-```typescript
-unchecked {
+```jeth
+unchecked: {
   i += 1n;
 }
 ```
@@ -43,7 +43,7 @@ unchecked {
 
 Methods without an exposure return wrapper are internal:
 
-```typescript
+```jeth
 class Fees {
   fee(amount: u256, bps: u256 = 30n): u256 {
     return (amount * bps) / 10000n;
@@ -64,7 +64,7 @@ JETH includes Solidity-compatible integer widths, signed integers, booleans,
 addresses, fixed bytes, dynamic bytes, strings, mappings, arrays, fixed arrays,
 struct-like object aliases, enums, and tuples.
 
-```typescript
+```jeth
 type Position = {
   owner: address;
   size: u128;
@@ -85,7 +85,7 @@ brands cannot be mixed accidentally without an explicit conversion.
 
 ## Arrays and iteration
 
-```typescript
+```jeth
 class Scores {
   scores: u256[];
 
@@ -105,7 +105,7 @@ desugars to indexed EVM-oriented iteration and supports `break`, `continue`, and
 
 ## Events and custom errors
 
-```typescript
+```jeth
 type Deposited = event<{
   account: indexed<address>;
   amount: u256;
@@ -122,7 +122,7 @@ selectors and ABI-encoded arguments.
 
 ## Modifiers and reentrancy protection
 
-```typescript
+```jeth
 class GuardedForwarder {
   @nonReentrant
   forward(target: address, data: bytes): Payable<bytes> {
@@ -145,7 +145,7 @@ control, invariant tests, and review.
 
 ## Exhaustive control flow
 
-```typescript
+```jeth
 get weight(status: Status): External<u256> {
   switch (status) {
     case Status.Pending:

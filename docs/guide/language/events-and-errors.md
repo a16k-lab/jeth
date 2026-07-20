@@ -6,7 +6,7 @@ Events write EVM logs. Errors and panics revert execution and roll back state.
 
 Declare an event at file scope:
 
-```typescript
+```jeth
 type Transfer = event<{
   from: indexed<address>;
   to: indexed<address>;
@@ -16,7 +16,7 @@ type Transfer = event<{
 
 Or as a contract member:
 
-```typescript
+```jeth
 class Token {
   Transfer: event<{
     from: indexed<address>;
@@ -28,9 +28,22 @@ class Token {
 
 ## Emitting events
 
-```typescript
+```jeth
 emit(Transfer(msg.sender, recipient, amount));
 ```
+
+A member event can also be emitted through `this` with named arguments:
+
+```jeth
+emit(this.Transfer({
+  from: msg.sender,
+  to: recipient,
+  value: amount,
+}));
+```
+
+Named fields must match the declaration exactly. They are reordered to the
+declared ABI order before encoding.
 
 For a non-anonymous event, topic 0 is the keccak hash of the canonical event
 signature. Indexed value parameters occupy topics. Non-indexed parameters are
@@ -51,7 +64,7 @@ harder to distinguish by event signature.
 
 ## Error declarations
 
-```typescript
+```jeth
 type InsufficientBalance = error<{
   available: u256;
   required: u256;
@@ -60,18 +73,42 @@ type InsufficientBalance = error<{
 
 Revert with the error:
 
-```typescript
+```jeth
 if (available < amount) {
   revert(InsufficientBalance(available, amount));
 }
 ```
+
+A member error supports named construction through `this`:
+
+```jeth
+if (available < amount) {
+  revert(this.InsufficientBalance({
+    available: available,
+    required: amount,
+  }));
+}
+```
+
+`throw` is accepted only as custom-error sugar:
+
+```jeth
+throw this.InsufficientBalance({
+  available: available,
+  required: amount,
+});
+```
+
+It produces the same revert payload as the corresponding `revert(...)`. JETH
+does not support JavaScript `throw` values, `new Error(...)`, or arbitrary
+exceptions.
 
 The payload begins with the first four bytes of the canonical error signature
 hash, followed by ABI-encoded arguments.
 
 ## `require`
 
-```typescript
+```jeth
 require(condition);
 require(condition, "message");
 require(condition, Unauthorized(msg.sender));
@@ -85,7 +122,7 @@ Do not put state-changing or reverting expressions in error arguments.
 
 ## `revert`
 
-```typescript
+```jeth
 revert();
 revert("disabled");
 revert(Unauthorized(msg.sender));

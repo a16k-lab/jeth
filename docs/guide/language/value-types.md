@@ -8,7 +8,7 @@ not have an explicit data-location annotation.
 Unsigned integer types are written `u8`, `u16`, and so on through `u256`, in
 multiples of eight bits.
 
-```typescript
+```jeth
 let small: u8 = 255n;
 let word: u256 = 1n << 200n;
 ```
@@ -21,7 +21,7 @@ An overflow or underflow reverts with `Panic(0x11)`.
 Signed integer types are written `i8` through `i256`, also in multiples of eight
 bits. They use two's-complement EVM representation.
 
-```typescript
+```jeth
 let delta: i64 = -12n;
 let limit: i256 = type(i256).max;
 ```
@@ -33,7 +33,7 @@ signed value by `-1` overflows in checked mode.
 
 Integer literals use TypeScript BigInt spelling:
 
-```typescript
+```jeth
 let decimal: u256 = 1000n;
 let hexadecimal: u256 = 0xffn;
 ```
@@ -50,7 +50,7 @@ hex literals are subject to EIP-55 rules.
 `bool` has values `true` and `false`. Conditions require a boolean; integers do
 not coerce to booleans.
 
-```typescript
+```jeth
 if (amount != 0n) {
   // ...
 }
@@ -63,7 +63,7 @@ values as true.
 
 `address` represents a 160-bit EVM address.
 
-```typescript
+```jeth
 let zero: address = address(0n);
 let self: address = address(this);
 let caller: address = msg.sender;
@@ -84,7 +84,7 @@ low-level calls, typed interface conversion, and contract checks.
 `bytes1` through `bytes32` hold fixed byte sequences. ABI and storage values are
 left-aligned within the 32-byte word.
 
-```typescript
+```jeth
 let selector: bytes4 = bytes4(0x12345678n);
 let digest: bytes32 = keccak256(data);
 ```
@@ -96,7 +96,7 @@ casts, and byte indexing where applicable.
 
 Enums use a one-byte `uint8` representation and ABI type.
 
-```typescript
+```jeth
 enum State {
   Pending,
   Active,
@@ -114,7 +114,7 @@ representable supported member count.
 
 `Brand<Base>` creates a nominal value type over a value type:
 
-```typescript
+```jeth
 type TokenId = Brand<u256>;
 type Wei = Brand<u256>;
 
@@ -131,13 +131,38 @@ defined. A literal can be typed in the context of its branded operand.
 
 ## Function references
 
-JETH supports internal function-reference values for supported signatures. A
-function reference can be stored in a local value, compared under the documented
-rules, passed through supported internal paths, and called with a matching
-signature.
+An internal function-reference type uses arrow syntax:
+
+```jeth
+(value: u256) => u256
+(left: u256, right: u256) => u256
+() => void
+```
+
+Take a reference from an unambiguous internal or private method and call it with
+the declared signature:
+
+```jeth
+inc(value: u256): u256 { return value + 1n; }
+
+run(value: u256): u256 {
+  let fn: (value: u256) => u256 = this.inc;
+  return fn(value);
+}
+```
+
+Supported references can be stored in locals, state fields, arrays, fixed
+arrays, and supported structs. They can be passed and returned through internal
+functions, selected with a conditional expression, compared with `==` and `!=`,
+and called directly from a state field.
+
+The zero/default function reference is not callable. Invoking it reverts with
+`Panic(0x51)`, matching an uninitialized Solidity internal function pointer.
 
 Function references are internal compiler values. They are not external ABI
-function pointers and must not be treated as stable code addresses.
+function pointers or stable code addresses. They cannot be ABI encoded, exposed
+as external parameters or returns, emitted in events, converted to integers, or
+taken from an externally exposed or ambiguous overloaded method.
 
 ## Default values
 

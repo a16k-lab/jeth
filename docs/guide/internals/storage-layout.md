@@ -1,5 +1,7 @@
 # Storage layout
 
+Built by [@a16k-lab](https://github.com/a16k-lab).
+
 JETH follows Solidity-compatible persistent storage layout for supported types.
 Raw-slot compatibility is part of the differential test bar.
 
@@ -10,7 +12,7 @@ bytes can share a slot when they fit. A value that does not fit starts in the
 next slot. Structs and arrays apply their own boundaries according to Solidity
 layout rules.
 
-```typescript
+```jeth
 class Packed {
   a: u8;
   b: u16;
@@ -27,7 +29,7 @@ unchanged.
 Fixed arrays are inline. Value elements pack without crossing a slot. Composite
 elements use their recursive storage width.
 
-```typescript
+```jeth
 values: Arr<u8, 40>;
 ```
 
@@ -93,6 +95,31 @@ break upgrade compatibility.
 
 Proxy implementation/admin/beacon slots use their specified collision-resistant
 constants. Diamond/facet state uses the selected reference model and namespace.
+
+`@storage("namespace")` places fields in an ERC-7201 region. Fields with the
+same namespace form one logical struct and pack in declaration order:
+
+```jeth
+class NamespacedState {
+  @storage("app.config") owner: address;
+  @storage("app.config") enabled: bool;
+  @storage("app.accounting") totals: mapping<address, u256>;
+
+  configure(owner: address, enabled: bool): External<void> {
+    this.owner = owner;
+    this.enabled = enabled;
+  }
+
+  add(account: address, amount: u256): External<void> {
+    this.totals[account] += amount;
+  }
+}
+```
+
+The namespace string is part of the persistent layout. Changing
+`"app.config"` creates a different region. The compiler-internal raw namespace
+mode is reserved for synthesized diamond compatibility layouts and should not be
+used as an application storage convention.
 
 Never mix generated proxy storage, implementation state, and custom assembly
 slots without a complete layout review.

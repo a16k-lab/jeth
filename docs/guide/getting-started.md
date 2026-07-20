@@ -45,7 +45,7 @@ usage: jethc <file.jeth> [options]
 
 Create `Hello.jeth`:
 
-```typescript
+```jeth
 class Hello {
   value: u256 = 0n;
 
@@ -77,7 +77,7 @@ The exact output format is not stable until the public CLI milestone is complete
 - A method returning `External<T>` is externally callable.
 - A `get` method is read-only; the compiler infers `pure` or `view`.
 - A method without `External<T>` or `Payable<T>` is internal.
-- Arithmetic is checked unless it is inside `unchecked { ... }`.
+- Arithmetic is checked unless it is inside `unchecked: { ... }`.
 
 ## Next steps
 

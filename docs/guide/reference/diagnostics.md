@@ -35,6 +35,51 @@ Diagnostics cover:
 - constant evaluation and range errors;
 - backend soundness guards.
 
+## Examples
+
+An invalid implicit narrowing is rejected at the conversion site:
+
+```jeth
+// Expected compile error: a u256 is not implicitly narrowed to u8.
+class NarrowingError {
+  get set(value: u256): External<u8> {
+    return value;
+  }
+}
+```
+
+Make the policy explicit only when the range is known and checked:
+
+```jeth
+class CheckedNarrowing {
+  get narrow(value: u256): External<u8> {
+    require(value <= u256(type(u8).max), "out of range");
+    return u8(value);
+  }
+}
+```
+
+An unsupported storage transcode is a safety gate, not a request to bypass the
+type system:
+
+```jeth
+// Expected JETH470-style compile error: this whole-value copy is unsupported.
+type Payload = {
+  values: Arr<u256, 2>[];
+};
+
+class UnsupportedCopy {
+  payload: Payload;
+
+  setPayload(input: Payload): External<void> {
+    this.payload = input;
+  }
+}
+```
+
+The diagnostic is emitted before bytecode generation because accepting this
+shape without a proven transcode would risk a miscompile.
+
 ## Clean rejection is intentional
 
 A "not supported" diagnostic is preferable to accepted source that would produce

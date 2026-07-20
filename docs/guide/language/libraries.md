@@ -5,7 +5,7 @@ constants, events/errors, modifiers, and supported external functions.
 
 ## Internal libraries
 
-```typescript
+```jeth
 static class MathLib {
   min(a: u256, b: u256): u256 {
     return a < b ? a : b;
@@ -25,7 +25,7 @@ library calls.
 
 ## Library constants
 
-```typescript
+```jeth
 static class Units {
   static BPS: u256 = 10000n;
   static HALF: u256 = BPS / 2n;
@@ -45,7 +45,7 @@ forward references. Cyclic dependencies reject at compile time.
 
 Attach library functions to a receiver type:
 
-```typescript
+```jeth
 static class MathLib {
   min(a: u256, b: u256): u256 {
     return a < b ? a : b;
@@ -65,13 +65,43 @@ listed in one `@using` or stacked applications. Attachment is type-directed.
 If an attached name collides with a genuine built-in member such as array
 `.length`, the built-in wins; call the library function by its qualified name.
 
+## Native `self` attachment
+
+A library author can make a function attachable without requiring `@using` on
+the consuming contract. Name the first parameter exactly `self`:
+
+```jeth
+static class MathLib {
+  min(self: u256, other: u256): u256 {
+    return self < other ? self : other;
+  }
+}
+
+class C {
+  get smaller(a: u256, b: u256): External<u256> {
+    return a.min(b);
+  }
+}
+```
+
+The call `a.min(b)` lowers to `MathLib.min(a, b)`. A first parameter named
+anything other than `self` does not opt in.
+
+Attachment is additive and type-directed. A real field or built-in member wins
+over a library attachment. If two visible libraries attach the same name to the
+same receiver type, the call is ambiguous and rejects. The convention also
+works through imports and inside supported library-to-library calls.
+
+`@using(Library)` remains useful for attaching functions whose first parameter
+does not use the `self` convention, and for making attachment scope explicit.
+
 ## External libraries
 
 A supported ABI-exposed function in a static class compiles to a separate
 library artifact. Contract calls use `DELEGATECALL` and require link-time address
 patching.
 
-```typescript
+```jeth
 static class ExternalMath {
   add(a: u256, b: u256): External<u256> {
     return a + b;

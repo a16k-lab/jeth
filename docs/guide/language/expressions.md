@@ -14,15 +14,15 @@ Supported arithmetic operators include:
 Arithmetic is checked by default. Overflow and underflow revert with
 `Panic(0x11)`. Division or modulo by zero reverts with `Panic(0x12)`.
 
-```typescript
+```jeth
 let total: u256 = price * quantity;
 let average: u256 = total / count;
 ```
 
 Use `unchecked` for intentional wrapping:
 
-```typescript
-unchecked {
+```jeth
+unchecked: {
   counter += 1n;
 }
 ```
@@ -35,7 +35,7 @@ booleans, bytes, and unrelated brands do not silently become integers.
 Compile-time arithmetic is evaluated exactly before conversion to the target
 integer type. This matches Solidity constant rational behavior.
 
-```typescript
+```jeth
 static TEN: u256 = (10n / 4n) * 4n; // 10, not 8.
 ```
 
@@ -61,7 +61,7 @@ general deep-equality operation.
 `&&` and `||` short-circuit. The right side is not evaluated when the left side
 determines the result.
 
-```typescript
+```jeth
 if (denominator != 0n && numerator / denominator > 2n) {
   // The division cannot run when denominator is zero.
 }
@@ -80,22 +80,64 @@ shift behavior.
 ## Assignment
 
 ```text
-=  -=  *=  /=  %=  **=  &=  |=  ^=  <<=  >>=
+=  +=  -=  *=  /=  %=  **=  &=  |=  ^=  <<=  >>=
 ```
 
 Assignment expressions yield the assigned value where supported. Compound
 assignment reads, computes, checks, and writes the target.
 
-```typescript
+```jeth
 this.total += amount;
 let next: u256 = (local += 1n);
 ```
 
 Prefix and postfix `++`/`--` preserve their usual before/after value distinction.
+Both forms use checked arithmetic outside `unchecked`.
+
+## Tuple destructuring and assignment
+
+Destructure a multi-value result or tuple literal into new locals:
+
+```jeth
+let [value, , owner]: [u256, bool, address] = this.readRecord();
+```
+
+Assign existing value lvalues and skip unwanted components:
+
+```jeth
+[this.left, , local] = this.readRecord();
+[a, b] = [b, a];
+```
+
+The entire right side is evaluated before any left-side store begins. This makes
+swaps deterministic and prevents an early assignment from changing a later
+right-side component. Destructuring currently supports the documented value
+component paths; it is not JavaScript iterable destructuring.
+
+## Literals and construction
+
+Array literals are contextually typed:
+
+```jeth
+let pair: Arr<u256, 2> = [1n, 2n];
+let values: u256[] = [1n, 2n, 3n];
+```
+
+Structs support positional construction and named object construction:
+
+```jeth
+let a: User = User(7n, msg.sender);
+let b: User = { id: 8n, owner: msg.sender };
+let c: User = { ...b, id: 9n };
+```
+
+`new Array<T>(length)` allocates a supported dynamic memory array. JETH does not
+use Solidity's `new T[](length)` spelling. Element and nested shapes remain
+subject to the documented memory-layout gates.
 
 ## Conditional expression
 
-```typescript
+```jeth
 let result: u256 = condition ? whenTrue : whenFalse;
 ```
 
@@ -105,7 +147,7 @@ aggregate ternaries remain location-sensitive.
 
 ## Member and index access
 
-```typescript
+```jeth
 this.user.owner
 this.values[i]
 this.users[account].positions[j].amount
@@ -145,7 +187,7 @@ Avoid writing code whose correctness depends on obscure operand side effects.
 
 Conversions use type-call syntax:
 
-```typescript
+```jeth
 let wide: u256 = u256(small);
 let account: address = address(raw);
 let id: TokenId = TokenId(rawId);

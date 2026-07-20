@@ -8,7 +8,7 @@ memory, or calldata. Their behavior depends on shape and location.
 `bytes` is a dynamic byte sequence. `string` is an ABI string represented by its
 UTF-8 bytes. JETH does not provide JavaScript string objects.
 
-```typescript
+```jeth
 class Text {
   data: bytes;
   name: string;
@@ -27,11 +27,39 @@ Storage uses Solidity's short/long representation. Values shorter than 32 bytes
 are stored in the header slot. Longer values use data slots beginning at the
 keccak hash of the header slot.
 
+### Calldata slices
+
+Use `.slice(start, end)` for a zero-copy calldata sub-view. Either bound can use
+the supported omitted form:
+
+```jeth
+get tail(data: bytes): External<bytes> {
+  return data.slice(4n);
+}
+
+get middle(data: bytes, start: u256, end: u256): External<bytes> {
+  return data.slice(start, end);
+}
+
+get argumentsOnly(): External<bytes> {
+  return msg.data.slice(4n);
+}
+```
+
+Slicing corresponds to Solidity's `data[start:end]`, which does not fit JETH's
+TypeScript-shaped parser. The bounds must satisfy `start <= end <= length`; an
+invalid range reverts with empty data. Slices can be returned, hashed, encoded,
+decoded, sliced again, or bound to a local calldata view.
+
+Only calldata `bytes` or `string` values are sliceable. This includes parameters,
+`msg.data`, calldata struct fields, and calldata array elements. Storage and
+memory values do not gain JavaScript-style `.slice()` behavior.
+
 ## Dynamic arrays
 
 `T[]` is a dynamic array.
 
-```typescript
+```jeth
 class List {
   values: u256[];
 
@@ -50,7 +78,7 @@ Supported operations include `.length`, index reads/writes, `push`, zero-value
 
 Create a zero-initialized memory array with the JETH constructor form:
 
-```typescript
+```jeth
 let values: u256[] = new Array<u256>(length);
 ```
 
@@ -65,7 +93,7 @@ reverts with `Panic(0x31)`. Excessive memory allocation reverts with
 
 `Arr<T, N>` is a fixed-length array and corresponds to Solidity `T[N]`.
 
-```typescript
+```jeth
 class C {
   pair: Arr<u256, 2>;
 }
@@ -82,7 +110,7 @@ shape-sensitive; check the known-limitations chapter for cleanly rejected paths.
 
 `mapping<K, V>` is a storage-only key/value structure.
 
-```typescript
+```jeth
 class Ledger {
   balances: mapping<address, u256>;
   allowances: mapping<address, mapping<address, u256>>;
@@ -104,7 +132,7 @@ deleted, or enumerated.
 
 Object-shaped type aliases declare structs:
 
-```typescript
+```jeth
 type Position = {
   owner: address;
   size: u128;
@@ -126,7 +154,7 @@ Solidity rules. ABI structs are tuples.
 Struct values can be constructed positionally. Supported contexts also permit
 object literals and object spread:
 
-```typescript
+```jeth
 let updated: Position = { ...old, size: nextSize };
 ```
 
@@ -137,7 +165,7 @@ memory value, passed through the ABI, or returned.
 
 Composite types can be nested:
 
-```typescript
+```jeth
 type Item = { id: u256; label: string };
 type Batch = { owner: address; items: Item[] };
 
@@ -160,7 +188,7 @@ the type system.
 
 Tuple syntax is used for multiple returns and destructuring:
 
-```typescript
+```jeth
 pair(): [u256, bool] {
   return [7n, true];
 }
@@ -173,7 +201,7 @@ use(): void {
 
 Omitted destructuring positions discard their component:
 
-```typescript
+```jeth
 let [value, , owner] = this.readThree();
 ```
 

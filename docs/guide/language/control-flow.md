@@ -6,7 +6,7 @@ JETH has structured control flow with EVM-compatible return and revert behavior.
 
 Braces create a lexical scope:
 
-```typescript
+```jeth
 let value: u256 = 1n;
 {
   let value: u256 = 2n;
@@ -20,7 +20,7 @@ shadowing does not become Yul shadowing.
 
 ## Conditional statements
 
-```typescript
+```jeth
 if (amount == 0n) {
   return;
 } else if (amount > limit) {
@@ -34,7 +34,7 @@ Conditions must be `bool`. There is no integer truthiness.
 
 ## `while` and `do...while`
 
-```typescript
+```jeth
 while (i < count) {
   i += 1n;
 }
@@ -48,7 +48,7 @@ do {
 
 ## Classic `for`
 
-```typescript
+```jeth
 for (let i: u256 = 0n; i < values.length; i += 1n) {
   sum += values[i];
 }
@@ -61,7 +61,7 @@ missing condition is treated as true where the syntax is accepted.
 
 `for...of` iterates supported storage, calldata, memory, or fixed arrays:
 
-```typescript
+```jeth
 for (const value of values) {
   sum += value;
 }
@@ -82,7 +82,7 @@ break and continue are not part of JETH.
 
 JETH adds a structured switch that Solidity source does not have:
 
-```typescript
+```jeth
 switch (state) {
   case State.Pending:
     return 0n;
@@ -102,7 +102,7 @@ compile-time errors.
 
 ## Return
 
-```typescript
+```jeth
 return;
 return value;
 return [first, second];
@@ -114,7 +114,7 @@ an early function-body return according to modifier nesting.
 
 ## Revert and require
 
-```typescript
+```jeth
 require(owner == msg.sender);
 require(balance >= amount, "insufficient balance");
 revert();

@@ -18,7 +18,7 @@ A source unit can contain:
 - abstract and deployable classes;
 - static classes used as libraries.
 
-```typescript
+```jeth
 import { Ownable } from "./Ownable.jeth";
 import { MathLib as Math } from "./Math.jeth";
 
@@ -45,7 +45,7 @@ by the compiler's source bundle rather than by Node.js at runtime. Imported
 declarations participate in type checking, inheritance, interface conformance,
 library resolution, and selector collision checks.
 
-```typescript
+```jeth
 import { Base, TokenId } from "./base.jeth";
 import { Base as Parent } from "./other.jeth";
 ```
@@ -61,7 +61,7 @@ filesystem import resolver are part of the CLI roadmap.
 
 Use `export` on declarations intended for another source unit:
 
-```typescript
+```jeth
 export type UserId = Brand<u256>;
 
 export abstract class Owned {
@@ -77,7 +77,7 @@ compilation unit.
 
 Line and block comments use TypeScript syntax:
 
-```typescript
+```jeth
 // One line.
 
 /*
@@ -93,7 +93,7 @@ not assume comments are currently included in ABI or metadata artifacts.
 JETH previously used structural decorators such as `@contract`, `@state`, and
 `@external`. Those forms are removed. Modern JETH uses native declarations:
 
-```typescript
+```jeth
 class C {
   value: u256;
 

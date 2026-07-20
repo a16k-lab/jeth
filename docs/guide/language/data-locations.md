@@ -8,7 +8,7 @@ still fundamental to semantics.
 
 Contract fields and values reached from them live in persistent storage.
 
-```typescript
+```jeth
 type User = { id: u256; owner: address };
 
 class C {
@@ -27,7 +27,7 @@ External function parameters are decoded from calldata. Value parameters are
 validated as words. Aggregate parameters are represented as bounds-checked views
 or copied images depending on the consuming operation.
 
-```typescript
+```jeth
 get element(values: u256[], index: u256): External<u256> {
   return values[index];
 }
@@ -44,7 +44,7 @@ four-byte selector.
 Locals that hold dynamic bytes, strings, arrays, or struct/fixed-array images use
 memory. Memory exists only for the current EVM call.
 
-```typescript
+```jeth
 let copy: bytes = input;
 let pair: Arr<u256, 2> = [1n, 2n];
 let user: User = User(id, owner);
@@ -72,7 +72,7 @@ lowering it as a copy would lose aliasing that Solidity preserves.
 
 ## Assignment examples
 
-```typescript
+```jeth
 // Value copy.
 let b: u256 = a;
 
@@ -98,7 +98,7 @@ slots, not only the returned value.
 
 `delete target` resets a supported location to its type's zero value:
 
-```typescript
+```jeth
 delete this.count;
 delete this.users[id];
 delete this.values;

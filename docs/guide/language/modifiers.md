@@ -4,7 +4,7 @@ Modifiers wrap a function or constructor body with reusable checks and effects.
 
 ## Declaration
 
-```typescript
+```jeth
 class Owned {
   owner: address;
 
@@ -23,7 +23,7 @@ inside modifier syntax.
 
 Apply a modifier by name:
 
-```typescript
+```jeth
 @onlyOwner
 setOwner(next: address): External<void> {
   this.owner = next;
@@ -32,7 +32,7 @@ setOwner(next: address): External<void> {
 
 Modifier arguments evaluate once before the modifier body uses them:
 
-```typescript
+```jeth
 @modifier
 minimum(value: u256, min: u256) {
   require(value >= min, "below minimum");
@@ -50,7 +50,7 @@ deposit(amount: u256): External<void> {
 Statements before `_` execute before the function body. Statements after `_`
 execute after every normal body completion, including an early body return.
 
-```typescript
+```jeth
 @modifier
 countCalls() {
   this.entered += 1n;
@@ -66,7 +66,7 @@ state.
 
 Modifiers nest leftmost-outermost:
 
-```typescript
+```jeth
 @outer
 @inner
 run(): External<void> {
@@ -96,7 +96,7 @@ modifiers.
 
 Modifiers can wrap constructors:
 
-```typescript
+```jeth
 @validOwner(owner)
 constructor(owner: address) {
   this.owner = owner;
@@ -119,7 +119,7 @@ sites.
 
 JETH includes a built-in transient-storage guard:
 
-```typescript
+```jeth
 @nonReentrant
 withdraw(amount: u256): External<void> {
   // checks

@@ -3,7 +3,7 @@
 Contracts use class syntax. A deployable leaf class becomes an EVM contract
 artifact.
 
-```typescript
+```jeth
 class SimpleStorage {
   value: u256;
 
@@ -24,7 +24,7 @@ constructors, modifiers, events, errors, and inherited members.
 
 Bare fields are persistent storage:
 
-```typescript
+```jeth
 class Ledger {
   total: u256;
   balances: mapping<address, u256>;
@@ -37,18 +37,48 @@ Field order is therefore part of an upgradeable contract's storage interface.
 
 An initializer executes during contract creation:
 
-```typescript
+```jeth
 class C {
   count: u256 = 1n;
   enabled: bool = true;
 }
 ```
 
+### Private state variables
+
+A leading `#` makes a field private to its declaring class:
+
+```jeth
+class Vault {
+  #assets: u256;
+
+  deposit(amount: u256): External<void> {
+    this.#assets += amount;
+  }
+
+  get totalAssets(): External<u256> {
+    return this.#assets;
+  }
+}
+```
+
+Private state still occupies an ordinary storage position according to
+declaration and inheritance order. Privacy is compile-time access control, not
+storage secrecy. Anyone can inspect contract storage off chain.
+
+A derived class cannot directly read or write a base class's private field. A
+base implementation inherited by that derived class can still access the field.
+Base and derived classes may each declare the same `#name`; the declarations are
+distinct storage variables.
+
+A private field cannot use `Visible<T>` because private storage and an external
+getter conflict.
+
 ## Public getters
 
 Wrap a state type in `Visible<T>` to generate an external getter:
 
-```typescript
+```jeth
 class C {
   owner: Visible<address>;
   balances: Visible<mapping<address, u256>>;
@@ -59,12 +89,15 @@ Getter parameters and return values follow Solidity's public-state-getter rules
 for the supported storage shape. The underlying field remains available to
 contract code.
 
+`Visible<T>` can also wrap a supported initialized constant or immutable field,
+producing an external read-only getter without allocating a storage slot.
+
 ## Constants
 
 An initialized `static` field is a compile-time constant. It consumes no storage
 slot and is folded at each use site.
 
-```typescript
+```jeth
 class Units {
   static BPS: u256 = 10000n;
 
@@ -82,7 +115,7 @@ exact rational semantics before conversion to the target integer type.
 A `static` value field without an initializer is an immutable. Assign it in the
 constructor. It is baked into runtime bytecode and consumes no storage slot.
 
-```typescript
+```jeth
 class Token {
   static OWNER: address;
 
@@ -103,14 +136,18 @@ after construction.
 
 Return wrappers define ABI exposure:
 
-```typescript
+```jeth
 helper(x: u256): u256 { return x + 1n; }
+#privateHelper(x: u256): u256 { return x + 2n; }
+static pureHelper(x: u256): u256 { return x + 3n; }
 set(x: u256): External<void> { this.value = x; }
 get read(): External<u256> { return this.value; }
 deposit(): Payable<void> { this.total += msg.value; }
 ```
 
 - No wrapper means internal.
+- A leading `#` means private to the declaring class.
+- `static` declares a method pure and removes the instance receiver.
 - `External<T>` means externally callable and nonpayable.
 - `Payable<T>` means externally callable and payable.
 - A read-only value-returning class method uses `get`; its `pure` or `view`
@@ -120,7 +157,7 @@ deposit(): Payable<void> { this.total += msg.value; }
 
 Events and errors can be declared at file scope or as members:
 
-```typescript
+```jeth
 class Vault {
   Deposited: event<{ account: indexed<address>; value: u256 }>;
   Unauthorized: error<{ caller: address }>;
@@ -135,7 +172,7 @@ The constructor runs once in creation code. It can accept ABI-encoded arguments,
 initialize state and immutables, call supported internal functions, and invoke a
 base constructor.
 
-```typescript
+```jeth
 class C {
   owner: address;
 
@@ -153,7 +190,7 @@ A method named `receive` handles empty calldata and accepts value. A method name
 `fallback` handles selectors not matched by ordinary entries. Their accepted
 parameters and return behavior follow the JETH special-entry rules.
 
-```typescript
+```jeth
 class Receiver {
   received: u256;
 
@@ -170,9 +207,25 @@ class Receiver {
 `receive()` is payable by definition. A plain `fallback(): void` is nonpayable;
 use `fallback(): Payable<void>` when the fallback must accept and read value.
 
+The supported fallback forms are:
+
+```jeth
+fallback(): void { }
+fallback(): External<void> { }
+fallback(): Payable<void> { }
+fallback(input: bytes): bytes { return input; }
+fallback(input: bytes): Payable<bytes> { return input; }
+```
+
+The `External<T>` wrapper is optional and redundant on a nonpayable fallback.
+A data-passing fallback receives the complete calldata and returns raw bytes.
+There can be at most one `receive` and one `fallback`. `receive` takes no
+parameters, returns no value, and must not use `Payable<T>` because it is already
+payable by definition.
+
 ## Abstract contracts, interfaces, and libraries
 
-```typescript
+```jeth
 abstract class Base {
   abstract value(): External<u256>;
 }
