@@ -1,5 +1,7 @@
 # JETH
 
+![JETH orange logo](assets/jeth/jeth-orange-icon-256.png)
+
 <p class="a16k-lockup">
   <a href="https://github.com/a16k-lab">
     <img src="docs/assets/a16k-avatar-logo.png" width="28" height="28" alt="a16k-lab logo" align="middle">

@@ -40,7 +40,7 @@ button, input { font: inherit; }
 
 .site-header { position: fixed; z-index: 50; inset: 0 0 auto 0; height: var(--header-height); display: grid; grid-template-columns: 280px 1fr auto; align-items: center; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(18px); padding: 0 24px; }
 .brand { display: inline-flex; align-items: center; gap: 9px; color: var(--text); text-decoration: none; font-weight: 800; letter-spacing: -.02em; }
-.brand-mark { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 9px; background: var(--text); color: var(--bg); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.brand-mark { width: 30px; height: 30px; display: block; border-radius: 9px; object-fit: cover; }
 .brand-section { color: var(--muted); font-weight: 550; padding-left: 8px; border-left: 1px solid var(--border); }
 .brand-version { color: var(--muted); font: 650 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0; }
 .top-nav { display: flex; align-items: center; gap: 26px; }

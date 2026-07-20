@@ -14,3 +14,11 @@ Rules:
 - Do not place the lockup in a pill, card, bordered container, background, or shadow.
 - Keep the logo and attribution text together. Never render either one alone.
 - In the HTML documentation, reuse `organizationLockup()` from `scripts/build-docs.mts` instead of recreating the markup or styling.
+
+## JETH product logo
+
+- The canonical JETH product logos live in `assets/jeth/`.
+- Use the orange JETH icon as the default product mark, especially in documentation, favicons, social previews, package listings, and editor integrations.
+- Use the monochrome logo only when a neutral, print-oriented treatment is explicitly required.
+- Do not recreate the JETH mark with text, CSS shapes, emoji, unrelated Ethereum artwork, or substitute logos.
+- Choose the smallest supplied raster size that remains sharp at the intended rendered size. Do not upscale a smaller source.

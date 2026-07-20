@@ -16,6 +16,7 @@ type TocItem = {
 
 const projectRoot = path.resolve(import.meta.dirname, '..');
 const outputRoot = path.join(projectRoot, 'docs', 'book');
+const productBrandRoot = path.join(projectRoot, 'assets', 'jeth');
 const packageManifest = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8')) as {
   version: string;
 };
@@ -262,6 +263,7 @@ function resolveImage(page: Page, source: string): string {
   const sourcePath = path.resolve(projectRoot, path.dirname(page.source), source);
   const organizationLogo = path.join(projectRoot, 'docs', 'assets', 'a16k-avatar-logo.png');
   if (sourcePath === organizationLogo) return assetUrl(page, 'a16k-avatar-logo.png');
+  if (path.dirname(sourcePath) === productBrandRoot) return assetUrl(page, path.basename(sourcePath));
   const repositoryRelative = path.relative(projectRoot, sourcePath).split(path.sep).join('/');
   if (!repositoryRelative.startsWith('..')) {
     return `https://raw.githubusercontent.com/a16k-lab/jeth/main/${repositoryRelative}`;
@@ -718,8 +720,9 @@ function pageHtml(page: Page, content: string, toc: TocItem[]): string {
   const stylesheet = assetUrl(page, 'book.css');
   const script = assetUrl(page, 'book.js');
   const search = assetUrl(page, 'search-index.js');
-  const icon = assetUrl(page, 'jeth-mark.svg');
-  const organizationLogo = assetUrl(page, 'a16k-avatar-logo.png');
+  const icon = assetUrl(page, 'jeth-orange-icon-32.png');
+  const productLogo = assetUrl(page, 'jeth-orange-icon-128.png');
+  const socialImage = assetUrl(page, 'jeth-orange-icon-1024.png');
   const home = relativeUrl(page, pages[0]);
   const pageContent = page.slug === 'project/roadmap' ? enhanceRoadmap(content) : content;
   return `<!doctype html>
@@ -729,14 +732,14 @@ function pageHtml(page: Page, content: string, toc: TocItem[]): string {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="${escapeHtml(page.title)} in the JETH language documentation.">
   <meta name="theme-color" content="#11131a">
-  <meta property="og:image" content="${escapeHtml(organizationLogo)}">
+  <meta property="og:image" content="${escapeHtml(socialImage)}">
   <title>${escapeHtml(page.title)} | JETH</title>
-  <link rel="icon" href="${escapeHtml(icon)}" type="image/svg+xml">
+  <link rel="icon" href="${escapeHtml(icon)}" type="image/png">
   <link rel="stylesheet" href="${escapeHtml(stylesheet)}">
 </head>
 <body>
   <header class="site-header">
-    <a class="brand" href="${escapeHtml(home)}" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span><span class="brand-version">v${escapeHtml(projectVersion)}</span></a>
+    <a class="brand" href="${escapeHtml(home)}" aria-label="JETH documentation home"><img class="brand-mark" src="${escapeHtml(productLogo)}" alt="" width="30" height="30"><span class="brand-name">JETH</span><span class="brand-section">Docs</span><span class="brand-version">v${escapeHtml(projectVersion)}</span></a>
     <nav class="top-nav" aria-label="Primary"><a class="is-active" href="${escapeHtml(home)}">Guides</a><a href="${escapeHtml(relativeUrl(page, pages.find((item) => item.slug === 'internals/compiler-and-tooling')!))}">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
     <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
   </header>
@@ -798,7 +801,7 @@ button, input { font: inherit; }
 
 .site-header { position: fixed; z-index: 50; inset: 0 0 auto 0; height: var(--header-height); display: grid; grid-template-columns: 280px 1fr auto; align-items: center; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(18px); padding: 0 24px; }
 .brand { display: inline-flex; align-items: center; gap: 9px; color: var(--text); text-decoration: none; font-weight: 800; letter-spacing: -.02em; }
-.brand-mark { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 9px; background: var(--text); color: var(--bg); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.brand-mark { width: 30px; height: 30px; display: block; border-radius: 9px; object-fit: cover; }
 .brand-section { color: var(--muted); font-weight: 550; padding-left: 8px; border-left: 1px solid var(--border); }
 .brand-version { color: var(--muted); font: 650 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0; }
 .top-nav { display: flex; align-items: center; gap: 26px; }
@@ -1022,17 +1025,22 @@ const clientScript = `
 })();
 `;
 
-const icon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="#191b22"/><path d="M39 14v28c0 10-5 15-14 15-5 0-9-2-12-5l6-8c2 2 4 3 6 3 3 0 5-2 5-6V14h9Z" fill="#ff7957"/></svg>`;
-
 fs.rmSync(outputRoot, { recursive: true, force: true });
 fs.mkdirSync(path.join(outputRoot, 'assets'), { recursive: true });
 fs.writeFileSync(path.join(outputRoot, 'assets', 'book.css'), style.trim() + '\n');
 fs.writeFileSync(path.join(outputRoot, 'assets', 'book.js'), clientScript.trim() + '\n');
-fs.writeFileSync(path.join(outputRoot, 'assets', 'jeth-mark.svg'), icon + '\n');
 fs.copyFileSync(
   path.join(projectRoot, 'docs', 'assets', 'a16k-avatar-logo.png'),
   path.join(outputRoot, 'assets', 'a16k-avatar-logo.png'),
 );
+for (const asset of [
+  'jeth-orange-icon-32.png',
+  'jeth-orange-icon-128.png',
+  'jeth-orange-icon-256.png',
+  'jeth-orange-icon-1024.png',
+]) {
+  fs.copyFileSync(path.join(productBrandRoot, asset), path.join(outputRoot, 'assets', asset));
+}
 
 const rendered = pages.map((page) => {
   const sourcePath = path.resolve(projectRoot, page.source);
@@ -1062,8 +1070,11 @@ const generatedFiles = [
   ...rendered.map((item) => outputFile(item.page)),
   path.join(outputRoot, 'assets', 'book.css'),
   path.join(outputRoot, 'assets', 'book.js'),
-  path.join(outputRoot, 'assets', 'jeth-mark.svg'),
   path.join(outputRoot, 'assets', 'a16k-avatar-logo.png'),
+  path.join(outputRoot, 'assets', 'jeth-orange-icon-32.png'),
+  path.join(outputRoot, 'assets', 'jeth-orange-icon-128.png'),
+  path.join(outputRoot, 'assets', 'jeth-orange-icon-256.png'),
+  path.join(outputRoot, 'assets', 'jeth-orange-icon-1024.png'),
   path.join(outputRoot, 'assets', 'search-index.js'),
 ];
 
