@@ -10,7 +10,7 @@ language that compiles to EVM bytecode.
 > [native-spelling table](../../SUPPORTED.md#legacy-decorator-removal-native-syntax-only).
 
 It registers a dedicated `jeth` language (so `.jeth` files are no longer plain text), gives
-`.jeth` files the **JETH gradient logo** as their file icon, and ships a TextMate grammar that:
+`.jeth` files the **orange JETH logo** as their file icon, and ships a TextMate grammar that:
 
 - layers JETH-specific colors on top of the full TypeScript grammar (`source.ts`): the sized
   integer types (`u8`..`u256`, `i8`..`i256`), `bytesN`, `address`/`bool`/`string`/`void`, the
@@ -34,19 +34,17 @@ cp -R tools/jeth-vscode ~/.vscode/extensions/jeth-syntax-0.3.0
 ```
 
 Open any `.jeth` file (e.g. `examples/Vault.jeth`); it should now be colorful. The language
-indicator in the status bar should read "JETH", and the file gets the JETH gradient logo icon
+indicator in the status bar should read "JETH", and the file gets the orange JETH logo icon
 in the Explorer and editor tabs.
 
-To uninstall: remove `~/.vscode/extensions/jeth-syntax-0.2.0` and reload the window.
+To uninstall: remove `~/.vscode/extensions/jeth-syntax-0.3.0` and reload the window.
 
 ## The `.jeth` file icon
 
-`icons/jeth-file-icon.svg` (the gradient mark from the brand kit, on a transparent background)
-is contributed as the language icon (`contributes.languages[].icon`). Being SVG it is
-resolution-independent, so it stays crisp from the 16px Explorer glyph up to any size, and the
-transparent background lets it sit naturally on any editor theme (light or dark). The Marketplace
-listing icon (`icons/jeth-icon-gradient-1024.png`) keeps a solid tile, since Marketplace icons
-must be PNG and need a backdrop to read on the listing card; it is never shown in your editor.
+`icons/jeth-orange-icon-128.png` is contributed as the language icon
+(`contributes.languages[].icon`) for both light and dark editor themes. The Marketplace listing
+uses `icons/jeth-orange-icon-1024.png`. Both come from the canonical JETH brand kit, so the
+extension, documentation, and repository use the same product mark.
 
 The language icon is shown by any file icon theme that defers to language icons - including the
 built-in default, **Seti** (which has no `.jeth` icon of its own, so it uses ours), and

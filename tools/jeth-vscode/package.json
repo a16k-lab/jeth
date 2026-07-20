@@ -12,7 +12,7 @@
   "categories": [
     "Programming Languages"
   ],
-  "icon": "icons/jeth-icon-gradient-1024.png",
+  "icon": "icons/jeth-orange-icon-1024.png",
   "contributes": {
     "languages": [
       {
@@ -26,8 +26,8 @@
         ],
         "configuration": "./language-configuration.json",
         "icon": {
-          "light": "./icons/jeth-file-icon.svg",
-          "dark": "./icons/jeth-file-icon.svg"
+          "light": "./icons/jeth-orange-icon-128.png",
+          "dark": "./icons/jeth-orange-icon-128.png"
         }
       }
     ],
