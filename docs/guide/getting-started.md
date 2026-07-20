@@ -29,16 +29,20 @@ Write artifacts to a directory:
 npm run jethc -- examples/Counter.jeth -o build/
 ```
 
-The current CLI can print generated Yul, ABI JSON, creation/runtime bytecode,
-and storage layout:
+The CLI loads relative imports, handles multi-contract entries, writes complete
+artifact sets, and provides human or structured output:
 
 ```text
-usage: jethc <file.jeth> [options]
-  --yul       print generated Yul
-  --abi       print ABI JSON
-  --bin       print creation and runtime bytecode
-  --layout    print storage layout
-  -o <dir>    write artifacts to a directory
+jethc <entry.jeth> [options]
+  -o, --output <dir>       write artifacts
+  --contract <name>        select one contract
+  --evm-version <name>     select the EVM target
+  --emit <kinds>           select artifact files
+  --abi, --bin, --yul      print compiler outputs
+  --layout                 print storage layout JSON
+  --json                   emit structured JSON
+  --config <file>          load project defaults
+  --standard-json          read JSON from stdin
 ```
 
 ## Create a contract
@@ -65,8 +69,10 @@ Compile it:
 npm run jethc -- Hello.jeth -o build/
 ```
 
-The output directory contains ABI, creation bytecode, runtime bytecode, and Yul.
-The exact output format is not stable until the public CLI milestone is complete.
+The output directory contains ABI, creation bytecode, runtime bytecode, Yul,
+storage layout, and versioned metadata. See
+[Compiler, CLI, and tooling](compiler-and-tooling.md) for imports,
+multi-contract selection, configuration, standard JSON, and exit codes.
 
 ## Read JETH syntax correctly
 

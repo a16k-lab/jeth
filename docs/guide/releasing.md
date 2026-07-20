@@ -65,11 +65,11 @@ current configuration never creates commits automatically.
 Do not run `changeset publish` yet. Before enabling npm publication:
 
 1. Resolve the repository license metadata mismatch.
-2. Add the public package files, `bin` entry, and tested installation path.
+2. Review the packaged file surface and the tested `jethc` installation path.
 3. Finalize the package publication safeguards and enable publishing deliberately.
 4. Set the intended npm access and provenance policy.
 5. Add release CI, signed tags, checksums, SBOM, and artifact verification.
-6. Test installation and compiler execution from the packed tarball.
+6. Repeat installation and compiler execution tests against the release tarball.
 
 Until those gates are complete, Changesets is the source of truth for versions
 and changelog entries, not a publication mechanism.

@@ -4,7 +4,6 @@
   "description": "Syntax highlighting and the JETH file icon for .jeth files - a TypeScript-subset smart-contract language compiling to EVM.",
   "version": "0.3.0",
   "publisher": "jeth",
-  "private": true,
   "license": "MIT",
   "engines": {
     "vscode": "^1.70.0"

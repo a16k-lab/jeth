@@ -52,8 +52,9 @@ Write compiler artifacts to a directory:
 npm run jethc -- examples/Counter.jeth -o build/
 ```
 
-The public package and standalone binary are roadmap items. Until they ship,
-the repository command above is the supported entry point.
+The repository command above uses the same executable implementation declared by
+the package's `jethc` bin entry. Registry publication and standalone binaries are
+separate release gates.
 
 ## A first contract
 
@@ -139,13 +140,12 @@ The short version is ordered by release risk, not novelty.
 
 ### 1. Productize the compiler and CLI
 
-- Publish a real `jethc` package and standalone binary with a stable versioned
-  command surface.
-- Add project builds, multi-file input, a config file, incremental/watch mode,
-  deterministic artifact directories, and a content-addressed compile cache.
-- Add structured JSON diagnostics, stable exit codes, standard JSON input/output,
-  source maps, contract selection, optimizer/EVM target controls, and dependency
-  metadata.
+- Publish the current `jethc` executable and provide checksummed standalone
+  binaries with a stable versioned command surface.
+- Extend the current filesystem projects and configuration with incremental/watch
+  builds, dependency locking, and a validated content-addressed cache.
+- Add source maps, build-info content hashes, validated optimizer profiles, and
+  source-level diagnostics for downstream deployment tools.
 - Integrate with Foundry, Hardhat, deployment scripts, explorer verification,
   editor diagnostics, and an LSP.
 

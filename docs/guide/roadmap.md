@@ -26,7 +26,7 @@ Goal: make the existing compiler installable, deterministic, and supportable.
 
 - Resolve package name, ownership, publication access, and the GPLv3 versus MIT
   metadata mismatch.
-- Add a `bin` entry and publish `jethc` as a versioned package, then provide
+- Publish the existing `jethc` executable as a versioned package, then provide
   checksummed standalone binaries.
 - Define semver, compiler/language versioning, changelog, compatibility window,
   and deprecation policy.
@@ -43,10 +43,9 @@ developer workstation.
 
 Goal: make JETH pleasant and dependable in real projects.
 
-- Project config, multi-file builds, contract selection, imports, and output
-  profiles.
-- Structured diagnostics, snippets, stable exit codes, warnings policy, and
-  standard JSON mode.
+- Extend the current project configuration, multi-file builds, contract
+  selection, artifact profiles, structured diagnostics, stable exit codes, and
+  standard JSON mode without breaking their versioned contracts.
 - A deterministic local EVM runner for deploy/call scenarios, fixture state,
   snapshots, traces, revert decoding, and reproducible fork configuration.
 - Source maps, source-level traces, revert decoding, gas reports, and storage

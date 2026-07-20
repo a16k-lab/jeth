@@ -27,19 +27,64 @@
 <ul><li>Node.js 22</li><li>npm dependencies from the repository lockfile</li><li>the bundled <code>solc</code> JavaScript package</li></ul>
 <p>JETH is currently pre-release. Use the repository command until the versioned package and standalone binary are released.</p>
 <h2 id="command-line">Command line<a class="heading-anchor" href="#command-line" aria-label="Link to Command line">#</a></h2>
-<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>text</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="text"><code>jethc &lt;file.jeth&gt; [options]</code></pre></div>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>text</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="text"><code>jethc &lt;entry.jeth&gt; [options]
+jethc --config &lt;jeth.config.json&gt; [options]
+jethc --standard-json</code></pre></div>
 <p>Run through npm:</p>
 <div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>bash</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="bash"><code>npm run jethc -- examples/Counter.jeth --abi --bin --layout</code></pre></div>
-<p>Current options:</p>
-<div class="table-wrap"><table><thead><tr><th>Option</th><th>Behavior</th></tr></thead><tbody><tr><td><code>--yul</code></td><td>Print generated Yul</td></tr><tr><td><code>--abi</code></td><td>Print ABI JSON</td></tr><tr><td><code>--bin</code></td><td>Print creation and runtime bytecode</td></tr><tr><td><code>--layout</code></td><td>Print storage layout</td></tr><tr><td><code>-o &lt;dir&gt;</code></td><td>Write basic artifacts to a directory</td></tr><tr><td><code>-h</code>, <code>--help</code></td><td>Print usage and solc version</td></tr></tbody></table></div>
-<p>Without an output flag, the CLI prints a compilation summary.</p>
+<p>The repository command and the packaged executable use the same implementation:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>bash</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="bash"><code>npm run jethc -- examples/Counter.jeth --abi --bin --layout
+node dist/src/cli.js examples/Counter.jeth -o build/</code></pre></div>
+<p>Options:</p>
+<div class="table-wrap"><table><thead><tr><th>Option</th><th>Behavior</th></tr></thead><tbody><tr><td><code>-o</code>, <code>--output &lt;dir&gt;</code></td><td>Write artifacts for every selected contract</td></tr><tr><td><code>--contract &lt;name&gt;</code></td><td>Select one contract from a multi-contract entry</td></tr><tr><td><code>--evm-version &lt;name&gt;</code></td><td>Select the solc EVM target, default <code>cancun</code></td></tr><tr><td><code>--emit &lt;kinds&gt;</code></td><td>Select output files: <code>abi,bin,yul,layout,metadata</code></td></tr><tr><td><code>--yul</code></td><td>Print generated Yul</td></tr><tr><td><code>--abi</code></td><td>Print ABI JSON</td></tr><tr><td><code>--bin</code></td><td>Print creation and runtime bytecode</td></tr><tr><td><code>--layout</code></td><td>Print storage layout JSON</td></tr><tr><td><code>--json</code></td><td>Print a structured success or failure result</td></tr><tr><td><code>--standard-json</code></td><td>Read a JETH standard JSON request from stdin</td></tr><tr><td><code>--config &lt;file&gt;</code></td><td>Load project defaults from JSON</td></tr><tr><td><code>--quiet</code></td><td>Suppress human success output when writing artifacts</td></tr><tr><td><code>--debug</code></td><td>Include a stack for an unexpected internal failure</td></tr><tr><td><code>-V</code>, <code>--version</code></td><td>Print JETH and solc versions</td></tr><tr><td><code>-h</code>, <code>--help</code></td><td>Print complete usage</td></tr></tbody></table></div>
+<p>Unknown options, missing values, multiple entry files, unreadable files, and unknown contract names reject instead of being ignored. Without a print or output option, the CLI prints one summary per compiled contract.</p>
+<h2 id="filesystem-projects-and-imports">Filesystem projects and imports<a class="heading-anchor" href="#filesystem-projects-and-imports" aria-label="Link to Filesystem projects and imports">#</a></h2>
+<p>The CLI discovers relative imports recursively from the entry file:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">import</span> { Ownable } <span class="tok-keyword">from</span> <span class="tok-string">&quot;./contracts/Ownable.jeth&quot;</span>;
+<span class="tok-keyword">import</span> { Math } <span class="tok-keyword">from</span> <span class="tok-string">&quot;../shared/Math.jeth&quot;</span>;</code></pre></div>
+<p>Every dependency is passed to the compiler&#39;s multi-file bundler. Diagnostics retain the original file, line, column, and source span. JETH import rules still apply: imports are named and relative, imported declarations must be exported, and imported files cannot introduce a deployable contract.</p>
+<h2 id="multi-contract-output">Multi-contract output<a class="heading-anchor" href="#multi-contract-output" aria-label="Link to Multi-contract output">#</a></h2>
+<p>If an entry declares <code>Alpha</code> and <code>Beta</code>, <code>-o build/</code> writes both artifact sets. Select one explicitly when a deployment flow needs only one contract:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>bash</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="bash"><code>npm run jethc -- src/Multi.jeth --contract Beta -o build/</code></pre></div>
 <h2 id="current-output-files">Current output files<a class="heading-anchor" href="#current-output-files" aria-label="Link to Current output files">#</a></h2>
 <p>With <code>-o build/</code>, the CLI writes:</p>
 <div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>text</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="text"><code>Contract.abi.json
 Contract.bin
 Contract.runtime.bin
-Contract.yul</code></pre></div>
-<p>Hex bytecode files do not include a <code>0x</code> prefix. The output schema is not yet a frozen public artifact standard.</p>
+Contract.yul
+Contract.layout.json
+Contract.metadata.json</code></pre></div>
+<p>External library objects are written as <code>Contract.Library.library.bin</code> and <code>Contract.Library.library.runtime.bin</code> when present. Hex bytecode files do not include a <code>0x</code> prefix. Metadata records the compiler, solc and EVM versions, byte lengths, diagnostics, libraries, and link references. The schema is versioned but remains pre-1.0.</p>
+<p>Use <code>--emit</code> to restrict files:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>bash</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="bash"><code>npm run jethc -- src/App.jeth -o build/ --emit abi,bin,metadata</code></pre></div>
+<h2 id="project-configuration">Project configuration<a class="heading-anchor" href="#project-configuration" aria-label="Link to Project configuration">#</a></h2>
+<p><code>--config</code> accepts these keys:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>json</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="json"><code>{
+  &quot;entry&quot;: &quot;src/App.jeth&quot;,
+  &quot;outDir&quot;: &quot;build&quot;,
+  &quot;contract&quot;: &quot;App&quot;,
+  &quot;evmVersion&quot;: &quot;cancun&quot;,
+  &quot;emit&quot;: [&quot;abi&quot;, &quot;bin&quot;, &quot;yul&quot;, &quot;layout&quot;, &quot;metadata&quot;]
+}</code></pre></div>
+<p>Paths inside the configuration are relative to the configuration file. Explicit CLI options override configuration values. Unknown configuration keys reject. The repository includes <code>jeth.config.example.json</code> as a starting point.</p>
+<h2 id="machine-interfaces">Machine interfaces<a class="heading-anchor" href="#machine-interfaces" aria-label="Link to Machine interfaces">#</a></h2>
+<p><code>--json</code> compiles a filesystem project and writes one JSON document containing the compiler identity, source list, selected contracts, ABI, bytecode, storage layout, Yul, libraries, link references, and written-file list. Failures use the same channel and include structured diagnostics.</p>
+<p><code>--standard-json</code> reads from stdin. The input shape is:</p>
+<div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>json</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="json"><code>{
+  &quot;language&quot;: &quot;JETH&quot;,
+  &quot;sources&quot;: {
+    &quot;src/Lib.jeth&quot;: { &quot;content&quot;: &quot;export static class Lib { ... }&quot; },
+    &quot;src/App.jeth&quot;: { &quot;content&quot;: &quot;import { Lib } from &#39;./Lib.jeth&#39;; ...&quot; }
+  },
+  &quot;settings&quot;: {
+    &quot;entry&quot;: &quot;src/App.jeth&quot;,
+    &quot;contract&quot;: &quot;App&quot;,
+    &quot;evmVersion&quot;: &quot;cancun&quot;
+  }
+}</code></pre></div>
+<p>When <code>sources</code> contains one file, <code>settings.entry</code> is optional. Standard JSON always responds with JSON.</p>
+<h2 id="exit-codes">Exit codes<a class="heading-anchor" href="#exit-codes" aria-label="Link to Exit codes">#</a></h2>
+<div class="table-wrap"><table><thead><tr><th>Code</th><th>Meaning</th></tr></thead><tbody><tr><td><code>0</code></td><td>Success, help, or version output</td></tr><tr><td><code>1</code></td><td>JETH analysis or solc backend compilation failed</td></tr><tr><td><code>2</code></td><td>Invalid arguments, configuration, input files, or contract selection</td></tr><tr><td><code>3</code></td><td>Unexpected internal compiler failure</td></tr></tbody></table></div>
 <h2 id="compiler-api">Compiler API<a class="heading-anchor" href="#compiler-api" aria-label="Link to Compiler API">#</a></h2>
 <div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>example.jeth</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="jeth"><code><span class="tok-keyword">import</span> { compile } <span class="tok-keyword">from</span> <span class="tok-string">&quot;./src/compile.js&quot;</span>;
 
@@ -90,7 +135,7 @@ Contract.yul</code></pre></div>
 <p>The ABI is generated from JETH IR because solc only sees the generated Yul.</p>
 <h2 id="backend-settings">Backend settings<a class="heading-anchor" href="#backend-settings" aria-label="Link to Backend settings">#</a></h2>
 <p>The current backend invokes solc in Yul mode with optimization enabled, 200 runs, Yul optimization enabled, and the selected EVM version. The default target is Cancun.</p>
-<p>These settings are part of the current compiler behavior but are not yet exposed as a complete stable CLI configuration surface.</p>
+<p>The EVM target is available through <code>--evm-version</code>, configuration, the compiler API, and standard JSON. Optimizer tuning remains fixed until alternative settings have correctness and gas evidence.</p>
 <h2 id="compile-cache">Compile cache<a class="heading-anchor" href="#compile-cache" aria-label="Link to Compile cache">#</a></h2>
 <p>Set <code>JETH_COMPILE_CACHE=1</code> to enable the development Yul-to-bytecode cache:</p>
 <div class="code-block"><div class="code-toolbar"><span class="code-file"><span class="jeth-dot"></span>bash</span><button class="copy-code" type="button" aria-label="Copy code">Copy</button></div><pre data-language="bash"><code>export JETH_COMPILE_CACHE=1
@@ -102,10 +147,10 @@ npm test</code></pre></div>
 npm test
 npm run format:check</code></pre></div>
 <p>Compiler changes should add a focused regression test. Solidity-overlapping behavior should be checked at deploy and runtime, not compilation alone. The full suite should also pass with shuffled test-file order.</p>
-<h2 id="planned-production-cli">Planned production CLI<a class="heading-anchor" href="#planned-production-cli" aria-label="Link to Planned production CLI">#</a></h2>
+<h2 id="remaining-tooling-roadmap">Remaining tooling roadmap<a class="heading-anchor" href="#remaining-tooling-roadmap" aria-label="Link to Remaining tooling roadmap">#</a></h2>
 <p>A stable public toolchain still needs:</p>
-<ul><li>project configuration and filesystem import discovery;</li><li>multi-file CLI builds and contract selection;</li><li>standard JSON input/output;</li><li>stable machine-readable diagnostics and exit codes;</li><li>source maps and source-level traces;</li><li>deterministic artifact manifests and build-info files;</li><li>optimizer and EVM-target controls;</li><li>incremental/watch builds;</li><li>package publication and standalone binaries;</li><li>Foundry/Hardhat integration, deployment, linking, and verification;</li><li>LSP and editor tooling.</li></ul><div class="article-footer"><span>JETH language documentation</span><a class="organization-lockup" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer" aria-label="Built by a16k-lab"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28"><span>Built by <strong>@a16k-lab</strong></span></a></div><nav class="pagination" aria-label="Documentation pages"><a class="pagination-link previous" href="../storage-layout/index.html"><span>Previous</span><strong>Storage layout</strong></a><a class="pagination-link next" href="../artifacts/index.html"><span>Next</span><strong>Contracts and artifacts</strong></a></nav></article>
-      <nav class="page-toc" aria-label="On this page"><div class="toc-title">On this page</div><a class="toc-link depth-2" href="#current-requirements">Current requirements</a><a class="toc-link depth-2" href="#command-line">Command line</a><a class="toc-link depth-2" href="#current-output-files">Current output files</a><a class="toc-link depth-2" href="#compiler-api">Compiler API</a><a class="toc-link depth-2" href="#multi-file-api">Multi-file API</a><a class="toc-link depth-2" href="#diagnostics">Diagnostics</a><a class="toc-link depth-2" href="#pipeline">Pipeline</a><a class="toc-link depth-2" href="#backend-settings">Backend settings</a><a class="toc-link depth-2" href="#compile-cache">Compile cache</a><a class="toc-link depth-2" href="#development-checks">Development checks</a><a class="toc-link depth-2" href="#planned-production-cli">Planned production CLI</a></nav>
+<ul><li>source maps and source-level traces;</li><li>reproducible build-info files and content hashes;</li><li>validated optimizer profiles;</li><li>incremental/watch builds;</li><li>package publication and standalone binaries;</li><li>Foundry/Hardhat integration, deployment, linking, and verification;</li><li>LSP and editor tooling.</li></ul><div class="article-footer"><span>JETH language documentation</span><a class="organization-lockup" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer" aria-label="Built by a16k-lab"><img src="../../assets/a16k-avatar-logo.png" alt="" width="28" height="28"><span>Built by <strong>@a16k-lab</strong></span></a></div><nav class="pagination" aria-label="Documentation pages"><a class="pagination-link previous" href="../storage-layout/index.html"><span>Previous</span><strong>Storage layout</strong></a><a class="pagination-link next" href="../artifacts/index.html"><span>Next</span><strong>Contracts and artifacts</strong></a></nav></article>
+      <nav class="page-toc" aria-label="On this page"><div class="toc-title">On this page</div><a class="toc-link depth-2" href="#current-requirements">Current requirements</a><a class="toc-link depth-2" href="#command-line">Command line</a><a class="toc-link depth-2" href="#filesystem-projects-and-imports">Filesystem projects and imports</a><a class="toc-link depth-2" href="#multi-contract-output">Multi-contract output</a><a class="toc-link depth-2" href="#current-output-files">Current output files</a><a class="toc-link depth-2" href="#project-configuration">Project configuration</a><a class="toc-link depth-2" href="#machine-interfaces">Machine interfaces</a><a class="toc-link depth-2" href="#exit-codes">Exit codes</a><a class="toc-link depth-2" href="#compiler-api">Compiler API</a><a class="toc-link depth-2" href="#multi-file-api">Multi-file API</a><a class="toc-link depth-2" href="#diagnostics">Diagnostics</a><a class="toc-link depth-2" href="#pipeline">Pipeline</a><a class="toc-link depth-2" href="#backend-settings">Backend settings</a><a class="toc-link depth-2" href="#compile-cache">Compile cache</a><a class="toc-link depth-2" href="#development-checks">Development checks</a><a class="toc-link depth-2" href="#remaining-tooling-roadmap">Remaining tooling roadmap</a></nav>
     </main>
   </div>
   <div class="search-modal" hidden><button class="search-backdrop" type="button" aria-label="Close search"></button><div class="search-panel" role="dialog" aria-modal="true" aria-label="Search documentation"><div class="search-box"><span>⌕</span><input class="search-input" type="search" placeholder="Search JETH guides..." autocomplete="off"><button class="search-close" type="button">Esc</button></div><div class="search-results"><div class="search-empty">Start typing to search the book.</div></div></div></div>

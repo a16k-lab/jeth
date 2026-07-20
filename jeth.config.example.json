@@ -1,0 +1,6 @@
+{
+  "entry": "examples/Counter.jeth",
+  "outDir": "build",
+  "evmVersion": "cancun",
+  "emit": ["abi", "bin", "yul", "layout", "metadata"]
+}
