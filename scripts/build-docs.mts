@@ -16,6 +16,10 @@ type TocItem = {
 
 const projectRoot = path.resolve(import.meta.dirname, '..');
 const outputRoot = path.join(projectRoot, 'docs', 'book');
+const packageManifest = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8')) as {
+  version: string;
+};
+const projectVersion = packageManifest.version;
 
 const pages: Page[] = [
   { group: 'Guides', source: 'docs/guide/README.md', slug: '', title: 'JETH Documentation' },
@@ -194,6 +198,7 @@ const pages: Page[] = [
   { group: 'Reference', source: 'SUPPORTED.md', slug: 'reference/feature-matrix', title: 'Complete feature matrix' },
 
   { group: 'Project', source: 'docs/guide/roadmap.md', slug: 'project/roadmap', title: 'Product roadmap' },
+  { group: 'Project', source: 'docs/guide/releasing.md', slug: 'project/releases', title: 'Versioning and releases' },
   { group: 'Project', source: 'README.md', slug: 'project/overview', title: 'Repository overview' },
 ];
 
@@ -731,7 +736,7 @@ function pageHtml(page: Page, content: string, toc: TocItem[]): string {
 </head>
 <body>
   <header class="site-header">
-    <a class="brand" href="${escapeHtml(home)}" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span></a>
+    <a class="brand" href="${escapeHtml(home)}" aria-label="JETH documentation home"><span class="brand-mark">J</span><span class="brand-name">JETH</span><span class="brand-section">Docs</span><span class="brand-version">v${escapeHtml(projectVersion)}</span></a>
     <nav class="top-nav" aria-label="Primary"><a class="is-active" href="${escapeHtml(home)}">Guides</a><a href="${escapeHtml(relativeUrl(page, pages.find((item) => item.slug === 'internals/compiler-and-tooling')!))}">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
     <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
   </header>
@@ -795,6 +800,7 @@ button, input { font: inherit; }
 .brand { display: inline-flex; align-items: center; gap: 9px; color: var(--text); text-decoration: none; font-weight: 800; letter-spacing: -.02em; }
 .brand-mark { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 9px; background: var(--text); color: var(--bg); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .brand-section { color: var(--muted); font-weight: 550; padding-left: 8px; border-left: 1px solid var(--border); }
+.brand-version { color: var(--muted); font: 650 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0; }
 .top-nav { display: flex; align-items: center; gap: 26px; }
 .top-nav a { color: var(--muted); text-decoration: none; font-size: 14px; font-weight: 650; }
 .top-nav a:hover, .top-nav a.is-active { color: var(--text); }
@@ -938,7 +944,7 @@ pre { margin: 0; overflow-x: auto; padding: 21px 23px 24px; background: var(--co
 }
 
 @media (max-width: 560px) {
-  .brand-section { display: none; }
+  .brand-section, .brand-version { display: none; }
   .pre-release { justify-content: flex-start; padding: 0 15px; overflow: hidden; white-space: nowrap; }
   .content-shell { padding: 40px 18px 60px; }
   .article h1 { font-size: 35px; }

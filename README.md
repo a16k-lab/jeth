@@ -119,6 +119,7 @@ The standalone HTML language book starts at
 - [Compiler correctness model](docs/guide/security/compiler-correctness.md)
 - [Compiler and tooling](docs/guide/compiler-and-tooling.md)
 - [Product roadmap](docs/guide/roadmap.md)
+- [Versioning and releases](docs/guide/releasing.md)
 
 Rebuild the HTML book after editing its Markdown sources:
 
@@ -233,6 +234,17 @@ npm run build
 npm test
 npm run format:check
 ```
+
+## Versioning
+
+JETH currently starts at version `0.1.0` and uses Changesets for SemVer updates
+and changelog generation. Add a release note with `npm run changeset`, inspect the
+pending plan with `npm run changeset:status`, and apply it with
+`npm run version-packages` when preparing a release.
+
+The package remains private, so versioning is enabled while npm publication is
+deliberately disabled. See [docs/guide/releasing.md](docs/guide/releasing.md) for
+the complete maintainer workflow and the pre-1.0 version policy.
 
 Compiler changes should include focused regression pins and, when behavior has a
 Solidity equivalent, deploy/run/decode comparisons against solc. The suite should

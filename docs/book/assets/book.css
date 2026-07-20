@@ -42,6 +42,7 @@ button, input { font: inherit; }
 .brand { display: inline-flex; align-items: center; gap: 9px; color: var(--text); text-decoration: none; font-weight: 800; letter-spacing: -.02em; }
 .brand-mark { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 9px; background: var(--text); color: var(--bg); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .brand-section { color: var(--muted); font-weight: 550; padding-left: 8px; border-left: 1px solid var(--border); }
+.brand-version { color: var(--muted); font: 650 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0; }
 .top-nav { display: flex; align-items: center; gap: 26px; }
 .top-nav a { color: var(--muted); text-decoration: none; font-size: 14px; font-weight: 650; }
 .top-nav a:hover, .top-nav a.is-active { color: var(--text); }
@@ -185,7 +186,7 @@ pre { margin: 0; overflow-x: auto; padding: 21px 23px 24px; background: var(--co
 }
 
 @media (max-width: 560px) {
-  .brand-section { display: none; }
+  .brand-section, .brand-version { display: none; }
   .pre-release { justify-content: flex-start; padding: 0 15px; overflow: hidden; white-space: nowrap; }
   .content-shell { padding: 40px 18px 60px; }
   .article h1 { font-size: 35px; }
