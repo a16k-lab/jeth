@@ -6,8 +6,8 @@
 - npm
 - A local clone of the JETH repository
 
-The compiler package is currently private and pre-release. Use the repository
-entry point until a versioned `jethc` package and standalone binary are published.
+JETH is currently pre-release. Use the repository entry point until a versioned
+`jethc` package and standalone binary are published.
 
 ## Install and verify
 

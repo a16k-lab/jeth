@@ -9,8 +9,8 @@ ABI metadata, then asks solc to optimize and assemble bytecode.
 - npm dependencies from the repository lockfile
 - the bundled `solc` JavaScript package
 
-JETH is currently a private pre-release package. Use the repository command until
-the public package and standalone binary are released.
+JETH is currently pre-release. Use the repository command until the versioned
+package and standalone binary are released.
 
 ## Command line
 

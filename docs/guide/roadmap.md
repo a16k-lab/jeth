@@ -24,8 +24,8 @@ intentional: release trust comes before adding a large new language surface.
 
 Goal: make the existing compiler installable, deterministic, and supportable.
 
-- Resolve package name, ownership, public/private status, and the GPLv3 versus
-  MIT metadata mismatch.
+- Resolve package name, ownership, publication access, and the GPLv3 versus MIT
+  metadata mismatch.
 - Add a `bin` entry and publish `jethc` as a versioned package, then provide
   checksummed standalone binaries.
 - Define semver, compiler/language versioning, changelog, compatibility window,

@@ -242,9 +242,9 @@ and changelog generation. Add a release note with `npm run changeset`, inspect t
 pending plan with `npm run changeset:status`, and apply it with
 `npm run version-packages` when preparing a release.
 
-The package remains private, so versioning is enabled while npm publication is
-deliberately disabled. See [docs/guide/releasing.md](docs/guide/releasing.md) for
-the complete maintainer workflow and the pre-1.0 version policy.
+Versioning is enabled while npm publication remains deliberately gated. See
+[docs/guide/releasing.md](docs/guide/releasing.md) for the complete maintainer
+workflow and the pre-1.0 version policy.
 
 Compiler changes should include focused regression pins and, when behavior has a
 Solidity equivalent, deploy/run/decode comparisons against solc. The suite should

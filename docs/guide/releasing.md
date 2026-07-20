@@ -4,9 +4,9 @@ JETH uses [Changesets](https://github.com/changesets/changesets) to collect
 release notes, calculate Semantic Versioning updates, and maintain
 [`CHANGELOG.md`](../../CHANGELOG.md). The current baseline is `0.1.0`.
 
-> [!IMPORTANT] JETH is still a private package. Changesets can update its version
-> and changelog, but npm publication and release tags remain disabled until the
-> package metadata, CLI entry point, license, and release artifacts are ready.
+> [!IMPORTANT] Changesets can update JETH's version and changelog, but npm
+> publication and release tags remain disabled until the package metadata, CLI
+> entry point, license, and release artifacts are ready.
 
 ## Version policy before 1.0
 
@@ -66,7 +66,7 @@ Do not run `changeset publish` yet. Before enabling npm publication:
 
 1. Resolve the repository license metadata mismatch.
 2. Add the public package files, `bin` entry, and tested installation path.
-3. Remove `private: true` deliberately.
+3. Finalize the package publication safeguards and enable publishing deliberately.
 4. Set the intended npm access and provenance policy.
 5. Add release CI, signed tags, checksums, SBOM, and artifact verification.
 6. Test installation and compiler execution from the packed tarball.
