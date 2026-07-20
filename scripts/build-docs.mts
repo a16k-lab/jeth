@@ -264,6 +264,11 @@ function resolveImage(page: Page, source: string): string {
   return source;
 }
 
+function organizationLockup(page: Page): string {
+  const logo = assetUrl(page, 'a16k-avatar-logo.png');
+  return `<a class="organization-lockup" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer" aria-label="Built by a16k-lab"><img src="${escapeHtml(logo)}" alt="" width="28" height="28"><span>Built by <strong>@a16k-lab</strong></span></a>`;
+}
+
 const keywords = new Set([
   'abstract',
   'break',
@@ -476,6 +481,7 @@ function inlineMarkdown(page: Page, value: string): string {
 function isBlockStart(lines: string[], index: number): boolean {
   const line = lines[index] ?? '';
   if (!line.trim()) return true;
+  if (/^<p class="a16k-lockup">\s*$/.test(line.trim())) return true;
   if (/^```/.test(line) || /^#{1,6}\s/.test(line) || /^>/.test(line) || /^\s*(?:[-*]|\d+\.)\s+/.test(line)) return true;
   const next = lines[index + 1] ?? '';
   return line.includes('|') && /^\s*\|?\s*:?-{3,}/.test(next);
@@ -507,6 +513,14 @@ function renderMarkdown(page: Page, markdown: string): { html: string; toc: TocI
     const line = lines[index] ?? '';
     if (!line.trim()) {
       index += 1;
+      continue;
+    }
+
+    if (/^<p class="a16k-lockup">\s*$/.test(line.trim())) {
+      index += 1;
+      while (index < lines.length && !/^<\/p>\s*$/.test((lines[index] ?? '').trim())) index += 1;
+      if (index < lines.length) index += 1;
+      html.push(`<div class="organization-lockup-wrap">${organizationLockup(page)}</div>`);
       continue;
     }
 
@@ -624,10 +638,47 @@ function renderMarkdown(page: Page, markdown: string): { html: string; toc: TocI
 
   const plainText = markdown
     .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
     .replace(/[#>*_`\[\]()|]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   return { html: html.join('\n'), toc, text: plainText };
+}
+
+function enhanceRoadmap(content: string): string {
+  const stagePattern = /<h2 id="(r([0-6])-[^"]+)">([\s\S]*?)<\/h2>\n([\s\S]*?)(?=\n<h2 id=|$)/g;
+  const stages: Array<{ id: string; phase: string; title: string }> = [];
+  let enhanced = content.replace(stagePattern, (_match, id: string, digit: string, heading: string, body: string) => {
+    const phase = `R${digit}`;
+    const displayHeading = heading.replace(/<a[\s\S]*?<\/a>/g, '').trim();
+    const title = heading
+      .replace(/<a[\s\S]*?<\/a>/g, '')
+      .replace(/<[^>]+>/g, '')
+      .replace(/^R\d:\s*/, '')
+      .trim();
+    stages.push({ id, phase, title });
+    const stageBody = body
+      .replace(/<p>Goal:\s*([\s\S]*?)<\/p>/, '<div class="roadmap-goal"><span>Goal</span><p>$1</p></div>')
+      .replace(
+        /<p>Exit criteria:\s*([\s\S]*?)<\/p>/,
+        '<div class="roadmap-exit"><span>Exit gate</span><p>$1</p></div>',
+      );
+    return `<section class="roadmap-stage" data-phase="${phase}"><div class="roadmap-marker" aria-hidden="true"><span>${phase}</span></div><div class="roadmap-stage-content"><h2 id="${id}">${displayHeading}</h2>\n${stageBody}</div></section>`;
+  });
+
+  if (stages.length === 0) return enhanced;
+  const overview = `<nav class="roadmap-overview" aria-label="Roadmap stages">${stages
+    .map(
+      (stage) =>
+        `<a class="roadmap-overview-card" href="#${stage.id}"><span>${stage.phase}</span><strong>${escapeHtml(stage.title)}</strong></a>`,
+    )
+    .join('')}</nav>`;
+  const firstStage = enhanced.indexOf('<section class="roadmap-stage"');
+  enhanced = enhanced.slice(0, firstStage) + overview + enhanced.slice(firstStage);
+  return enhanced.replace(
+    /(<h2 id="release-principles">[\s\S]*?<\/h2>\n<ol>[\s\S]*?<\/ol>)/,
+    '<section class="roadmap-principles">$1</section>',
+  );
 }
 
 function sidebar(page: Page): string {
@@ -665,6 +716,7 @@ function pageHtml(page: Page, content: string, toc: TocItem[]): string {
   const icon = assetUrl(page, 'jeth-mark.svg');
   const organizationLogo = assetUrl(page, 'a16k-avatar-logo.png');
   const home = relativeUrl(page, pages[0]);
+  const pageContent = page.slug === 'project/roadmap' ? enhanceRoadmap(content) : content;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -685,9 +737,9 @@ function pageHtml(page: Page, content: string, toc: TocItem[]): string {
   </header>
   <div class="pre-release"><span>Pre-release</span> JETH is under active compiler and security review.</div>
   <div class="book-shell">
-    <aside class="sidebar"><div class="sidebar-title">Guides</div>${sidebar(page)}<a class="built-by" href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="${escapeHtml(organizationLogo)}" alt="" width="28" height="28">Built by @a16k-lab</a></aside>
+    <aside class="sidebar"><div class="sidebar-title">Guides</div>${sidebar(page)}<div class="sidebar-attribution">${organizationLockup(page)}</div></aside>
     <main class="content-shell">
-      <article class="article">${content}<div class="article-footer"><span>JETH language documentation</span><a href="https://github.com/a16k-lab" target="_blank" rel="noreferrer"><img src="${escapeHtml(organizationLogo)}" alt="" width="28" height="28">Built by @a16k-lab</a></div>${pagination(page)}</article>
+      <article class="article">${pageContent}<div class="article-footer"><span>JETH language documentation</span>${organizationLockup(page)}</div>${pagination(page)}</article>
       ${tableOfContents(toc)}
     </main>
   </div>
@@ -764,8 +816,12 @@ kbd { border: 1px solid var(--border); background: var(--panel-soft); border-rad
 .sidebar-link { display: block; padding: 6px 10px; border-radius: 7px; color: var(--muted); text-decoration: none; font-size: 13px; line-height: 1.35; }
 .sidebar-link:hover { color: var(--text); background: var(--panel-soft); }
 .sidebar-link.is-active { color: var(--accent-strong); background: var(--accent-soft); font-weight: 720; }
-.built-by { display: flex; align-items: center; gap: 9px; margin: 34px 10px 0; padding-top: 18px; border-top: 1px solid var(--border); color: var(--muted); text-decoration: none; font-size: 12px; }
-.built-by img, .article-footer img { border-radius: 50%; border: 1px solid var(--border); object-fit: cover; }
+.sidebar-attribution { margin: 34px 10px 0; padding-top: 18px; border-top: 1px solid var(--border); }
+.organization-lockup { display: inline-flex; align-items: center; gap: 9px; color: var(--muted); text-decoration: none; font-size: 12px; line-height: 1.2; }
+.organization-lockup:hover { color: var(--text); }
+.organization-lockup img { flex: 0 0 auto; border-radius: 50%; border: 1px solid var(--border); object-fit: cover; background: #050505; }
+.organization-lockup strong { color: inherit; font-weight: 720; }
+.organization-lockup-wrap { margin: 4px 0 30px; }
 
 .content-shell { margin-left: 280px; display: grid; grid-template-columns: minmax(0, 860px) 220px; justify-content: center; gap: 70px; padding: 62px 52px 90px; }
 .article { min-width: 0; }
@@ -795,6 +851,28 @@ th { background: var(--panel-soft); font-size: 11px; text-transform: uppercase; 
 tr:last-child td { border-bottom: 0; }
 hr { border: 0; border-top: 1px solid var(--border); margin: 46px 0; }
 
+.roadmap-principles { margin: 38px 0 46px; padding: 4px 26px 24px; border: 1px solid var(--border); border-radius: 16px; background: linear-gradient(145deg, var(--panel), var(--panel-soft)); box-shadow: var(--shadow); }
+.roadmap-principles h2 { margin-top: 0; border-top: 0; }
+.roadmap-principles ol { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 28px; padding-left: 22px; margin-bottom: 0; }
+.roadmap-principles li { margin: 0; }
+.roadmap-overview { position: relative; display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin: 38px 0 42px; padding-top: 18px; }
+.roadmap-overview::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 25%, var(--border))); }
+.roadmap-overview-card { min-width: 0; padding: 13px 10px 12px; border: 1px solid var(--border); border-radius: 11px; background: var(--panel); color: var(--text); text-decoration: none; transition: transform .16s ease, border-color .16s ease, background .16s ease; }
+.roadmap-overview-card:hover { transform: translateY(-3px); border-color: var(--accent); background: var(--accent-soft); }
+.roadmap-overview-card span { display: block; color: var(--accent); font-size: 11px; font-weight: 850; letter-spacing: .08em; }
+.roadmap-overview-card strong { display: block; margin-top: 6px; color: var(--text); font-size: 11px; line-height: 1.25; }
+.roadmap-stage { position: relative; display: grid; grid-template-columns: 66px minmax(0, 1fr); gap: 22px; margin: 22px 0; padding: 28px 30px 30px 24px; border: 1px solid var(--border); border-radius: 17px; background: var(--panel); box-shadow: var(--shadow); overflow: hidden; }
+.roadmap-stage::after { content: ""; position: absolute; inset: 0 auto 0 0; width: 4px; background: var(--accent); }
+.roadmap-marker { position: relative; z-index: 1; width: 58px; height: 58px; display: grid; place-items: center; border-radius: 16px; background: var(--code-bg); color: #ffffff; box-shadow: 0 10px 24px rgba(0, 0, 0, .18); }
+.roadmap-marker span { font: 850 15px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .04em; }
+.roadmap-stage-content h2 { margin: 2px 0 16px; padding: 0; border: 0; font-size: 25px; }
+.roadmap-stage-content h3 { margin-top: 30px; }
+.roadmap-goal { display: grid; grid-template-columns: 68px minmax(0, 1fr); gap: 12px; margin: 0 0 22px; padding: 13px 15px; border-radius: 10px; background: var(--panel-soft); }
+.roadmap-goal > span, .roadmap-exit > span { color: var(--accent); font-size: 10px; font-weight: 850; letter-spacing: .1em; text-transform: uppercase; }
+.roadmap-goal p, .roadmap-exit p { margin: 0; font-size: 14px; }
+.roadmap-exit { margin-top: 28px; padding: 17px 18px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border)); border-radius: 11px; background: var(--accent-soft); }
+.roadmap-exit > span { display: block; margin-bottom: 5px; }
+
 .code-block { margin: 26px 0 32px; border: 1px solid #292d39; border-radius: 12px; overflow: hidden; background: var(--code-bg); box-shadow: 0 18px 35px rgba(0, 0, 0, .16); }
 .code-toolbar { height: 42px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px 0 15px; background: var(--code-panel); border-bottom: 1px solid #292d39; color: #9ca2b2; font: 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .code-file { display: inline-flex; align-items: center; gap: 8px; }
@@ -818,7 +896,7 @@ pre { margin: 0; overflow-x: auto; padding: 21px 23px 24px; background: var(--co
 .toc-link:hover { color: var(--text); }
 .toc-link.depth-3 { padding-left: 12px; }
 .article-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 72px; padding: 20px 0; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
-.article-footer a { display: inline-flex; align-items: center; gap: 9px; color: var(--muted); text-decoration: none; }
+.article-footer a { color: var(--muted); text-decoration: none; }
 .pagination { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 22px; }
 .pagination-link { display: flex; flex-direction: column; padding: 16px 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); text-decoration: none; }
 .pagination-link.next { text-align: right; align-items: flex-end; }
@@ -855,6 +933,8 @@ pre { margin: 0; overflow-x: auto; padding: 21px 23px 24px; background: var(--co
   body.nav-open .sidebar { transform: translateX(0); }
   .content-shell { margin-left: 0; padding: 48px 24px 72px; }
   .article h1 { font-size: 40px; }
+  .roadmap-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .roadmap-overview::before { display: none; }
 }
 
 @media (max-width: 560px) {
@@ -863,6 +943,13 @@ pre { margin: 0; overflow-x: auto; padding: 21px 23px 24px; background: var(--co
   .content-shell { padding: 40px 18px 60px; }
   .article h1 { font-size: 35px; }
   .article h2 { font-size: 24px; margin-top: 52px; }
+  .roadmap-principles { padding: 2px 18px 20px; }
+  .roadmap-principles ol { grid-template-columns: 1fr; }
+  .roadmap-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .roadmap-stage { grid-template-columns: 1fr; gap: 17px; padding: 23px 19px 24px; }
+  .roadmap-marker { width: 48px; height: 48px; border-radius: 13px; }
+  .roadmap-stage-content h2 { margin-top: 0; font-size: 23px; }
+  .roadmap-goal { grid-template-columns: 1fr; gap: 4px; }
   pre { font-size: 12px; padding: 18px 16px 20px; }
   .pagination { grid-template-columns: 1fr; }
   .article-footer { align-items: flex-start; flex-direction: column; gap: 5px; }

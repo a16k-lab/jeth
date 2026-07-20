@@ -1,7 +1,5 @@
 # Contract ABI specification
 
-Built by [@a16k-lab](https://github.com/a16k-lab).
-
 JETH uses the Ethereum Contract ABI for externally visible calls, returns,
 events, and errors. The target behavior is Solidity 0.8.35 for overlapping
 supported types.

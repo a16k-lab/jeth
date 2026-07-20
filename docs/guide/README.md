@@ -1,12 +1,15 @@
 # JETH language documentation
 
-![a16k organization logo](../assets/a16k-avatar-logo.png)
+<p class="a16k-lockup">
+  <a href="https://github.com/a16k-lab">
+    <img src="../assets/a16k-avatar-logo.png" width="28" height="28" alt="a16k-lab logo" align="middle">
+    Built by <strong>@a16k-lab</strong>
+  </a>
+</p>
 
 JETH is a statically typed smart-contract language for the EVM. Its syntax is a
 strict TypeScript-shaped subset, while its values, arithmetic, storage, ABI,
 calls, errors, and execution model follow EVM and Solidity semantics.
-
-Built by [@a16k-lab](https://github.com/a16k-lab).
 
 ```jeth
 class Counter {

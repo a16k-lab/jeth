@@ -1,6 +1,11 @@
 # Product roadmap
 
-Built by [@a16k-lab](https://github.com/a16k-lab).
+<p class="a16k-lockup">
+  <a href="https://github.com/a16k-lab">
+    <img src="../assets/a16k-avatar-logo.png" width="28" height="28" alt="a16k-lab logo" align="middle">
+    Built by <strong>@a16k-lab</strong>
+  </a>
+</p>
 
 This roadmap turns JETH from a strong compiler research project into a product
 that can be installed, integrated, reviewed, and operated safely. The order is

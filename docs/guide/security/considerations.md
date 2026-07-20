@@ -1,7 +1,5 @@
 # Security considerations
 
-Built by [@a16k-lab](https://github.com/a16k-lab).
-
 This chapter covers contract-author risks. Compiler correctness is addressed in
 the next chapter.
 

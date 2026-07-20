@@ -1,7 +1,5 @@
 # Compiler correctness model
 
-Built by [@a16k-lab](https://github.com/a16k-lab).
-
 JETH uses a safety-first acceptance policy because a compiler can successfully
 produce bytecode that is still wrong.
 

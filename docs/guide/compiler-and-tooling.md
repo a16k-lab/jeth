@@ -1,7 +1,5 @@
 # Compiler, CLI, and tooling
 
-Built by [@a16k-lab](https://github.com/a16k-lab).
-
 The JETH compiler accepts source text, validates and analyzes it, emits Yul and
 ABI metadata, then asks solc to optimize and assemble bytecode.
 

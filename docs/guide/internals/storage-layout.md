@@ -1,7 +1,5 @@
 # Storage layout
 
-Built by [@a16k-lab](https://github.com/a16k-lab).
-
 JETH follows Solidity-compatible persistent storage layout for supported types.
 Raw-slot compatibility is part of the differential test bar.
 

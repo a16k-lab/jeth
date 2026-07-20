@@ -1,12 +1,15 @@
 # JETH
 
-![a16k organization logo](docs/assets/a16k-avatar-logo.png)
+<p class="a16k-lockup">
+  <a href="https://github.com/a16k-lab">
+    <img src="docs/assets/a16k-avatar-logo.png" width="28" height="28" alt="a16k-lab logo" align="middle">
+    Built by <strong>@a16k-lab</strong>
+  </a>
+</p>
 
 JETH is a smart-contract language with a strict TypeScript-shaped syntax and
 Solidity-compatible EVM semantics. It compiles JETH source to typed IR, Yul,
 ABI metadata, and EVM bytecode through `solc`.
-
-Built by [@a16k-lab](https://github.com/a16k-lab).
 
 The project follows one non-negotiable compiler rule: a clean rejection is
 better than accepted code that produces the wrong behavior. Accepted programs

@@ -7,3 +7,10 @@ Rules:
 - If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
 - After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+
+## a16k-lab brand lockup
+
+- Always render the a16k-lab attribution as one compact horizontal lockup: a 28 px circular logo, a 9 px gap, and the text `Built by @a16k-lab` with only `@a16k-lab` emphasized.
+- Do not place the lockup in a pill, card, bordered container, background, or shadow.
+- Keep the logo and attribution text together. Never render either one alone.
+- In the HTML documentation, reuse `organizationLockup()` from `scripts/build-docs.mts` instead of recreating the markup or styling.
