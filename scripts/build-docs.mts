@@ -742,7 +742,7 @@ function pageHtml(page: Page, content: string, toc: TocItem[]): string {
 <body>
   <header class="site-header">
     <a class="brand" href="${escapeHtml(home)}" aria-label="JETH documentation home"><img class="brand-mark" src="${escapeHtml(productLogo)}" alt="" width="30" height="30"><span class="brand-name">JETH</span><span class="brand-section">Docs</span><span class="brand-version">v${escapeHtml(projectVersion)}</span></a>
-    <nav class="top-nav" aria-label="Primary"><a class="is-active" href="${escapeHtml(home)}">Guides</a><a href="${escapeHtml(relativeUrl(page, pages.find((item) => item.slug === 'internals/compiler-and-tooling')!))}">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a></nav>
+    <nav class="top-nav" aria-label="Primary"><a class="is-active" href="${escapeHtml(home)}">Guides</a><a href="${escapeHtml(relativeUrl(page, pages.find((item) => item.slug === 'internals/compiler-and-tooling')!))}">Compiler</a><a href="https://github.com/a16k-lab/jeth" target="_blank" rel="noreferrer">GitHub</a><a href="https://x.com/a16k_lab" target="_blank" rel="noreferrer" aria-label="a16k-lab on X">Twitter</a></nav>
     <div class="header-actions"><button class="search-trigger" type="button" aria-label="Search documentation"><span>Search guides</span><kbd>⌘ K</kbd></button><button class="theme-toggle" type="button" aria-label="Toggle color theme">◐</button><button class="menu-toggle" type="button" aria-label="Open navigation">Menu</button></div>
   </header>
   <div class="pre-release"><span>Pre-release</span> JETH is under active compiler and security review.</div>
